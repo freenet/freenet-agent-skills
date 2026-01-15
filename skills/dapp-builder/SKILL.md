@@ -1,6 +1,7 @@
 ---
-name: freenet-dapp-builder
+name: dapp-builder
 description: Build decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, or build a Freenet-connected UI.
+license: LGPL-3.0
 ---
 
 # Freenet Decentralized Application Builder

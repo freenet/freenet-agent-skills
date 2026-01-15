@@ -1,0 +1,19 @@
+{
+  "name": "freenet-agent-skills",
+  "version": "1.0.0",
+  "description": "AI coding agent skills for building applications on Freenet",
+  "skills": [
+    {
+      "name": "dapp-builder",
+      "description": "Build decentralized applications on Freenet using river as a template"
+    },
+    {
+      "name": "pr-creation",
+      "description": "Guidelines for creating high-quality Freenet pull requests"
+    },
+    {
+      "name": "systematic-debugging",
+      "description": "Methodology for debugging non-trivial problems systematically"
+    }
+  ]
+}
