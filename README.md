@@ -67,6 +67,25 @@ ln -s ~/freenet-agent-skills/skills/dapp-builder ~/.claude/skills/
 
 ### OpenCode
 
+**Option 1: npm (Recommended)**
+```bash
+npm install freenet-agent-skills
+```
+
+Then symlink to the skills directory:
+```bash
+ln -s node_modules/freenet-agent-skills/skills/dapp-builder ~/.claude/skills/
+ln -s node_modules/freenet-agent-skills/skills/pr-creation ~/.claude/skills/
+ln -s node_modules/freenet-agent-skills/skills/systematic-debugging ~/.claude/skills/
+```
+
+**Option 2: openskills**
+```bash
+openskills install freenet/freenet-agent-skills
+```
+
+**Option 3: Git clone**
+
 OpenCode automatically discovers skills from Claude-compatible paths:
 
 ```bash
@@ -104,8 +123,35 @@ freenet-agent-skills/
 │   │   └── SKILL.md
 │   └── systematic-debugging/
 │       └── SKILL.md
+├── index.js               # OpenCode plugin entry point
+├── package.json           # npm package manifest
 ├── README.md
 └── LICENSE
+```
+
+## Programmatic API (npm)
+
+When installed via npm, the package exports functions for programmatic access:
+
+```javascript
+const skills = require('freenet-agent-skills');
+
+// List available skills
+skills.listSkills(); // ['dapp-builder', 'pr-creation', 'systematic-debugging']
+
+// Get skill metadata
+skills.getSkill('dapp-builder');
+
+// Read skill content
+const content = skills.readSkill('dapp-builder');
+
+// Get paths for integration
+skills.getSkillsPath();       // Absolute path to skills directory
+skills.getSkillPath('dapp-builder');  // Path to SKILL.md
+
+// Work with plugin bundles
+skills.listPlugins();  // ['freenet-dapp-builder', 'freenet-core-dev']
+skills.getPluginSkills('freenet-core-dev');  // Skills in the plugin
 ```
 
 ## Contributing
