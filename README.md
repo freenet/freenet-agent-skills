@@ -29,6 +29,28 @@ Methodology for debugging non-trivial problems:
 - Anti-patterns to avoid (jumping to conclusions, weakening tests)
 - Test coverage gap analysis
 
+### [pr-review](./skills/pr-review/)
+
+Risk-tiered, multi-perspective PR review — triages the change, runs specialist subagents in
+parallel (code-first, testing, skeptical, big-picture), plus an external model pass scaled to
+risk, then posts a consolidated review to the PR.
+
+### [release](./skills/release/)
+
+Orchestrates a Freenet release: determines the next version, shows the changelog, confirms with
+the user, and triggers the release pipeline via GitHub Actions.
+
+### [linux-test](./skills/linux-test/)
+
+Runs integration tests that require Linux's full loopback range via Docker — for tests that fail
+on macOS with "Can't assign requested address".
+
+### [local-dev](./skills/local-dev/)
+
+Set up and manage local Freenet development environments: run a local node, publish contracts,
+query connections/diagnostics, and iterate on a Freenet application without deploying to the live
+network.
+
 ## Hooks
 
 The [`hooks/`](./hooks/) directory contains two types of hooks for Freenet development:
@@ -87,13 +109,37 @@ ln -s ~/freenet-agent-skills/skills/dapp-builder ~/.claude/skills/
 
 ### OpenCode
 
+**Option 1: npm (Recommended)**
+```bash
+npm install freenet-agent-skills
+```
+
+Then symlink the skills you want to the skills directory (see [Available Skills](#available-skills)
+above for the full list), e.g.:
+```bash
+ln -s node_modules/freenet-agent-skills/skills/dapp-builder ~/.claude/skills/
+ln -s node_modules/freenet-agent-skills/skills/pr-creation ~/.claude/skills/
+```
+
+Or symlink all of them programmatically:
+```bash
+node -e "require('freenet-agent-skills').listSkills().forEach(s => \
+  console.log(require('freenet-agent-skills').getSkill(s).path))"
+```
+
+**Option 2: openskills**
+```bash
+openskills install freenet/freenet-agent-skills
+```
+
+**Option 3: Git clone**
+
 OpenCode automatically discovers skills from Claude-compatible paths:
 
 ```bash
 git clone https://github.com/freenet/freenet-agent-skills.git ~/freenet-agent-skills
 ln -s ~/freenet-agent-skills/skills/dapp-builder ~/.claude/skills/
 ln -s ~/freenet-agent-skills/skills/pr-creation ~/.claude/skills/
-ln -s ~/freenet-agent-skills/skills/systematic-debugging ~/.claude/skills/
 ```
 
 ### Project-specific Installation
@@ -120,15 +166,26 @@ freenet-agent-skills/
 │   │   ├── SKILL.md       # Main skill definition
 │   │   ├── README.md      # Skill documentation
 │   │   └── references/    # Detailed documentation
+│   ├── linux-test/
+│   │   └── SKILL.md
+│   ├── local-dev/
+│   │   └── SKILL.md
 │   ├── pr-creation/
 │   │   └── SKILL.md
+│   ├── pr-review/
+│   │   └── SKILL.md
+│   ├── release/
+│   │   └── SKILL.md
 │   └── systematic-debugging/
-│       └── SKILL.md
+│       ├── SKILL.md
+│       └── references/
 ├── hooks/
 │   ├── hooks.json         # Claude Code hooks (run before git commit)
 │   ├── pre-commit         # Git pre-commit hook for cargo fmt/clippy
 │   └── README.md
 ├── agents/                # Subagent definitions (reviewers, etc.)
+├── index.js               # OpenCode plugin entry point / npm programmatic API
+├── package.json           # npm package manifest
 ├── README.md
 └── LICENSE
 ```
@@ -140,6 +197,33 @@ See [CLAUDE.md](./CLAUDE.md) for the current version and version history. When m
 1. Update `.claude-plugin/marketplace.json` → `metadata.version`
 2. Update `CLAUDE.md` with version number and changelog entry
 3. Commit both files together
+
+## Programmatic API (npm)
+
+When installed via npm, the package exports functions for programmatic access. `listSkills()` and
+`listPlugins()` are derived from the `skills/` directory and `.claude-plugin/marketplace.json` at
+require-time, so they always reflect what's actually in the repo:
+
+```javascript
+const skills = require('freenet-agent-skills');
+
+// List available skills (reads skills/ on require, not a hardcoded list)
+skills.listSkills(); // ['dapp-builder', 'linux-test', 'local-dev', 'pr-creation', 'pr-review', 'release', 'systematic-debugging']
+
+// Get skill metadata
+skills.getSkill('dapp-builder');
+
+// Read skill content
+const content = skills.readSkill('dapp-builder');
+
+// Get paths for integration
+skills.getSkillsPath();       // Absolute path to skills directory
+skills.getSkillPath('dapp-builder');  // Path to SKILL.md
+
+// Work with plugin bundles (reads .claude-plugin/marketplace.json)
+skills.listPlugins();  // ['freenet']
+skills.getPluginSkills('freenet');  // All skill metadata objects in the plugin
+```
 
 ## Contributing
 

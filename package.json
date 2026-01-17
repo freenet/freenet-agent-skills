@@ -1,0 +1,34 @@
+{
+  "name": "freenet-agent-skills",
+  "version": "1.0.0",
+  "description": "AI coding agent skills for building applications on Freenet. Compatible with Claude Code and OpenCode.",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/freenet/freenet-agent-skills.git"
+  },
+  "keywords": [
+    "freenet",
+    "ai",
+    "agent",
+    "skills",
+    "claude",
+    "opencode",
+    "decentralized",
+    "dapp",
+    "blockchain"
+  ],
+  "author": "Freenet Project <support@freenet.org>",
+  "license": "LGPL-3.0",
+  "bugs": {
+    "url": "https://github.com/freenet/freenet-agent-skills/issues"
+  },
+  "homepage": "https://github.com/freenet/freenet-agent-skills#readme",
+  "files": [
+    "index.js",
+    "skills/"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
