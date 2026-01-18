@@ -53,19 +53,27 @@ Rank by likelihood based on evidence. Avoid anchoring on the first idea.
 4. Move to next hypothesis if current one is eliminated
 
 **Parallel investigation with subagents:**
-- Spawn subagents for independent, readonly investigations
-- Good candidates: searching for similar patterns, reading related code, checking git history
-- Each agent investigates one hypothesis or gathers one type of evidence
+
+Use the `codebase-investigator` agent for independent, readonly investigations. Spawn multiple investigators in parallel, each with a specific focus.
+
+```
+Spawn investigators in parallel using Task tool:
+
+1. Task tool with subagent_type="codebase-investigator":
+   "Search for similar error handling patterns in the codebase related to [bug description]"
+
+2. Task tool with subagent_type="codebase-investigator":
+   "Check git history for recent changes to [affected module/files]"
+
+3. Task tool with subagent_type="codebase-investigator":
+   "Read and analyze [test file] and related fixtures for [component]"
+```
+
+Guidelines:
+- Each investigator focuses on one hypothesis or evidence type
 - Only parallelize readonly tasks - code changes must be sequential
 - Use judgment on when parallelization helps vs. adds overhead
-
-Example:
-```
-Spawning 3 agents in parallel:
-- Agent 1: Search for similar error handling in codebase
-- Agent 2: Check git history for recent changes to affected module
-- Agent 3: Read the test file and related fixtures
-```
+- Investigators report findings; you synthesize and decide next steps
 
 ### Phase 4: Fix and Verify
 
@@ -120,7 +128,7 @@ If a bug reached production or manual testing, there's a gap in coverage. Invest
 
 ### Sequential investigation when parallel is possible
 - **Wrong:** Read file A, wait, read file B, wait, read file C
-- **Right:** Spawn agents to read A, B, C concurrently, synthesize findings
+- **Right:** Spawn `codebase-investigator` agents to read A, B, C concurrently, synthesize findings
 
 ### Fixing without understanding
 - **Wrong:** Copy a fix from Stack Overflow that makes the error go away

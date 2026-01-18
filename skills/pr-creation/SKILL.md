@@ -132,130 +132,51 @@ If a pattern caused a bug, search for similar patterns elsewhere in the codebase
 
 ### Code Simplification (Before Reviews)
 
-**Before running review agents**, use the code-simplifier subagent to clean up and simplify the code:
+**Before running review agents**, use the `code-simplifier` subagent to clean up and simplify the code:
 
 ```
-Task tool with subagent_type="code-simplifier:code-simplifier":
+Task tool with subagent_type="code-simplifier":
 
-"Review and simplify the code changes in PR #<NUMBER> (branch-name) at /path/to/worktree
+"Simplify PR #<NUMBER> (branch-name) at /path/to/worktree
 
-Focus on the recently modified files:
-- [list modified files]
-
-Look for opportunities to simplify while preserving functionality."
+Modified files:
+- [list modified files]"
 ```
 
-The code-simplifier will:
-- Remove redundant conditionals and dead code
-- Condense verbose documentation
-- Simplify complex tests while preserving assertions
-- Fix any issues introduced by the changes
+The code-simplifier agent will remove redundancy, simplify verbose patterns, clean up tests, and fix incidental issues while preserving functionality.
 
 **Commit any simplifications before running reviews** - this ensures reviewers see the cleanest version of the code.
 
 ### Parallel Subagent Reviews
 
-Once the PR is complete, code is simplified, and CI is passing, spawn **four review agents in parallel** using the Task tool. Each has a different focus:
-
-#### 1. Code-First Review
+Once the PR is complete, code is simplified, and CI is passing, spawn **four review agents in parallel** using the Task tool. Each agent has its own definition file with detailed instructions.
 
 ```
-"Review PR #<NUMBER> in freenet/freenet-core using this process:
+Spawn all four in parallel using Task tool:
 
-STEP 1 - Code only: Read ONLY the code changes (use `gh pr diff`). Do NOT read
-the PR description or comments yet. Form your own understanding of:
-- What the code actually does
-- What problem it appears to solve
-- Any concerns about the implementation
+1. Task tool with subagent_type="code-first-reviewer":
+   "Review PR #<NUMBER> in freenet/freenet-core"
 
-STEP 2 - Compare: NOW read the PR description and comments. Compare your
-understanding with the stated intent. Report:
-- Any discrepancies between code behavior and description
-- Behavior changes not mentioned in the description
-- Description claims not reflected in the code
-- Anything that confused you that should be documented"
+2. Task tool with subagent_type="testing-reviewer":
+   "Review test coverage for PR #<NUMBER> in freenet/freenet-core"
+
+3. Task tool with subagent_type="skeptical-reviewer":
+   "Do a skeptical review of PR #<NUMBER> in freenet/freenet-core"
+
+4. Task tool with subagent_type="big-picture-reviewer":
+   "Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
 ```
 
-#### 2. Testing Review
+#### Review Focus Summary
 
-```
-"Review test coverage for PR #<NUMBER> in freenet/freenet-core.
+| Agent | Focus |
+|-------|-------|
+| `code-first-reviewer` | Forms independent understanding from code, then compares to description |
+| `testing-reviewer` | Analyzes test coverage at unit/integration/simulation levels |
+| `skeptical-reviewer` | Adversarial review looking for bugs, race conditions, edge cases |
+| `big-picture-reviewer` | Catches "CI chasing" and ensures PR solves the actual problem |
 
-Analyze whether the changes are adequately tested at appropriate levels:
-- Unit tests: Are individual functions/methods tested?
-- Integration tests: Are component interactions tested?
-- Simulation tests: For network/distributed behavior, is six-peer-regression
-  or similar CI simulation sufficient?
-
-Check BOTH:
-- Direct changes: Is the new/modified code tested?
-- Downstream impact: Does this change behavior of calling code? Is THAT tested?
-
-Flag any scenarios that could break but aren't tested. Be specific about what
-test is needed, not just 'needs more tests'.
-
-Note: We've had serious regression problems. Be thorough. However, don't
-suggest tests that would significantly slow CI without strong justification."
-```
-
-#### 3. Skeptical Review
-
-```
-"Do a skeptical review of PR #<NUMBER> in freenet/freenet-core.
-
-Assume there are bugs until proven otherwise. Look for:
-- Logic errors or edge cases not handled
-- Race conditions or concurrency issues
-- Missing error handling or error propagation
-- Resource leaks
-- Performance issues (especially in hot paths)
-- Security concerns
-
-Be adversarial - how could this code fail in production?"
-```
-
-#### 4. Big Picture Review
-
-This review catches "CI chasing" - when an agent fixes symptoms to make tests pass while losing sight of the actual goal. **Real example:** An agent working on a congestion control fix removed tests and fix code that another developer had written, causing a regression. The agent was focused on making CI pass, not on solving the actual problem.
-
-```
-"Do a big-picture review of PR #<NUMBER> in freenet/freenet-core.
-
-CONTEXT GATHERING:
-1. Read the PR title and description to understand stated intent
-2. Check for linked issues (look for 'Fixes #XXX', 'Closes #XXX' in description)
-   - If found, read the full issue: gh issue view <NUMBER>
-   - Understand what the issue actually asks for
-3. List open PRs: gh pr list --state open --limit 20
-4. List recently merged PRs: gh pr list --state merged --limit 10
-5. Note any related or overlapping work
-
-REMOVED CODE DETECTION (CRITICAL):
-Check if this PR removes code that was recently added:
-- Compare against recent commits on main that touched the same files
-- Look for removed tests - especially tests added to catch specific bugs
-- Look for removed fix code - not just tests, but actual fixes
-- If the PR is based on another branch/PR, verify ALL changes are included
-
-ANTI-PATTERN DETECTION:
-Look for signs of 'CI chasing' - changes that solve symptoms not problems:
-- #[ignore] or skip annotations on tests
-- Weakened assertions (looser tolerances, removed checks, .ok() on Results)
-- Commented-out code (especially tests or validation)
-- TODO/FIXME that defer obviously-needed work
-- Hardcoded values replacing dynamic logic
-- Error swallowing (.unwrap_or_default(), silent fallbacks)
-- Backwards-compat shims (_unused renames, re-exports of removed items)
-
-BIG PICTURE QUESTIONS:
-- Does this PR actually solve the stated problem, or just make tests pass?
-- If linked to an issue, does the PR fully address what the issue asks for?
-- Does it conflict with or duplicate work in other open/recent PRs?
-- Does it introduce patterns that will cause future problems?
-- Is there scope creep - changes unrelated to the stated goal?
-- Would a human reviewer be surprised by any of these changes?
-- Are there commits from related work that should be included but aren't?"
-```
+The big-picture review is especially important - it catches cases where agents fix symptoms to make tests pass while losing sight of the actual goal.
 
 #### Handling Review Feedback
 
