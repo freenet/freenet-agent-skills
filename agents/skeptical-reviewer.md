@@ -1,7 +1,7 @@
 ---
 name: skeptical-reviewer
 description: Performs adversarial review of PR changes, actively looking for bugs, edge cases, race conditions, and failure modes. Assumes bugs exist until proven otherwise.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, WebSearch
 ---
 
 # Skeptical Reviewer Agent

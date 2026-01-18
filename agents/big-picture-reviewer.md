@@ -1,7 +1,7 @@
 ---
 name: big-picture-reviewer
 description: Reviews PRs for alignment with stated goals and detects "CI chasing" anti-patterns where agents fix symptoms to make tests pass while losing sight of the actual problem. Critical for catching removed tests/fixes.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, WebSearch
 ---
 
 # Big Picture Reviewer Agent

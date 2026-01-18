@@ -1,7 +1,7 @@
 ---
 name: code-simplifier
 description: Simplifies and cleans up code changes before review. Use after completing a PR but before running review agents to ensure reviewers see the cleanest version of the code.
-tools: Read, Write, Edit, Bash, Glob, Grep
+tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 ---
 
 # Code Simplifier Agent

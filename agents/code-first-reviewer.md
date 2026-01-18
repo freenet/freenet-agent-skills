@@ -1,7 +1,7 @@
 ---
 name: code-first-reviewer
 description: Reviews PR code changes independently before reading the description to catch discrepancies between implementation and stated intent. Use as part of parallel review process.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, WebSearch
 ---
 
 # Code-First Reviewer Agent
