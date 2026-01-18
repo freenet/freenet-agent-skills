@@ -74,7 +74,37 @@ Look for signs of "CI chasing":
 | Error swallowing | `.unwrap_or_default()`, silent fallbacks |
 | Compat shims | `_unused` renames, re-exports of removed items |
 
-### 4. Big Picture Questions
+### 4. Code Quality Assessment
+
+Evaluate the overall quality of the changes:
+
+- **Readability** - Is the code clear and understandable?
+- **Maintainability** - Will future developers be able to modify this easily?
+- **Consistency** - Does it follow existing patterns in the codebase?
+- **Complexity** - Is it as simple as it can be while still being correct?
+- **Abstractions** - Are they at the right level? Over-engineered? Under-engineered?
+- **Error messages** - Are they helpful for debugging?
+- **Documentation** - Are non-obvious decisions explained?
+
+### 5. Testing Strategy Review
+
+Evaluate whether the testing approach is appropriate:
+
+- **Test coverage** - Are the important code paths tested?
+- **Test quality** - Do tests verify behavior, not implementation details?
+- **Test levels** - Right mix of unit/integration/e2e tests?
+- **Edge cases** - Are boundary conditions and error paths tested?
+- **Regression prevention** - Will these tests catch future bugs?
+- **Test maintainability** - Are tests clear and not brittle?
+- **Missing tests** - What scenarios should be tested but aren't?
+
+Red flags:
+- Tests that just assert the code does what it does (tautological)
+- Tests that are too tightly coupled to implementation
+- Missing tests for error handling paths
+- No tests for the actual bug being fixed
+
+### 6. Big Picture Questions
 
 Answer these:
 
@@ -85,6 +115,8 @@ Answer these:
 5. **Is there scope creep - changes unrelated to the stated goal?**
 6. **Would a human reviewer be surprised by any of these changes?**
 7. **Are there commits from related work that should be included but aren't?**
+8. **Is the code quality appropriate for this codebase?**
+9. **Is the testing strategy sufficient to prevent regressions?**
 
 ## Output Format
 
@@ -101,6 +133,18 @@ Answer these:
 
 ### Anti-Patterns Detected
 <list of CI-chasing patterns found>
+
+### Code Quality
+- Readability: <good/fair/poor>
+- Maintainability: <good/fair/poor>
+- Complexity: <appropriate/over-engineered/under-engineered>
+- Key concerns: <specific issues if any>
+
+### Testing Strategy
+- Coverage: <adequate/insufficient>
+- Test quality: <good/fair/poor>
+- Missing tests: <list specific gaps>
+- Regression risk: <low/medium/high>
 
 ### Related Work
 - Open PRs: <any conflicts or overlaps>

@@ -14,6 +14,20 @@ Perform a skeptical review of PR changes, actively trying to find ways the code 
 
 ## What to Look For
 
+### Correctness Issues (HIGHEST PRIORITY)
+
+These are the most important bugs to find - where the code produces wrong results:
+
+- **Algorithmic correctness** - Does the algorithm actually solve the problem correctly?
+- **Invariant violations** - Are data structure invariants maintained?
+- **Semantic errors** - Code compiles but does the wrong thing
+- **State machine bugs** - Invalid state transitions, missing states
+- **Data corruption** - Incorrect mutations, lost updates, stale reads
+- **Protocol violations** - Breaking contracts with other components
+- **Math errors** - Wrong formulas, precision loss, incorrect rounding
+
+Ask: "If I trace through this code with specific inputs, do I get the correct output?"
+
 ### Logic Errors
 - Off-by-one errors
 - Incorrect boolean logic
