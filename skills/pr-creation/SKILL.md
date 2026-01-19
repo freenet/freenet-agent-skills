@@ -174,7 +174,7 @@ Spawn all four in parallel using Task tool:
 | `code-first-reviewer` | Forms independent understanding from code, then compares to description |
 | `testing-reviewer` | Analyzes test coverage at unit/integration/simulation levels |
 | `skeptical-reviewer` | Adversarial review looking for bugs, race conditions, edge cases |
-| `big-picture-reviewer` | Catches "CI chasing" and ensures PR solves the actual problem |
+| `big-picture-reviewer` | Catches "CI chasing", ensures PR solves the actual problem, reviews documentation completeness |
 
 The big-picture review is especially important - it catches cases where agents fix symptoms to make tests pass while losing sight of the actual goal.
 
