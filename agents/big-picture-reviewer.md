@@ -84,9 +84,45 @@ Evaluate the overall quality of the changes:
 - **Complexity** - Is it as simple as it can be while still being correct?
 - **Abstractions** - Are they at the right level? Over-engineered? Under-engineered?
 - **Error messages** - Are they helpful for debugging?
-- **Documentation** - Are non-obvious decisions explained?
 
-### 5. Testing Strategy Review
+### 5. Documentation Review
+
+Evaluate whether documentation is complete and accurate:
+
+#### Code Documentation (Rust)
+For new or modified public items (`pub fn`, `pub struct`, `pub enum`, `pub trait`):
+- Do they have doc comments (`///`)?
+- Are parameters, return values, and errors documented?
+- Are `# Panics` / `# Errors` sections included where applicable?
+
+```bash
+# Find new public items in the diff
+gh pr diff <NUMBER> | grep -E '^\+.*pub (fn|struct|enum|trait|type|const|static)'
+```
+
+#### Architecture Documentation
+If the PR changes significant architecture:
+- **Network protocols** - Check docs/architecture/transport/
+- **Testing infrastructure** - Check docs/architecture/testing/
+- **Core data structures** - Check for architectural docs
+
+Ask: "Would someone reading the architecture docs be surprised by these changes?"
+
+#### User-Facing Documentation
+If the PR changes:
+- **CLI behavior** - README or user docs need update
+- **Configuration options** - Document new options
+- **Build process** - Update build instructions
+
+#### Stale Documentation
+Look for docs that no longer match:
+- Doc comments that contradict the implementation
+- Examples that would no longer compile/work
+- Architecture docs describing old behavior
+
+**Don't flag:** Private implementation details, simple getters/setters, test code, obvious one-liners, or internal refactoring with no API changes.
+
+### 6. Testing Strategy Review
 
 Evaluate whether the testing approach is appropriate:
 
@@ -104,7 +140,7 @@ Red flags:
 - Missing tests for error handling paths
 - No tests for the actual bug being fixed
 
-### 6. Big Picture Questions
+### 7. Big Picture Questions
 
 Answer these:
 
@@ -117,6 +153,7 @@ Answer these:
 7. **Are there commits from related work that should be included but aren't?**
 8. **Is the code quality appropriate for this codebase?**
 9. **Is the testing strategy sufficient to prevent regressions?**
+10. **Is documentation complete and accurate for the changes made?**
 
 ## Output Format
 
@@ -139,6 +176,12 @@ Answer these:
 - Maintainability: <good/fair/poor>
 - Complexity: <appropriate/over-engineered/under-engineered>
 - Key concerns: <specific issues if any>
+
+### Documentation
+- Code docs (public APIs): <complete/incomplete/missing>
+- Architecture docs: <up-to-date/needs-update/n/a>
+- User-facing docs: <up-to-date/needs-update/n/a>
+- Stale docs found: <list any outdated documentation>
 
 ### Testing Strategy
 - Coverage: <adequate/insufficient>
