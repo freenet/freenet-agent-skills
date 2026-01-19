@@ -149,10 +149,10 @@ The code-simplifier agent will remove redundancy, simplify verbose patterns, cle
 
 ### Parallel Subagent Reviews
 
-Once the PR is complete, code is simplified, and CI is passing, spawn **four review agents in parallel** using the Task tool. Each agent has its own definition file with detailed instructions.
+Once the PR is complete, code is simplified, and CI is passing, spawn **five review agents in parallel** using the Task tool. Each agent has its own definition file with detailed instructions.
 
 ```
-Spawn all four in parallel using Task tool:
+Spawn all five in parallel using Task tool:
 
 1. Task tool with subagent_type="code-first-reviewer":
    "Review PR #<NUMBER> in freenet/freenet-core"
@@ -165,6 +165,9 @@ Spawn all four in parallel using Task tool:
 
 4. Task tool with subagent_type="big-picture-reviewer":
    "Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
+
+5. Task tool with subagent_type="documentation-reviewer":
+   "Review documentation for PR #<NUMBER> in freenet/freenet-core"
 ```
 
 #### Review Focus Summary
@@ -175,6 +178,7 @@ Spawn all four in parallel using Task tool:
 | `testing-reviewer` | Analyzes test coverage at unit/integration/simulation levels |
 | `skeptical-reviewer` | Adversarial review looking for bugs, race conditions, edge cases |
 | `big-picture-reviewer` | Catches "CI chasing" and ensures PR solves the actual problem |
+| `documentation-reviewer` | Ensures code changes have corresponding doc updates (doc comments, architecture docs, READMEs) |
 
 The big-picture review is especially important - it catches cases where agents fix symptoms to make tests pass while losing sight of the actual goal.
 
@@ -247,7 +251,7 @@ End all GitHub content (PR descriptions, comments, issues) with:
 - [ ] Regression test added that fails without fix
 - [ ] Answered "why didn't CI catch this?" and documented gap
 - [ ] CI passing
-- [ ] **Four parallel subagent reviews completed** (code-first, testing, skeptical, big-picture)
+- [ ] **Five parallel subagent reviews completed** (code-first, testing, skeptical, big-picture, documentation)
 - [ ] All review feedback addressed (fixed or explained why not applicable)
 - [ ] All human review feedback addressed
 - [ ] Responses posted to review comments
