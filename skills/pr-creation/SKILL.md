@@ -1,5 +1,5 @@
 ---
-name: freenet:pr-creation
+name: pr-creation
 description: Guidelines for creating high-quality Freenet pull requests. This skill should be used when creating PRs for freenet-core, freenet-stdlib, or related repositories. Emphasizes quality over speed, thorough testing, and proper review process.
 license: LGPL-3.0
 ---

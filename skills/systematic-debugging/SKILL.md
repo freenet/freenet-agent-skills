@@ -1,5 +1,5 @@
 ---
-name: freenet:systematic-debugging
+name: systematic-debugging
 description: Methodology for debugging non-trivial problems systematically. This skill should be used automatically when investigating bugs, test failures, or unexpected behavior that isn't immediately obvious. Emphasizes hypothesis formation, parallel investigation with subagents, and avoiding common anti-patterns like jumping to conclusions or weakening tests.
 license: LGPL-3.0
 ---
