@@ -10,20 +10,12 @@
   },
   "plugins": [
     {
-      "name": "freenet-dapp-builder",
-      "description": "Build decentralized applications on Freenet - contracts, delegates, and UI",
+      "name": "freenet",
+      "description": "Freenet development skills - dApp builder, PR creation guidelines, and systematic debugging",
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/dapp-builder"
-      ]
-    },
-    {
-      "name": "freenet-core-dev",
-      "description": "Freenet core development - PR creation guidelines and systematic debugging methodology",
-      "source": "./",
-      "strict": false,
-      "skills": [
+        "./skills/dapp-builder",
         "./skills/pr-creation",
         "./skills/systematic-debugging"
       ]
