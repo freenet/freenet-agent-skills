@@ -17,7 +17,28 @@
       "skills": [
         "./skills/dapp-builder",
         "./skills/pr-creation",
-        "./skills/systematic-debugging"
+        "./skills/systematic-debugging",
+        "./skills/pre-commit-hooks"
+      ]
+    },
+    {
+      "name": "freenet-dapp-builder",
+      "description": "Build decentralized applications on Freenet - guides through contract design, delegate implementation, and UI development",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/dapp-builder"
+      ]
+    },
+    {
+      "name": "freenet-core-dev",
+      "description": "Freenet core development toolkit - PR quality standards, systematic debugging, and automated pre-commit hooks",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/pr-creation",
+        "./skills/systematic-debugging",
+        "./skills/pre-commit-hooks"
       ]
     }
   ]

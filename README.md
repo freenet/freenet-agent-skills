@@ -29,6 +29,14 @@ Methodology for debugging non-trivial problems:
 - Anti-patterns to avoid (jumping to conclusions, weakening tests)
 - Test coverage gap analysis
 
+### [pre-commit-hooks](./skills/pre-commit-hooks/)
+
+Automated pre-commit hooks for freenet-core:
+- Runs `cargo fmt --check` to ensure code formatting
+- Runs `cargo clippy --all-targets --all-features` to catch lints
+- Catches issues locally before CI
+- Includes setup instructions and troubleshooting guide
+
 ## Installation
 
 ### Claude Code (Recommended)
