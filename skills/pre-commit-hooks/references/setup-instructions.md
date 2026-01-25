@@ -1,171 +1,214 @@
-# Freenet Core Pre-Commit Hooks Setup Guide
+# Freenet Core Pre-Commit Hooks - Quick Setup Guide
 
-## Official Documentation
+This guide provides multiple approaches to set up pre-commit hooks that run `cargo fmt` and `cargo clippy` before commits.
 
-This is a quick reference guide. For complete documentation, see:
-- **`docs/PRE_COMMIT_HOOK_GUIDE.md`** in the freenet-core repository
-- **Pre-commit framework**: https://pre-commit.com
+---
 
-## Quick Setup
+## Choose Your Approach
 
-### 1. Install pre-commit Framework
+### Option 1: Simple Bash Script (Recommended for Quick Start)
 
-Choose your preferred method:
+**Best for:** No dependencies, works anywhere, simple setup
 
-**Using pip:**
-```bash
-pip install pre-commit
-```
-
-**Using Homebrew (macOS):**
-```bash
-brew install pre-commit
-```
-
-**Using conda:**
-```bash
-conda install -c conda-forge pre-commit
-```
-
-**Using asdf:**
-```bash
-asdf plugin add pre-commit
-asdf install pre-commit latest
-asdf global pre-commit latest
-```
-
-### 2. Navigate to freenet-core Repository
+#### Installation
 
 ```bash
+# Navigate to your freenet-core repository
 cd /path/to/freenet-core
+
+# Download the hook script
+curl -fsSL https://raw.githubusercontent.com/freenet/freenet-agent-skills/main/skills/pre-commit-hooks/references/pre-commit-hook.sh > .git/hooks/pre-commit
+
+# Make it executable
+chmod +x .git/hooks/pre-commit
+
+# Test it
+git commit --allow-empty -m "test: hook installation"
 ```
 
-### 3. Install the Hooks
+**Or copy from local skills repository:**
+```bash
+cp /path/to/freenet-agent-skills/skills/pre-commit-hooks/references/pre-commit-hook.sh /path/to/freenet-core/.git/hooks/pre-commit
+chmod +x /path/to/freenet-core/.git/hooks/pre-commit
+```
+
+#### What It Does
+
+- Runs `cargo fmt --check` on commit
+- Runs `cargo clippy --all-targets --all-features -- -D warnings` on commit
+- Blocks commit if either check fails
+- Simple, no external dependencies
+
+---
+
+### Option 2: Pre-Commit Framework (Official freenet-core Approach)
+
+**Best for:** Working in freenet-core, team consistency, advanced features
+
+The freenet-core repository has `.pre-commit-config.yaml` pre-configured with multiple checks.
+
+#### Installation
 
 ```bash
+# 1. Install the pre-commit framework
+pip install pre-commit
+# OR: brew install pre-commit
+# OR: conda install -c conda-forge pre-commit
+
+# 2. Navigate to freenet-core repository
+cd /path/to/freenet-core
+
+# 3. Install the hooks
 pre-commit install
-```
 
-This reads `.pre-commit-config.yaml` and sets up `.git/hooks/pre-commit`.
-
-### 4. (Optional) Enable Commit Message Validation
-
-```bash
+# 4. (Optional) Enable commit message validation
 git config core.hooksPath .githooks
-```
 
-This enables the Conventional Commits format checker for commit messages.
-
-### 5. Verify Installation
-
-```bash
-# Run hooks on currently staged files
-pre-commit run
-
-# Or test on all files
+# 5. Test it
 pre-commit run --all-files
 ```
 
-## What Gets Checked
+#### What It Does
 
-The `.pre-commit-config.yaml` configures these checks:
+- **cargo fmt** - Code formatting check
+- **Smart Clippy** - Only lints modified packages (performance optimized)
+- **YAML validation** - Validates YAML syntax
+- **Merge conflict detection** - Catches conflict markers
+- **TODO-MUST-FIX blocker** - Prevents commits with TODO-MUST-FIX
+- **Conventional Commits** - Validates commit message format
 
-### Rust Quality Checks
-- **cargo fmt** - Code formatting (`--check` mode)
-- **cargo clippy** - Linting with smart per-package optimization
-  - Only checks packages with modified files
-  - Treats warnings as errors (`-D warnings`)
-  - Special handling for "freenet" package with `--features bench`
+#### Additional Commands
 
-### Standard File Checks
-- **check-merge-conflict** - Detects merge conflict markers
-- **check-yaml** - Validates YAML syntax
-- **end-of-file-fixer** - Ensures files end with newline
-- **trailing-whitespace** - Removes trailing whitespace
+```bash
+# Run hooks manually
+pre-commit run              # On staged files
+pre-commit run --all-files  # On entire codebase
 
-### Custom Checks
-- **TODO-MUST-FIX blocker** - Prevents commits with TODO-MUST-FIX markers
+# Skip specific hook for one commit
+SKIP=cargo-clippy git commit -m "message"
 
-### Commit Message Format (via .githooks)
-- **Conventional Commits** validation
-- Format: `type(scope): description`
-- Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`
+# Update hook versions
+pre-commit autoupdate
+
+# Uninstall hooks
+pre-commit uninstall
+```
+
+---
+
+### Option 3: Claude Code Native Hooks (Real-Time Feedback)
+
+**Best for:** AI-assisted development, catching issues during coding
+
+Claude Code can run checks automatically when files are edited during AI sessions.
+
+#### Installation
+
+Create `.claude/settings.json` in your project root:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'file=\"$(echo \"$STDIN\" | jq -r .tool_input.file_path)\"; if [[ $file == *.rs ]]; then cargo fmt && cargo clippy --all-targets -- -D warnings; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### What It Does
+
+- Runs after Claude edits/writes `.rs` files
+- Provides immediate feedback during development
+- Catches issues before you even commit
+
+#### Other Hook Events
+
+You can also use:
+- `PreToolUse` - Before tool execution (can block)
+- `UserPromptSubmit` - When you submit a prompt
+- `Stop` - When Claude finishes responding
+
+See: https://code.claude.com/docs/en/hooks-guide.md
+
+---
+
+## Comparison Table
+
+| Feature | Bash Script | Pre-Commit Framework | Claude Code Hooks |
+|---------|-------------|---------------------|-------------------|
+| **Dependencies** | None | Requires `pre-commit` | Built-in |
+| **Setup time** | 30 seconds | 2 minutes | 1 minute |
+| **When runs** | On git commit | On git commit | During Claude work |
+| **Checks** | fmt + clippy | fmt + clippy + 5 more | Customizable |
+| **Performance** | Checks all | Smart per-package | Checks changed |
+| **Updates** | Manual | `pre-commit autoupdate` | Edit settings |
+| **Team sharing** | Copy script | Framework config | Per-developer |
+
+---
 
 ## Usage Examples
 
-### Normal Development Workflow
+### Normal Workflow (All Approaches)
 
 ```bash
 # 1. Make changes
-vim src/core/mod.rs
+vim src/node.rs
 
 # 2. Stage changes
-git add src/core/mod.rs
+git add src/node.rs
 
 # 3. Commit (hooks run automatically)
-git commit -m "fix: resolve connection timeout issue"
+git commit -m "fix: resolve connection timeout"
 ```
 
 ### When Formatting Check Fails
 
 ```
 $ git commit -m "fix: something"
-cargo fmt...................................................................Failed
-- hook id: cargo-fmt
-- exit code: 1
+Running pre-commit checks...
+Checking code formatting...
+Diff in src/node.rs at line 42:
+❌ Code formatting check failed!
+Run 'cargo fmt' to fix formatting issues.
 ```
 
-Fix it:
+**Fix it:**
 ```bash
 cargo fmt
 git add -u
 git commit -m "fix: something"
 ```
 
-### When Clippy Fails
+### When Clippy Check Fails
 
 ```
 $ git commit -m "feat: new feature"
-cargo clippy.............................................................Failed
-- hook id: cargo-clippy
-- exit code: 101
-
+Running clippy on all targets...
 warning: unused variable: `count`
-  --> crates/core/src/node.rs:42:9
+  --> src/node.rs:42:9
    |
 42 |     let count = peers.len();
-   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_count`
+   |         ^^^^^ help: prefix with underscore: `_count`
+❌ Clippy check failed!
 ```
 
-Fix the issue:
+**Fix it:**
 ```bash
 # Fix the warning in your editor
-vim crates/core/src/node.rs
+vim src/node.rs
 
-# Stage and commit
-git add crates/core/src/node.rs
+# Commit again
+git add src/node.rs
 git commit -m "feat: new feature"
-```
-
-### When TODO-MUST-FIX is Detected
-
-```
-$ git commit -m "wip: testing"
-Detect TODO-MUST-FIX in staged files..................................Failed
-- hook id: detect-todo-must-fix
-- exit code: 1
-
-Error: Found TODO-MUST-FIX in staged files. Please address before committing.
-src/lib.rs:123: // TODO-MUST-FIX: Handle edge case
-```
-
-Either fix the issue or change the marker:
-```bash
-# Option 1: Fix the issue
-vim src/lib.rs  # Implement the fix
-
-# Option 2: Convert to regular TODO if not critical
-# Change "TODO-MUST-FIX" to "TODO"
 ```
 
 ### Bypassing Hooks (Emergency Only)
@@ -174,200 +217,212 @@ vim src/lib.rs  # Implement the fix
 git commit --no-verify -m "emergency fix"
 ```
 
-**Warning:** Use sparingly. Hooks exist to prevent CI failures.
+**Warning:** Use sparingly! Hooks prevent CI failures.
 
-### Manual Hook Execution
-
-```bash
-# Run all hooks on staged files
-pre-commit run
-
-# Run all hooks on entire codebase
-pre-commit run --all-files
-
-# Run specific hook only
-pre-commit run cargo-fmt
-pre-commit run cargo-clippy
-pre-commit run check-yaml
-
-# Skip specific hooks for one commit
-SKIP=cargo-clippy git commit -m "message"
-```
+---
 
 ## Worktree Setup
 
-Git worktrees have separate `.git/hooks` directories. Install in each:
+Each git worktree has its own `.git/hooks/` directory.
+
+### Bash Script (Install in Each Worktree)
 
 ```bash
 # Main worktree
 cd ~/code/freenet/freenet-core/main
-pre-commit install
+cp /path/to/pre-commit-hook.sh .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
 
 # Feature branch worktree
 cd ~/code/freenet/freenet-core/fix-123
-pre-commit install
-
-# Another worktree
-cd ~/code/freenet/freenet-core/feature-456
-pre-commit install
+cp /path/to/pre-commit-hook.sh .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
 ```
 
-**Quick setup script for new worktrees:**
+**Helper script:**
 ```bash
 #!/bin/bash
-# save as ~/bin/setup-freenet-worktree.sh
+# Save as ~/bin/install-freenet-hooks.sh
+WORKTREE=$1
+cp ~/path/to/pre-commit-hook.sh "$WORKTREE/.git/hooks/pre-commit"
+chmod +x "$WORKTREE/.git/hooks/pre-commit"
+echo "✅ Hooks installed in $WORKTREE"
+```
 
-WORKTREE_PATH=$1
-cd "$WORKTREE_PATH" || exit 1
+Usage: `install-freenet-hooks.sh ~/code/freenet/freenet-core/fix-456`
+
+### Pre-Commit Framework (Install in Each Worktree)
+
+```bash
+cd ~/code/freenet/freenet-core/main
 pre-commit install
-git config core.hooksPath .githooks
-echo "✅ Pre-commit hooks installed in $WORKTREE_PATH"
+
+cd ~/code/freenet/freenet-core/fix-123
+pre-commit install
 ```
 
-Usage:
-```bash
-setup-freenet-worktree.sh ~/code/freenet/freenet-core/fix-789
-```
+### Claude Code Hooks (Install Once)
 
-## Maintenance
+Configure in `.claude/settings.json` at project root - works for all worktrees.
 
-### Update Hook Repositories
-
-```bash
-pre-commit autoupdate
-```
-
-This updates hook versions in `.pre-commit-config.yaml`.
-
-### Clean and Reinstall Hook Environments
-
-```bash
-pre-commit clean
-pre-commit install-hooks
-```
-
-Useful if hooks behave unexpectedly or after framework updates.
-
-### Uninstall Hooks
-
-```bash
-pre-commit uninstall
-```
+---
 
 ## Troubleshooting
 
-### Problem: Hooks don't run on commit
+### Problem: Hook doesn't run
 
-**Solution:**
+**Bash Script:**
 ```bash
-# Check if installed
-ls -l .git/hooks/pre-commit
+ls -l .git/hooks/pre-commit  # Check exists and executable
+cat .git/hooks/pre-commit    # Verify content
+chmod +x .git/hooks/pre-commit
+```
 
-# Should see a file managed by pre-commit
-cat .git/hooks/pre-commit | head -5
+**Pre-Commit Framework:**
+```bash
+pre-commit install  # Reinstall
+ls -l .git/hooks/pre-commit  # Should reference pre-commit
+```
 
-# Reinstall if needed
-pre-commit install
+### Problem: Cargo commands fail
+
+**Check you're in the right directory:**
+```bash
+pwd           # Should be repository root
+ls Cargo.toml # Should exist
+```
+
+**Check cargo is installed:**
+```bash
+cargo --version
+rustup --version
 ```
 
 ### Problem: `pre-commit: command not found`
 
-**Solution:** Install the pre-commit framework (see step 1 above)
+**Install the framework:**
+```bash
+pip install pre-commit
+# OR
+brew install pre-commit
+```
 
-### Problem: First run is very slow
+### Problem: Pre-commit is very slow
 
-**Expected behavior:** First run downloads and caches hook environments.
-Subsequent runs are much faster.
+**First run is slow (downloads environments):**
+- This is normal
+- Subsequent runs are fast (cached)
 
-### Problem: Clippy takes too long
-
-**By design:** The smart clippy script only checks packages with changes.
-If you modified a core package, it may check many files.
-
-**Speed it up:**
+**To speed up:**
 ```bash
 # Commit smaller changesets
 git add specific/files
 git commit -m "message"
 ```
 
-### Problem: Want to skip a flaky hook temporarily
+### Problem: Claude Code hook not working
 
+**Check JSON syntax:**
 ```bash
-SKIP=problematic-hook-id git commit -m "message"
+cat .claude/settings.json | jq .
 ```
 
-Find hook IDs in `.pre-commit-config.yaml` under `id:` fields.
-
-### Problem: Hook environments are stale
-
+**Check hook is configured correctly:**
 ```bash
-pre-commit clean
-pre-commit install-hooks
+cat .claude/settings.json | jq '.hooks.PostToolUse'
 ```
+
+**Test command manually:**
+```bash
+file="src/test.rs"
+if [[ $file == *.rs ]]; then
+  cargo fmt
+  cargo clippy --all-targets -- -D warnings
+fi
+```
+
+---
+
+## Best Practices
+
+### Recommended Combinations
+
+**For freenet-core contributors:**
+- ✅ Option 2 (pre-commit framework) - official approach
+- ✅ Option 3 (Claude Code hooks) - real-time feedback
+- ⚠️  Option 1 as emergency fallback if pre-commit breaks
+
+**For casual Rust projects:**
+- ✅ Option 1 (bash script) - simple and effective
+- ⏭️  Upgrade to Option 2 as project matures
+
+**For AI-assisted development:**
+- ✅ Option 3 (Claude Code hooks) - catches issues immediately
+- ✅ Option 1 or 2 - safety net before commits
+
+### Hook Hygiene
+
+1. **Don't bypass hooks routinely** - Fix issues instead
+2. **Keep hooks fast** - Slow hooks disrupt workflow
+3. **Update regularly** - `pre-commit autoupdate` monthly
+4. **Test hooks** - Run manually before relying on them
+5. **Document custom hooks** - Help future developers
+
+---
 
 ## CI Alignment
 
-Pre-commit hooks align with GitHub Actions CI (`.github/workflows/ci.yml`):
+All approaches run the same checks as CI:
 
-| Check | Pre-commit | CI |
-|-------|------------|-----|
-| Formatting | `cargo fmt --check` | `cargo fmt --check` |
-| Linting | `cargo clippy -D warnings` | `cargo clippy --locked -D warnings` |
-| Tests | ❌ Not run | ✅ `cargo test --workspace` |
-| Commit format | ✅ Via .githooks | ✅ PR title only |
+**Pre-commit checks:**
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
 
-Pre-commit catches **fast checks** locally. CI runs **complete validation** including tests.
+**CI checks (`.github/workflows/ci.yml`):**
+- `cargo fmt --check`
+- `cargo clippy --locked -- -D warnings`
+- `cargo test --workspace` (not in hooks - too slow)
 
-## Performance Tips
+Hooks catch **fast quality checks** locally. CI runs **complete validation** including tests.
 
-1. **Commit frequently with smaller changesets** - Clippy checks scale with changes
-2. **Use `--no-verify` sparingly** - Fix issues instead of bypassing
-3. **Keep hook environments updated** - Run `pre-commit autoupdate` monthly
-4. **Cache is your friend** - First run slow, subsequent runs fast
+---
 
-## Advanced Usage
+## Additional Resources
 
-### Running Hooks in CI
+### Official Documentation
 
-```yaml
-# .github/workflows/pre-commit.yml
-- uses: pre-commit/action@v3.0.0
-```
+- **Freenet-core hook guide:** `docs/PRE_COMMIT_HOOK_GUIDE.md`
+- **Pre-commit framework:** https://pre-commit.com
+- **Claude Code hooks:** https://code.claude.com/docs/en/hooks-guide.md
+- **Conventional Commits:** https://www.conventionalcommits.org
 
-### Configuring Hook Behavior
+### In This Repository
 
-Edit `.pre-commit-config.yaml` to:
-- Add new hooks
-- Change hook arguments
-- Update hook versions
-- Disable specific hooks (add `exclude: pattern`)
+- **Bash script:** `skills/pre-commit-hooks/references/pre-commit-hook.sh`
+- **Main documentation:** `skills/pre-commit-hooks/SKILL.md`
 
-Example - exclude test files from clippy:
-```yaml
-- id: cargo-clippy
-  exclude: ^tests/
-```
+### Freenet-Core Configuration Files
 
-### Custom Local Hooks
+- **Pre-commit config:** `.pre-commit-config.yaml`
+- **Smart clippy script:** `scripts/pre-commit-clippy.sh`
+- **Commit message hook:** `.githooks/commit-msg`
+- **CI workflow:** `.github/workflows/ci.yml`
 
-See `TODO-MUST-FIX` hook in `.pre-commit-config.yaml` for example:
-```yaml
-- repo: local
-  hooks:
-    - id: detect-todo-must-fix
-      name: Detect TODO-MUST-FIX in staged files
-      entry: bash -c 'if git diff --cached --name-only | grep -E "\.(rs|ts|js|py)$" | xargs grep -n "TODO-MUST-FIX" 2>/dev/null; then echo "Error: Found TODO-MUST-FIX in staged files. Please address before committing."; exit 1; fi'
-      language: system
-      pass_filenames: false
-```
+---
 
-## Resources
+## Quick Decision Guide
 
-- **Official pre-commit docs**: https://pre-commit.com
-- **Freenet-core hook guide**: `docs/PRE_COMMIT_HOOK_GUIDE.md`
-- **Hook configuration**: `.pre-commit-config.yaml`
-- **Custom clippy script**: `scripts/pre-commit-clippy.sh`
-- **Commit message hook**: `.githooks/commit-msg`
-- **Conventional Commits**: https://www.conventionalcommits.org
-- **Available hooks**: https://pre-commit.com/hooks.html
+**"I want the simplest setup possible"**
+→ Use **Option 1** (bash script)
+
+**"I'm contributing to freenet-core"**
+→ Use **Option 2** (pre-commit framework) - it's the official way
+
+**"I want real-time feedback during AI coding"**
+→ Use **Option 3** (Claude Code hooks)
+
+**"I want maximum protection"**
+→ Use **all three** (Claude Code → git commit → CI)
+
+**"Pre-commit framework isn't installed and I can't install it"**
+→ Use **Option 1** (bash script) - no dependencies needed
