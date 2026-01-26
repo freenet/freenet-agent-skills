@@ -29,6 +29,30 @@ Methodology for debugging non-trivial problems:
 - Anti-patterns to avoid (jumping to conclusions, weakening tests)
 - Test coverage gap analysis
 
+## Hooks
+
+The [`hooks/`](./hooks/) directory contains two types of hooks for Freenet development:
+
+### 1. Claude Code Hooks (Automatic)
+
+**File**: `hooks/hooks.json`
+
+Automatically runs `cargo fmt` and `cargo clippy` **before** Claude runs git commits. Included with the plugin - no setup required.
+
+### 2. Git Pre-Commit Hook (Manual)
+
+**File**: `hooks/pre-commit`
+
+Runs `cargo fmt` and `cargo clippy` before git commits. Must be installed manually:
+
+```bash
+# From freenet-core repository
+curl -fsSL https://raw.githubusercontent.com/freenet/freenet-agent-skills/main/hooks/pre-commit > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+See [hooks/README.md](./hooks/README.md) for full details and comparison.
+
 ## Installation
 
 ### Claude Code (Recommended)
@@ -104,6 +128,11 @@ freenet-agent-skills/
 │   │   └── SKILL.md
 │   └── systematic-debugging/
 │       └── SKILL.md
+├── hooks/
+│   ├── hooks.json         # Claude Code hooks (run before git commit)
+│   ├── pre-commit         # Git pre-commit hook for cargo fmt/clippy
+│   └── README.md
+├── agents/                # Subagent definitions (reviewers, etc.)
 ├── README.md
 └── LICENSE
 ```
