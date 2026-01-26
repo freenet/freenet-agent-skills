@@ -29,13 +29,21 @@ Methodology for debugging non-trivial problems:
 - Anti-patterns to avoid (jumping to conclusions, weakening tests)
 - Test coverage gap analysis
 
-### [pre-commit-hooks](./skills/pre-commit-hooks/)
+## Git Hooks
 
-Automated pre-commit hooks for freenet-core:
-- Runs `cargo fmt --check` to ensure code formatting
-- Runs `cargo clippy --all-targets --all-features` to catch lints
-- Catches issues locally before CI
-- Includes setup instructions and troubleshooting guide
+The [`hooks/`](./hooks/) directory contains git hooks for Freenet development:
+
+### [pre-commit](./hooks/pre-commit)
+
+Runs `cargo fmt` and `cargo clippy` before allowing commits.
+
+**Quick install:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/freenet/freenet-agent-skills/main/hooks/pre-commit > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+See [hooks/README.md](./hooks/README.md) for details.
 
 ## Installation
 
@@ -112,6 +120,10 @@ freenet-agent-skills/
 │   │   └── SKILL.md
 │   └── systematic-debugging/
 │       └── SKILL.md
+├── hooks/
+│   ├── pre-commit         # Git pre-commit hook for cargo fmt/clippy
+│   └── README.md
+├── agents/                # Subagent definitions (reviewers, etc.)
 ├── README.md
 └── LICENSE
 ```

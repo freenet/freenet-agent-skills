@@ -4,8 +4,12 @@
 # Runs cargo fmt and cargo clippy before allowing commits
 #
 # Installation:
-#   cp pre-commit-hook.sh /path/to/repo/.git/hooks/pre-commit
-#   chmod +x /path/to/repo/.git/hooks/pre-commit
+#   cp hooks/pre-commit /path/to/freenet-core/.git/hooks/pre-commit
+#   chmod +x /path/to/freenet-core/.git/hooks/pre-commit
+#
+# Or use curl:
+#   curl -fsSL https://raw.githubusercontent.com/freenet/freenet-agent-skills/main/hooks/pre-commit > .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
 #
 
 set -e

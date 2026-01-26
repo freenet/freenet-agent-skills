@@ -17,8 +17,7 @@
       "skills": [
         "./skills/dapp-builder",
         "./skills/pr-creation",
-        "./skills/systematic-debugging",
-        "./skills/pre-commit-hooks"
+        "./skills/systematic-debugging"
       ]
     },
     {
@@ -32,13 +31,12 @@
     },
     {
       "name": "freenet-core-dev",
-      "description": "Freenet core development toolkit - PR quality standards, systematic debugging, and automated pre-commit hooks",
+      "description": "Freenet core development toolkit - PR quality standards and systematic debugging",
       "source": "./",
       "strict": false,
       "skills": [
         "./skills/pr-creation",
-        "./skills/systematic-debugging",
-        "./skills/pre-commit-hooks"
+        "./skills/systematic-debugging"
       ]
     }
   ]
