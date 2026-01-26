@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'file=\"$(echo \"$STDIN\" | jq -r \".tool_input.file_path // empty\")\"; if [[ -n \"$file\" && \"$file\" == *.rs && -f Cargo.toml ]]; then echo \"Running cargo fmt on $file...\"; cargo fmt --check \"$file\" 2>&1 || (cargo fmt \"$file\" && echo \"✅ Formatted $file\"); fi'"
+          }
+        ]
+      }
+    ]
+  }
+}
