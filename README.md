@@ -37,7 +37,7 @@ The [`hooks/`](./hooks/) directory contains two types of hooks for Freenet devel
 
 **File**: `hooks/hooks.json`
 
-Automatically runs `cargo fmt` after Claude edits Rust files. Included with the plugin - no setup required.
+Automatically runs `cargo fmt` and `cargo clippy` **before** Claude runs git commits. Included with the plugin - no setup required.
 
 ### 2. Git Pre-Commit Hook (Manual)
 
@@ -129,7 +129,7 @@ freenet-agent-skills/
 │   └── systematic-debugging/
 │       └── SKILL.md
 ├── hooks/
-│   ├── hooks.json         # Claude Code hooks (auto cargo fmt)
+│   ├── hooks.json         # Claude Code hooks (run before git commit)
 │   ├── pre-commit         # Git pre-commit hook for cargo fmt/clippy
 │   └── README.md
 ├── agents/                # Subagent definitions (reviewers, etc.)

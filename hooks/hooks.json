@@ -1,12 +1,12 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "PreToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'file=\"$(echo \"$STDIN\" | jq -r \".tool_input.file_path // empty\")\"; if [[ -n \"$file\" && \"$file\" == *.rs && -f Cargo.toml ]]; then echo \"Running cargo fmt on $file...\"; cargo fmt --check \"$file\" 2>&1 || (cargo fmt \"$file\" && echo \"✅ Formatted $file\"); fi'"
+            "command": "bash -c 'command=\"$(echo \"$STDIN\" | jq -r \".tool_input.command // empty\")\"; if [[ \"$command\" == *\"git commit\"* && -f Cargo.toml ]]; then echo \"🔍 Running pre-commit checks...\"; if ! cargo fmt --check 2>&1; then echo \"❌ Formatting check failed. Run: cargo fmt\"; exit 1; fi; if ! cargo clippy --all-targets --all-features -- -D warnings 2>&1; then echo \"❌ Clippy check failed. Fix warnings above.\"; exit 1; fi; echo \"✅ Pre-commit checks passed\"; fi'"
           }
         ]
       }

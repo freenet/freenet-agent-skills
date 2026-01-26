@@ -10,11 +10,12 @@ These hooks run automatically during Claude Code sessions when the `freenet` plu
 
 ### What it does
 
-Runs `cargo fmt` automatically after Claude edits or writes Rust files.
+Runs `cargo fmt` and `cargo clippy` automatically **before** Claude runs git commit commands.
 
-- **Event**: `PostToolUse` (after Edit or Write tools)
-- **Scope**: Only on `.rs` files in Cargo projects
-- **Action**: Checks formatting, auto-formats if needed
+- **Event**: `PreToolUse` (before Bash tool execution)
+- **Trigger**: Detects `git commit` commands
+- **Scope**: Only in Cargo projects (checks for `Cargo.toml`)
+- **Action**: Blocks commit if formatting or linting fails
 
 ### Installation
 
@@ -26,11 +27,12 @@ Automatically activated when you install the plugin:
 
 ### How it works
 
-When Claude edits a Rust file:
-1. Hook checks if file ends with `.rs` and `Cargo.toml` exists
-2. Runs `cargo fmt --check` on the file
-3. If check fails, runs `cargo fmt` to auto-format
-4. Shows success message
+When Claude attempts to run `git commit`:
+1. Hook intercepts the command before it executes
+2. Runs `cargo fmt --check` to verify formatting
+3. Runs `cargo clippy --all-targets --all-features -- -D warnings`
+4. If checks pass → commit proceeds
+5. If checks fail → commit is blocked with error message
 
 ---
 
@@ -85,21 +87,23 @@ git commit --no-verify -m "message"
 
 | Feature | Claude Code Hook | Git Pre-Commit Hook |
 |---------|------------------|---------------------|
-| **When runs** | During Claude editing | On `git commit` |
+| **When runs** | Before Claude's `git commit` | On `git commit` (native git) |
 | **Installation** | Automatic with plugin | Manual copy |
-| **Scope** | Single file edited | All staged files |
-| **Action** | Auto-format on save | Block commit if issues |
-| **Checks** | cargo fmt only | cargo fmt + clippy |
-| **Best for** | Real-time feedback | Final validation |
+| **Scope** | All staged files | All staged files |
+| **Action** | Block commit if issues | Block commit if issues |
+| **Checks** | cargo fmt + clippy | cargo fmt + clippy |
+| **Best for** | AI-assisted commits | All commits |
 
 ## Recommended Setup
 
-Use **both** for maximum protection:
+**Use the Claude Code hook** (automatic with plugin) for AI-assisted development. It catches issues before Claude commits.
 
-1. **Claude Code hook** catches issues during AI-assisted development
-2. **Git hook** ensures nothing slips through before commits
+**Optionally add the git hook** for:
+- Commits made outside Claude Code sessions
+- Team members not using the plugin
+- Extra safety net
 
-Together they provide layered quality checks at different stages of development.
+Both hooks run the same checks (cargo fmt + clippy), so the git hook mainly serves as a fallback for non-Claude commits.
 
 ## Note About freenet-core's Pre-Commit Framework
 
