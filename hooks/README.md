@@ -29,10 +29,20 @@ Automatically activated when you install the plugin:
 
 When Claude attempts to run `git commit`:
 1. Hook intercepts the command before it executes
-2. Runs `cargo fmt --check` to verify formatting
-3. Runs `cargo clippy --all-targets --all-features -- -D warnings`
-4. If checks pass → commit proceeds
-5. If checks fail → commit is blocked with error message
+2. Checks if already running (via `FREENET_HOOK_RUNNING` env var) to prevent recursion
+3. Runs `cargo fmt --check` to verify formatting
+4. Runs `cargo clippy --all-targets --all-features -- -D warnings`
+5. If checks pass → commit proceeds
+6. If checks fail → commit is blocked with error message
+
+### Recursion Protection
+
+The hook uses the `FREENET_HOOK_RUNNING` environment variable to prevent infinite recursion:
+
+- When the hook runs `cargo fmt` and `cargo clippy`, those are also Bash commands
+- Without protection, the hook would intercept its own subcommands
+- The `FREENET_HOOK_RUNNING=1` guard ensures the hook only runs once per commit attempt
+- Any Bash commands executed while the hook is running will see this variable and immediately exit
 
 ---
 
