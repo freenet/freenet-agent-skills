@@ -17,6 +17,7 @@
       "skills": [
         "./skills/dapp-builder",
         "./skills/pr-creation",
+        "./skills/pr-review",
         "./skills/systematic-debugging"
       ]
     }
