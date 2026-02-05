@@ -1,23 +1,16 @@
 ---
-name: pr-creator
-description: Creates high-quality pull requests following Freenet standards. Analyzes changes, runs checks, generates Conventional Commits title and detailed description, then creates the PR. Use after completing work on a feature branch.
-tools: Read, Bash, Glob, Grep, Edit, Write
+name: pr-create
+description: Creates high-quality pull requests following Freenet standards. Analyzes changes, runs checks, generates Conventional Commits title and detailed description, then creates the PR.
+license: LGPL-3.0
 ---
 
-# PR Creator Agent
-
-You are a PR creation specialist who creates high-quality pull requests following Freenet standards.
-
-## Your Task
+# PR Creator
 
 Create a pull request for the current branch's changes, ensuring it follows all Freenet PR quality standards.
 
-## Required Input
+## When to Use
 
-You should receive:
-- The repository path (or use current directory)
-- Optionally: related issue number(s)
-- Optionally: summary of what was changed and why
+Use `/freenet:pr-create` after completing work on a feature branch and you're ready to open a PR.
 
 ## Process
 
@@ -143,7 +136,7 @@ After creating the PR, report:
 1. The PR URL
 2. The title used
 3. Summary of what was included
-4. Reminder to run the code-simplifier and review agents before merging
+4. Reminder to run `/freenet:pr-review` before merging
 
 ## Quality Checklist
 
@@ -153,25 +146,6 @@ Before creating the PR, verify:
 - [ ] All local checks pass (fmt, clippy, test)
 - [ ] Related issue linked (if applicable)
 - [ ] Attribution included at end
-
-## Output Format
-
-```markdown
-## PR Created Successfully
-
-**URL:** <pr-url>
-**Title:** <pr-title>
-
-### Changes Included
-<summary of commits/changes>
-
-### Next Steps
-1. Run code-simplifier agent to clean up the code
-2. Run the four review agents in parallel (code-first, testing, skeptical, big-picture)
-3. Address all review feedback
-4. Wait for CI to pass
-5. Request human review if needed
-```
 
 ## Error Handling
 

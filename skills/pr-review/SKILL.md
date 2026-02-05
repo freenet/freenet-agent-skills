@@ -1,24 +1,16 @@
 ---
-name: pr-reviewer
-description: Executes comprehensive PR reviews following Freenet standards. Runs code simplification, then performs four-perspective review (code-first, testing, skeptical, big-picture). Use after PR is ready for review.
-tools: Read, Bash, Glob, Grep, Edit, Write, WebSearch
+name: pr-review
+description: Executes comprehensive PR reviews following Freenet standards. Performs four-perspective review covering code-first analysis, testing, skeptical review, and big-picture assessment.
+license: LGPL-3.0
 ---
 
-# PR Reviewer Agent
+# PR Reviewer
 
-You are a comprehensive PR review specialist who performs thorough reviews following Freenet quality standards.
+Execute a comprehensive PR review covering all four review perspectives from Freenet quality standards.
 
-## Your Task
+## When to Use
 
-Execute a complete PR review covering all four review perspectives, optionally preceded by code simplification.
-
-## Required Input
-
-You should receive:
-- PR number OR branch name to review
-- Repository (defaults to current directory)
-- Optional: `--simplify` flag to run code simplification first
-- Optional: `--no-simplify` to skip simplification (default if not specified)
+Use `/freenet:pr-review <PR-NUMBER>` after a PR is ready for review, before merging.
 
 ## Review Process
 
@@ -42,23 +34,7 @@ gh pr diff <NUMBER> --name-only
 gh pr checks <NUMBER>
 ```
 
-### Step 2: Code Simplification (If Requested)
-
-If `--simplify` is specified, perform code simplification before review:
-
-1. Check out the PR branch locally
-2. Look for and fix:
-   - Dead code paths
-   - Redundant conditionals
-   - Duplicate logic
-   - Overly verbose patterns
-   - Unnecessary complexity
-3. Commit simplifications with message: `refactor: simplify code before review`
-4. Push changes
-
-**Skip this step** if `--no-simplify` or not specified.
-
-### Step 3: Code-First Review
+### Step 2: Code-First Review
 
 Review the code **before** reading the PR description to form an independent understanding.
 
@@ -74,7 +50,7 @@ Review the code **before** reading the PR description to form an independent und
 - Are there hidden side effects?
 - Is the implementation approach sound?
 
-### Step 4: Testing Review
+### Step 3: Testing Review
 
 Analyze test coverage at all levels.
 
@@ -96,7 +72,7 @@ Analyze test coverage at all levels.
 - Removed or weakened test assertions
 - `#[ignore]` annotations
 
-### Step 5: Skeptical Review
+### Step 4: Skeptical Review
 
 Adversarial review looking for bugs, race conditions, and edge cases.
 
@@ -116,7 +92,7 @@ Adversarial review looking for bugs, race conditions, and edge cases.
 - What happens if called twice?
 - What happens if called out of order?
 
-### Step 6: Big Picture Review
+### Step 5: Big Picture Review
 
 Ensure the PR actually solves the stated problem and doesn't exhibit "CI chasing" anti-patterns.
 
@@ -142,7 +118,7 @@ gh pr diff <NUMBER> | grep -E '^-.*#\[test\]|^-.*fn test_|^-.*assert'
 4. Does it introduce patterns that will cause future problems?
 5. Is there scope creep?
 
-### Step 7: Documentation Review
+### Step 6: Documentation Review
 
 Check if documentation is complete:
 
@@ -232,12 +208,25 @@ Produce a consolidated review report:
 <If not ready, summarize what's needed>
 ```
 
-## Error Handling
+## Parallel Subagent Reviews
 
-If unable to review:
-1. Report specific error (PR not found, no access, etc.)
-2. Provide troubleshooting steps
-3. Do NOT produce a partial review without flagging limitations
+For deeper analysis, you can also spawn the specialized review agents in parallel:
+
+```
+Spawn all four in parallel using Task tool:
+
+1. Task tool with subagent_type="code-first-reviewer":
+   "Review PR #<NUMBER> in freenet/freenet-core"
+
+2. Task tool with subagent_type="testing-reviewer":
+   "Review test coverage for PR #<NUMBER> in freenet/freenet-core"
+
+3. Task tool with subagent_type="skeptical-reviewer":
+   "Do a skeptical review of PR #<NUMBER> in freenet/freenet-core"
+
+4. Task tool with subagent_type="big-picture-reviewer":
+   "Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
+```
 
 ## Quality Standards
 
