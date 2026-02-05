@@ -4,7 +4,9 @@ This directory contains two types of hooks for Freenet development:
 
 ## 1. Claude Code Hooks (Included with Plugin)
 
-**File**: `hooks.json`
+**Files**:
+- `hooks.json` - Hook configuration
+- `claude-pre-commit-hook.sh` - Hook script
 
 These hooks run automatically during Claude Code sessions when the `freenet` plugin is installed.
 
@@ -27,13 +29,16 @@ Automatically activated when you install the plugin:
 
 ### How it works
 
+The `hooks.json` configuration tells Claude Code to run `claude-pre-commit-hook.sh` before any Bash tool execution.
+
 When Claude attempts to run `git commit`:
-1. Hook intercepts the command before it executes
-2. Checks if already running (via `FREENET_HOOK_RUNNING` env var) to prevent recursion
-3. Runs `cargo fmt --check` to verify formatting
-4. Runs `cargo clippy --all-targets --all-features -- -D warnings`
-5. If checks pass → commit proceeds
-6. If checks fail → commit is blocked with error message
+1. Claude Code invokes `claude-pre-commit-hook.sh` with tool input via STDIN
+2. Script checks if already running (via `FREENET_HOOK_RUNNING` env var) to prevent recursion
+3. Script extracts the command from STDIN JSON and checks if it's a `git commit`
+4. If in a Cargo project, runs `cargo fmt --check` to verify formatting
+5. Runs `cargo clippy --all-targets --all-features -- -D warnings`
+6. If checks pass → commit proceeds
+7. If checks fail → commit is blocked with error message
 
 ### Recursion Protection
 
