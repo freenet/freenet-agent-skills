@@ -85,6 +85,8 @@ Rank by likelihood based on evidence. Avoid anchoring on the first idea.
 - **Contract execution** — WASM sandbox issues, state verification failures
 - **Determinism violations** — Code using `std::time::Instant::now()` instead of `TimeSource`, or `rand::random()` instead of `GlobalRng`
 
+See [Module-Specific Debugging Guide](references/module-debugging.md) for detailed bug patterns, data collection strategies, and test approaches per module.
+
 ### Phase 3: Investigate Systematically
 
 **For each hypothesis:**
@@ -106,6 +108,8 @@ Rank by likelihood based on evidence. Avoid anchoring on the first idea.
 | Gateway logs | Access to running gateway node | **Limited — not all contributors** |
 | Aggregate telemetry | Production monitoring dashboards | **Limited — core team only** |
 | Real network packet captures | Physical access to test machines | **Limited — specific environments** |
+
+For module-specific data gathering techniques, see [Module-Specific Debugging Guide](references/module-debugging.md) — it covers observation APIs, `#[freenet_test]` event capture, `RUST_LOG` targets, and fault injection per module.
 
 **Parallel investigation with subagents:**
 
