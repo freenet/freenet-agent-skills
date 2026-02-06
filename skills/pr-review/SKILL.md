@@ -210,22 +210,22 @@ Produce a consolidated review report:
 
 ## Parallel Subagent Reviews
 
-For deeper analysis, you can also spawn the specialized review agents in parallel:
+For deeper analysis, spawn the specialized review agents in parallel using the Task tool with `subagent_type="general-purpose"`. Include the agent definition (from `agents/`) in each prompt so the subagent follows the correct review methodology.
 
 ```
-Spawn all four in parallel using Task tool:
+Spawn all four in parallel using Task tool (all use subagent_type="general-purpose"):
 
-1. Task tool with subagent_type="code-first-reviewer":
-   "Review PR #<NUMBER> in freenet/freenet-core"
+1. "You are a code-first-reviewer. [Include agents/code-first-reviewer.md instructions]
+    Review PR #<NUMBER> in freenet/freenet-core"
 
-2. Task tool with subagent_type="testing-reviewer":
-   "Review test coverage for PR #<NUMBER> in freenet/freenet-core"
+2. "You are a testing-reviewer. [Include agents/testing-reviewer.md instructions]
+    Review test coverage for PR #<NUMBER> in freenet/freenet-core"
 
-3. Task tool with subagent_type="skeptical-reviewer":
-   "Do a skeptical review of PR #<NUMBER> in freenet/freenet-core"
+3. "You are a skeptical-reviewer. [Include agents/skeptical-reviewer.md instructions]
+    Do a skeptical review of PR #<NUMBER> in freenet/freenet-core"
 
-4. Task tool with subagent_type="big-picture-reviewer":
-   "Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
+4. "You are a big-picture-reviewer. [Include agents/big-picture-reviewer.md instructions]
+    Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
 ```
 
 ## Quality Standards

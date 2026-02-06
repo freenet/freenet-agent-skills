@@ -132,10 +132,10 @@ If a pattern caused a bug, search for similar patterns elsewhere in the codebase
 
 ### Code Simplification (Before Reviews)
 
-**Before running review agents**, use the `code-simplifier` subagent to clean up and simplify the code:
+**Before running review agents**, use the `code-simplifier` agent to clean up, simplify code, and verify documentation:
 
 ```
-Task tool with subagent_type="code-simplifier":
+Task tool with subagent_type="general-purpose", prompt includes agents/code-simplifier.md instructions:
 
 "Simplify PR #<NUMBER> (branch-name) at /path/to/worktree
 
@@ -143,42 +143,19 @@ Modified files:
 - [list modified files]"
 ```
 
-The code-simplifier agent will remove redundancy, simplify verbose patterns, clean up tests, and fix incidental issues while preserving functionality.
+**Commit any simplifications before running reviews** — reviewers should see the cleanest version of the code.
 
-**Commit any simplifications before running reviews** - this ensures reviewers see the cleanest version of the code.
+### Run the PR Review Skill
 
-### Parallel Subagent Reviews
-
-Once the PR is complete, code is simplified, and CI is passing, spawn **four review agents in parallel** using the Task tool. Each agent has its own definition file with detailed instructions.
+Once the PR is complete, code is simplified, and CI is passing, run the `pr-review` skill which handles all four parallel review agents:
 
 ```
-Spawn all four in parallel using Task tool:
-
-1. Task tool with subagent_type="code-first-reviewer":
-   "Review PR #<NUMBER> in freenet/freenet-core"
-
-2. Task tool with subagent_type="testing-reviewer":
-   "Review test coverage for PR #<NUMBER> in freenet/freenet-core"
-
-3. Task tool with subagent_type="skeptical-reviewer":
-   "Do a skeptical review of PR #<NUMBER> in freenet/freenet-core"
-
-4. Task tool with subagent_type="big-picture-reviewer":
-   "Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
+/freenet:pr-review <PR-NUMBER>
 ```
 
-#### Review Focus Summary
+See the `pr-review` skill for the full review process (code-first, testing, skeptical, big-picture).
 
-| Agent | Focus |
-|-------|-------|
-| `code-first-reviewer` | Forms independent understanding from code, then compares to description |
-| `testing-reviewer` | Analyzes test coverage at unit/integration/simulation levels |
-| `skeptical-reviewer` | Adversarial review looking for bugs, race conditions, edge cases |
-| `big-picture-reviewer` | Catches "CI chasing", ensures PR solves the actual problem, reviews documentation completeness |
-
-The big-picture review is especially important - it catches cases where agents fix symptoms to make tests pass while losing sight of the actual goal.
-
-#### Handling Review Feedback
+### Handling Review Feedback
 
 **Take all feedback seriously.** Freenet is complex code and we need to be perfectionists. Don't cherrypick easy wins and ignore harder issues. For each point raised:
 - Fix it, OR
@@ -186,34 +163,27 @@ The big-picture review is especially important - it catches cases where agents f
 
 **The bar for ignoring feedback is HIGH.** Only dismiss a suggestion if it would dramatically increase complexity (like doubling the size of an already large PR). If a suggestion would improve the PR and can reasonably be done, do it.
 
-Use common sense - if a reviewer suggests building a massive test framework for a small change, that's obviously overkill. But don't dismiss feedback just because it's inconvenient or would require more work.
+Use common sense — if a reviewer suggests building a massive test framework for a small change, that's obviously overkill. But don't dismiss feedback just because it's inconvenient or would require more work.
 
-**Never ignore tests to make them pass.** Pre-commit hooks will reject `#[ignore]`. Flaky tests are broken tests - fix the root cause, don't hide the symptom.
+**Never ignore tests to make them pass.** Flaky tests are broken tests — fix the root cause, don't hide the symptom.
 
 **Never remove existing tests or fix code.** If tests are failing, understand why and fix the underlying issue. Removing tests that catch bugs is how regressions happen.
 
 ### Waiting for CI
 
-CI typically takes ~20 minutes (as of Dec 2025). Use:
+CI typically takes ~20 minutes. Use:
 
 ```bash
 gh pr checks <PR-NUMBER> --watch
 ```
 
-Or sleep and then check:
-
-```bash
-sleep 900  # 15 minutes, then check status
-gh pr checks <PR-NUMBER>
-```
-
 ### Responding to Reviews
 
 1. **Fix all issues** found during review before requesting re-review
-2. **Respond to inline comments inline** - Don't just fix silently
+2. **Respond to inline comments inline** — Don't just fix silently
 3. **If you disagree**, explain your reasoning rather than ignoring the comment
 4. **After fixing**, leave brief replies like "Fixed" or "Addressed in [commit SHA]"
-5. **Re-request review only after substantial changes** - Don't re-ping reviewers for minor tweaks; only request re-review when you've addressed significant feedback or made meaningful changes
+5. **Re-request review only after substantial changes** — Don't re-ping reviewers for minor tweaks
 
 ## PR Scope
 
@@ -247,7 +217,7 @@ End all GitHub content (PR descriptions, comments, issues) with:
 - [ ] Regression test added that fails without fix
 - [ ] Answered "why didn't CI catch this?" and documented gap
 - [ ] CI passing
-- [ ] **Four parallel subagent reviews completed** (code-first, testing, skeptical, big-picture)
+- [ ] **PR review completed** via `pr-review` skill (code-first, testing, skeptical, big-picture)
 - [ ] All review feedback addressed (fixed or explained why not applicable)
 - [ ] All human review feedback addressed
 - [ ] Responses posted to review comments
