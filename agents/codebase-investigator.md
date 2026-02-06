@@ -15,20 +15,21 @@ Investigate a specific aspect of the codebase to gather evidence for debugging. 
 ## Common Investigation Types
 
 ### Pattern Search
-Find similar code patterns in the codebase:
-```bash
-# Search for similar error handling
-rg "pattern" --type rust
+Find similar code patterns in the codebase using dedicated tools:
 
-# Find all usages of a function
-rg "function_name\(" --type rust
+- **Grep tool** — Search file contents with regex patterns
+  - Search for similar error handling: `pattern: "handle.*error", type: "rust"`
+  - Find all usages of a function: `pattern: "function_name\\(", type: "rust"`
+  - Find struct definitions: `pattern: "struct.*Name", type: "rust"`
 
-# Find similar struct/class definitions
-rg "struct.*Name" --type rust
-```
+- **Glob tool** — Find files by name patterns
+  - Find test files: `pattern: "**/test*.rs"` or `pattern: "**/*_test.rs"`
+  - Find module files: `pattern: "**/mod.rs"`
+
+**Prefer Grep/Glob tools over raw `rg` or `find` commands.** Use Bash only for git operations.
 
 ### Git History Investigation
-Check what changed recently:
+Check what changed recently (these require Bash since they're git operations):
 ```bash
 # Recent changes to affected files
 git log --oneline -20 -- path/to/file.rs
@@ -44,7 +45,7 @@ git log -S "specific code" --oneline
 ```
 
 ### Related Code Reading
-Understand context:
+Use the **Read** tool to understand context:
 - Read the test file and fixtures
 - Read calling code (what uses this?)
 - Read called code (what does this depend on?)
@@ -53,7 +54,7 @@ Understand context:
 ### Configuration/Environment Check
 Look for environmental factors:
 - Config files that might affect behavior
-- Feature flags or conditional compilation
+- Feature flags or conditional compilation (`#[cfg(...)]` — search with Grep)
 - Environment-specific code paths
 
 ## Investigation Principles
