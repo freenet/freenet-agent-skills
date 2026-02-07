@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "./hooks/claude-pre-commit-hook.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/claude-pre-commit-hook.sh"
           }
         ]
       }
