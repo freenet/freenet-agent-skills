@@ -1,6 +1,6 @@
 # Delegate Patterns
 
-Delegates are WebAssembly agents that run locally on the user's device within the Freenet Kernel. They act as a "trust zone" for private operations.
+Delegates are WebAssembly agents that run locally on the user's device within freenet-core. They act as a "trust zone" for private operations.
 
 > **Note:** Not all delegate capabilities are fully implemented yet. This document focuses on patterns used in River. Features like user permission requests and background monitoring may have limited support.
 
