@@ -137,6 +137,14 @@ freenet-agent-skills/
 └── LICENSE
 ```
 
+## Version Management
+
+See [CLAUDE.md](./CLAUDE.md) for the current version and version history. When making changes:
+
+1. Update `.claude-plugin/marketplace.json` → `metadata.version`
+2. Update `CLAUDE.md` with version number and changelog entry
+3. Commit both files together
+
 ## Contributing
 
 Skills follow the structure:
