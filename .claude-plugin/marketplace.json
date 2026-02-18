@@ -18,6 +18,7 @@
         "./skills/dapp-builder",
         "./skills/pr-creation",
         "./skills/pr-review",
+        "./skills/release",
         "./skills/systematic-debugging"
       ]
     }
