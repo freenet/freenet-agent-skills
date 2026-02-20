@@ -57,11 +57,13 @@ cargo test
 
 Fix all warnings and errors before pushing.
 
-### E2E Testing
+### Choosing the Right Test Level
 
-For changes affecting network behavior, contract operations, or peer communication:
-- Use **freenet-simulated-network-test** for automated Docker-based testing (6-peer CI infrastructure)
-- Use **freenet-manual-multipeer-test** for real machine testing across nova/vega/technic
+**Simulation tests (primary):** For logic errors in routing, topology, subscriptions, operations, or any behavioral change. Use the direct simulation runner (`run_simulation_direct`) in `crates/core` — it's deterministic, fast, runs in CI, and has zero external dependencies. This should be the default for validating that changes don't regress subscribe rates, GET rates, tree formation, etc.
+
+**Docker NAT simulation:** Only for transport-layer issues that require real network namespaces — firewall hole-punching, NAT traversal, UDP behavior behind iptables rules. In-memory sockets can't reproduce these. Don't use this for testing routing logic or subscription behavior.
+
+**Manual multi-machine testing:** For issues that require real geographic distribution, actual internet latency, or cross-architecture validation (nova/vega/technic).
 
 ## PR Title and Description
 
@@ -100,6 +102,14 @@ Closes #XXXX
 
 ## Test Quality Standards
 
+### CI Must Be a Reliable Safety Net
+
+**The test harness should be growing faster than the core code.** Quick fixes without test coverage create an illusion of speed — we end up in a patch → break → patch cycle where each fix introduces new regressions. Almost every logical bug can be reproduced in a synthetic test with zero external dependencies. The work to build those tests is harder than a quick fix, but it's the only way to stop the cycle.
+
+**Every PR that changes behavior must include tests that would have caught the problem before merge.** Not just tests that verify the fix works — tests that would have prevented the bug from shipping in the first place. If you're changing routing logic, test that routing actually makes correct decisions under realistic data conditions. If you're changing topology, test that subscribe/GET success rates don't regress. If you're changing subscription handling, test that subscription trees form and survive peer churn.
+
+**CI gap tests go in the same PR, not a follow-up issue.** The pattern of filing "add missing test" issues that never get done is how we end up with 17 bug-fix PRs in 4 days and none of them caught by CI. If the fix PR doesn't include the test that closes the gap, it is not ready to merge.
+
 ### A Bug That Made It Past CI Is Also a Bug in CI
 
 When fixing a bug, always ask: **"Why didn't CI catch this?"**
@@ -110,7 +120,33 @@ Investigate which test layer should have caught it:
 - Network simulations for distributed behavior
 - E2E tests for real-world scenarios
 
-Document the gap in your PR description.
+Document the gap in your PR description. **Then close the gap.** The fix PR should include the missing test that would have caught this bug class, not just a narrow regression test for the specific symptom.
+
+### Simulation Health Metrics (Required)
+
+For PRs that touch routing, topology, operations, or subscription handling, the PR **must** include simulation tests that assert key health metrics. This is not optional — discovering regressions through production telemetry days later means CI failed:
+
+| Metric | What it catches |
+|--------|-----------------|
+| Subscribe success rate | Topology regressions, interest TTL issues |
+| GET success rate | Routing regressions |
+| Subscription tree formation | Tree building/maintenance bugs |
+| Interest renewal rate | TTL/renewal bugs |
+| Time to first successful operation | Bootstrap/convergence issues |
+
+These should be measured in simulation tests and asserted against thresholds. **Discovering regressions days later through production telemetry is a test infrastructure failure.**
+
+Use the direct simulation runner (`run_simulation_direct`) for these — it supports multi-peer networks with contract operations and is deterministic.
+
+### Don't Discover Logic Errors in Production
+
+If a bug is a **logic error** (wrong threshold, missing data path, incorrect fallback), it should be reproducible in a unit or integration test. Don't settle for "we'll monitor it in production." Examples:
+
+- Router prediction function requires data from 3 estimators but threshold only checks 1 → unit test with realistic data mix
+- Topology change breaks subscribe routing → simulation test measuring subscribe success rate
+- Interest TTL too aggressive → test that interests survive under congestion
+
+Reserve production telemetry analysis for genuinely environment-specific issues (OOM under specific conditions, real NAT traversal, etc.), not for catching logic errors that a test should find.
 
 ### Regression Tests Must Reproduce the Bug
 
@@ -145,15 +181,9 @@ Modified files:
 
 **Commit any simplifications before running reviews** — reviewers should see the cleanest version of the code.
 
-### Run the PR Review Skill
+### Run PR Reviews
 
-Once the PR is complete, code is simplified, and CI is passing, run the `pr-review` skill which handles all four parallel review agents:
-
-```
-/freenet:pr-review <PR-NUMBER>
-```
-
-See the `pr-review` skill for the full review process (code-first, testing, skeptical, big-picture).
+Once the PR is complete, code is simplified, and CI is passing, run four parallel review agents (code-first, testing, skeptical, big-picture) using the Task tool with `subagent_type="general-purpose"`. Each agent should focus on one perspective and report findings without making edits.
 
 ### Handling Review Feedback
 
@@ -193,6 +223,14 @@ gh pr checks <PR-NUMBER> --watch
 - If a fix reveals other issues, file separate issues rather than scope-creeping
 - If the PR grows too large, consider splitting it (but avoid complex stacked PRs)
 
+### Wiring Completeness
+
+When a PR adds or modifies enum dispatch (operation types, outcome handling, event routing), the test must exhaustively verify all variants produce the expected result. Common gaps: `outcome()` returning `Irrelevant` for some operation types, match arms with `_ => {}` catch-alls that silently discard new variants, commented-out enum arms.
+
+### Resource Invariant Assertions
+
+For any PR that touches data structures which accumulate entries (HashMaps, Vecs, channels, caches), include assertions that sizes stay bounded after sustained operation. Every insert path must have a corresponding cleanup path that runs on both success and failure/timeout. If the cleanup path isn't obvious, document it in a code comment.
+
 ### Don't Cut Corners
 
 - Don't weaken tests to make them pass
@@ -216,8 +254,10 @@ End all GitHub content (PR descriptions, comments, issues) with:
 - [ ] E2E tested if applicable (network/contract changes)
 - [ ] Regression test added that fails without fix
 - [ ] Answered "why didn't CI catch this?" and documented gap
+- [ ] **CI gap closed** — added the missing test that would have caught this bug class before merge (not just a narrow symptom test)
+- [ ] **Simulation health tested** if PR touches routing/topology/operations/subscriptions — key metrics (subscribe rate, GET rate, tree formation) asserted in simulation tests
 - [ ] CI passing
-- [ ] **PR review completed** via `pr-review` skill (code-first, testing, skeptical, big-picture)
+- [ ] **PR review completed** (code-first, testing, skeptical, big-picture review agents)
 - [ ] All review feedback addressed (fixed or explained why not applicable)
 - [ ] All human review feedback addressed
 - [ ] Responses posted to review comments

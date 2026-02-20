@@ -84,6 +84,12 @@ Rank by likelihood based on evidence. Avoid anchoring on the first idea.
 - **Transport issues** — UDP packet loss handling, encryption/decryption, connection lifecycle
 - **Contract execution** — WASM sandbox issues, state verification failures
 - **Determinism violations** — Code using `std::time::Instant::now()` instead of `TimeSource`, or `rand::random()` instead of `GlobalRng`
+- **Silent failure / fire-and-forget** — Spawned task dies with no error propagation (check: is the `JoinHandle` stored and polled? what happens if the task exits?), broadcast sent to zero targets with no warning, channel overflow silently dropping messages. Look for: `tokio::spawn` without `.await`/`.abort()`, `let _ = sender.send()`, missing logging on empty target sets
+- **Resource exhaustion** — HashMap/Vec/channel entries inserted but never removed, causing unbounded memory growth or channel backpressure. Check: is there a cleanup path for every insert? Is cleanup triggered on both success AND failure/timeout? Run sustained operations and assert collection sizes stay bounded
+- **Incomplete wiring** — Feature only works for some operation types (e.g., router feedback wired for GET but not subscribe/put/update). When debugging "X doesn't work for operation Y," check all enum variants in the dispatch path — commented-out arms, `_ => Irrelevant` catch-alls, and missing match arms are common
+- **TTL/timing race conditions** — Two time-dependent operations where the first can expire before the second completes (e.g., transient TTL expires before CONNECT handshake, interest TTL expires before subscription renewal, broadcast fires before subscriptions complete). Check: what happens if operation A takes longer than timeout B?
+- **Regressions from "safe" changes** — A seemingly harmless change (code simplification, removing a feature flag, changing defaults) breaks an invariant that nothing tests. When a recent commit looks innocent, check what implicit behaviors it removed
+- **Mock/test divergence** — Bug can't be reproduced in tests because the mock runtime behaves differently from production. Check: does the mock skip side effects (e.g., BSC emission)? Does the test use a different code path than production (e.g., explicit subscribe vs background subscribe)? Does the mock socket behave differently from real UDP?
 
 See [Module-Specific Debugging Guide](references/module-debugging.md) for detailed bug patterns, data collection strategies, and test approaches per module.
 
