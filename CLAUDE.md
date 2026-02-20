@@ -1,8 +1,12 @@
 # Freenet Agent Skills - Version Information
 
-**Current Version:** 1.0.3
+**Current Version:** 1.0.4
 
 ## Version History
+
+### 1.0.4 (2026-02-20)
+- Updated release skill with universal content from local nova skill: error recovery, rollback, cross-compile binary waiting, incident learnings, common issues
+- Removed nova-specific SSH commands from plugin release skill (those stay in local freenet-release skill)
 
 ### 1.0.3 (2026-02-20)
 - Updated systematic-debugging: added 6 recurring bug patterns to hypothesis phase (silent failures, resource exhaustion, incomplete wiring, TTL races, safe-change regressions, mock divergence)
