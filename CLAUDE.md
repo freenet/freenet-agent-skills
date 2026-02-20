@@ -1,8 +1,16 @@
 # Freenet Agent Skills - Version Information
 
-**Current Version:** 1.0.1
+**Current Version:** 1.0.3
 
 ## Version History
+
+### 1.0.3 (2026-02-20)
+- Updated systematic-debugging: added 6 recurring bug patterns to hypothesis phase (silent failures, resource exhaustion, incomplete wiring, TTL races, safe-change regressions, mock divergence)
+- Updated pr-creation: CI gap tests must be in same PR, simulation health metrics required not suggested, added wiring completeness and resource invariant sections
+- Based on CI gap analysis from freenet-core#3141
+
+### 1.0.2
+- Added release skill
 
 ### 1.0.1 (2026-02-14)
 - Added claude.md for version tracking
