@@ -82,7 +82,7 @@ git branch -d release-work
 Execute the release script:
 
 ```bash
-./scripts/release.sh --version <VERSION> [--skip-tests] [--deploy-local]
+./scripts/release.sh --version <VERSION> [--skip-tests]
 ```
 
 The script handles the entire pipeline:
@@ -93,14 +93,13 @@ The script handles the entire pipeline:
 5. **GitHub Release** - Creates tag, generates release notes, creates release
 6. **Cross-compile** - Triggered automatically by the tag push
 7. **Wait for binaries** - Waits for cross-compile to attach binaries to the release
-8. **Announcements** - Matrix and River notifications (if tools available)
+8. **Gateway updates** - SSHes into all gateways and triggers immediate update
+9. **Announcements** - Matrix and River notifications (if tools available)
 
 ### Important Options
 
 - `--skip-tests` - Skip local pre-release tests (CI still runs on the PR)
 - `--dry-run` - Show what would be done without executing
-- `--deploy-local` - Deploy to local gateway after release
-- `--deploy-remote` - Deploy to remote gateways after release
 
 ### Resumability
 
@@ -211,13 +210,11 @@ These are real issues from past releases that the release process has been harde
 - **Don't announce before binaries exist** — Cross-compile takes 15-20 min; gateway auto-update (especially aarch64) depends on release binaries being attached
 - **Log spam can fill disks** — Always review logs 10-15 min after release; previous releases introduced logging that consumed disk space within hours
 
-## Gateway Auto-Update
+## Gateway Updates
 
-Gateways poll GitHub every 10 minutes for new releases and auto-update. This is pull-based (no inbound webhooks needed) and architecture-aware (x86_64/aarch64).
+The release script automatically SSHes into all known gateways and triggers `gateway-auto-update.sh --force` immediately after cross-compile binaries are available. This eliminates the 10-minute polling delay that previously caused version mismatch issues (users installing the new version before gateways updated).
 
-Peers also self-update: when a peer detects a version mismatch with the gateway (exit code 42), systemd triggers `freenet update` automatically.
-
-Manual trigger (if you have gateway access): `gateway-auto-update.sh --force`
+Gateways also have a 10-minute polling timer as a fallback. Peers self-update when they detect a version mismatch with the gateway (exit code 42), which triggers `freenet update` automatically.
 
 ## Success Criteria
 
@@ -225,6 +222,7 @@ Release is complete when:
 - ✓ PR merged to main
 - ✓ Published to crates.io
 - ✓ GitHub release created with tag and binaries attached
+- ✓ Gateways updated to new version
 - ✓ Matrix announcement sent
 - ✓ River announcement sent
 - ✓ Network verified healthy post-release (logs clean, telemetry normal)

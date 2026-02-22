@@ -1,8 +1,13 @@
 # Freenet Agent Skills - Version Information
 
-**Current Version:** 1.0.4
+**Current Version:** 1.0.5
 
 ## Version History
+
+### 1.0.5 (2026-02-22)
+- Updated release skill: gateways are now updated immediately after cross-compile binaries are available (no 10-min polling delay)
+- Removed --deploy-local and --deploy-remote flags (gateway updates are now automatic)
+- Added incident learning: version mismatch when users install before gateways update
 
 ### 1.0.4 (2026-02-20)
 - Updated release skill with universal content from local nova skill: error recovery, rollback, cross-compile binary waiting, incident learnings, common issues
