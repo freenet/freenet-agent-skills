@@ -75,6 +75,43 @@ Ask: "If I trace through this code with specific inputs, do I get the correct ou
 - Information disclosure
 - Timing attacks
 
+### Freenet-Specific Bug Patterns (from Feb 2025 fix review — 25 bugs analyzed)
+
+These 5 patterns accounted for ALL 25 bugs in releases 0.1.147–0.1.150. Actively check for them:
+
+**1. `select!` Fairness Violations**
+- Any `biased;` select without per-iteration caps on high-throughput arms
+- Arms that can starve lower-priority arms (inbound processing starving outbound sends)
+- Work inside select arms that is not cancellation-safe
+- Ask: "If the first arm fires every iteration, do the other arms ever run?"
+
+**2. Fire-and-Forget / Silent Failures**
+- `GlobalExecutor::spawn` with JoinHandle immediately dropped
+- `try_send()` on critical registration/message paths (silent drop when full)
+- Multi-client tasks where one client error crashes all clients
+- Catch-all `_ =>` in match expressions that classify metrics/telemetry (swallows new variants)
+- Ask: "If this fails, does anyone notice?"
+
+**3. State Consistency / Cleanup Failures**
+- Connection removal that doesn't clean up ALL related maps (location_for_peer, connections_by_location, pending ops)
+- Sync protocols exchanging peer lists containing disconnected peers
+- Cleanup/GC with unbounded exemptions (is_transient, has_pending with no TTL)
+- Ask: "If this entry is never cleaned up, what breaks?"
+- **Meta-pattern:** Fix-then-fix-the-fix cycles — cleanup exemptions that are themselves buggy
+
+**4. Non-Interruptible Backoff / Missing Jitter**
+- Retry loops with `tokio::time::sleep()` not wrapped in `select!` with cancellation
+- Backoff without random jitter (thundering herd after restarts)
+- Zero-connection nodes with no gateway re-bootstrap path
+- Critical control messages (ReadyState) sent fire-and-forget over UDP
+- Ask: "If all peers retry at the same time, what happens?"
+
+**5. Deployment Resilience Gaps**
+- Exit codes not declared to service manager (causes restart death loops)
+- Auto-update not gated on release builds (overwrites dev builds)
+- Security tightening (sandbox, CSP) not tested against actual app capabilities
+- Unused dependencies (latent cross-compile build hazards)
+
 ## Review Process
 
 ```bash

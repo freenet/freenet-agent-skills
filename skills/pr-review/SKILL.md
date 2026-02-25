@@ -92,6 +92,18 @@ Adversarial review looking for bugs, race conditions, and edge cases.
 - What happens if called twice?
 - What happens if called out of order?
 
+**5 Recurring Bug Patterns (from Feb 2025 fix review — 25/25 bugs):**
+
+Check if the PR introduces or touches code matching these patterns:
+
+| Pattern | What to Look For |
+|---------|-----------------|
+| `biased;` select starvation | Per-iteration caps? Cancellation safety? Which arm starves? |
+| Fire-and-forget spawns | JoinHandle stored? `try_send` on critical paths? Catch-all `_ =>` in metrics? |
+| State cleanup on failure | ALL related maps cleaned up? Peer lists filtered to live connections? GC exemptions time-bounded? |
+| Backoff without jitter | Jitter ±20%? Sleep interruptible via `select!`? Zero-connection re-bootstrap? Critical msgs retried? |
+| Deployment gaps | Exit codes declared? Auto-update gated on release? Security tested against app needs? Unused deps? |
+
 ### Step 5: Big Picture Review
 
 Ensure the PR actually solves the stated problem and doesn't exhibit "CI chasing" anti-patterns.
