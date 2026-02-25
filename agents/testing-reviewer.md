@@ -86,6 +86,18 @@ For each gap found, be specific:
 <any concerns about test runtime, flakiness, or CI infrastructure>
 ```
 
+## Freenet-Specific Test Gaps to Check
+
+These 5 bug patterns caused ALL 25 bugs in releases 0.1.147–0.1.150. Check if the PR introduces or modifies code matching these patterns and whether tests cover them:
+
+| Pattern | What Tests Should Verify |
+|---------|------------------------|
+| `biased;` select loops | Test that lower-priority arms get serviced under sustained high-throughput on first arm |
+| Fire-and-forget spawns | Test that critical task failure is detected and logged |
+| State cleanup on failure | Test that ALL related maps are cleaned up when a connection drops |
+| Backoff/retry logic | Test with jitter, test interruptibility, test zero-connection recovery |
+| Cleanup GC exemptions | Test that exempted entries still expire via TTL or absolute age threshold |
+
 ## Important Notes
 
 - We've had serious regression problems. Be thorough.

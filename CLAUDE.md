@@ -4,6 +4,14 @@
 
 ## Version History
 
+### 1.0.6 (2026-02-25)
+- Added 5 recurring bug-prevention patterns (from Feb 2025 fix review of 25 bugs) to review agents and skills
+- Updated skeptical-reviewer: added Freenet-specific bug patterns section (select! fairness, fire-and-forget, state cleanup, backoff/jitter, deployment)
+- Updated testing-reviewer: added test gap checklist for the 5 patterns
+- Updated pr-review skill: added 5-pattern checklist to skeptical review step
+- Updated pr-creation skill: added bug-prevention patterns section and checklist item
+- Based on freenet-core#3271 analysis
+
 ### 1.0.5 (2026-02-22)
 - Updated release skill: gateways are now updated immediately after cross-compile binaries are available (no 10-min polling delay)
 - Removed --deploy-local and --deploy-remote flags (gateway updates are now automatic)

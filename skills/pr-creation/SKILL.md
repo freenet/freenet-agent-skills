@@ -246,6 +246,20 @@ End all GitHub content (PR descriptions, comments, issues) with:
 [AI-assisted - Claude]
 ```
 
+## Bug-Prevention Patterns (Feb 2025 fix review)
+
+These 5 patterns caused ALL 25 bugs in releases 0.1.147–0.1.150. When your PR introduces or modifies code matching these patterns, apply the corresponding rule:
+
+| Pattern | Rule | Audit |
+|---------|------|-------|
+| `biased;` select | Per-iteration caps on high-throughput arms, document cancellation safety | `grep "biased;" crates/core/src/` |
+| `GlobalExecutor::spawn` | Register JoinHandle with monitor; use `send()` not `try_send()` for critical paths; no catch-all `_ =>` in metrics | `grep "GlobalExecutor::spawn" crates/core/src/` |
+| Connection removal / cleanup | Clean ALL related maps; filter peer lists to live connections; GC exemptions must have TTL | `grep "prune_connection\|drop_connection\|retain(" crates/core/src/` |
+| Retry / backoff | Jitter ±20%; sleep interruptible via `select!`; zero-connection re-bootstrap; retry critical control msgs | `grep "tokio::time::sleep" crates/core/src/` |
+| Deployment | Declare exit codes to service manager; gate auto-update on release; test security against app needs; remove unused deps | `cargo machete` |
+
+Full rules: `.claude/rules/code-style.md`, `.claude/rules/ring.md`, `.claude/rules/transport.md`, `.claude/rules/deployment.md`
+
 ## Checklist Before Merging
 
 - [ ] PR title follows Conventional Commits format
@@ -256,6 +270,7 @@ End all GitHub content (PR descriptions, comments, issues) with:
 - [ ] Answered "why didn't CI catch this?" and documented gap
 - [ ] **CI gap closed** — added the missing test that would have caught this bug class before merge (not just a narrow symptom test)
 - [ ] **Simulation health tested** if PR touches routing/topology/operations/subscriptions — key metrics (subscribe rate, GET rate, tree formation) asserted in simulation tests
+- [ ] **Bug-prevention patterns checked** — if PR touches select!/spawn/cleanup/backoff/deployment, verify compliance with the 5 rules above
 - [ ] CI passing
 - [ ] **PR review completed** (code-first, testing, skeptical, big-picture review agents)
 - [ ] All review feedback addressed (fixed or explained why not applicable)
