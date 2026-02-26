@@ -1,8 +1,13 @@
 # Freenet Agent Skills - Version Information
 
-**Current Version:** 1.0.5
+**Current Version:** 1.0.7
 
 ## Version History
+
+### 1.0.7 (2026-02-26)
+- Added linux-test skill: runs integration tests requiring Linux loopback range via Docker (`/freenet:linux-test`)
+- Uses existing `docker/test-runner/` infrastructure for containerized test execution
+- Includes known test mapping for macOS-incompatible tests (connectivity, blocked peers, delegate messaging)
 
 ### 1.0.6 (2026-02-25)
 - Added 5 recurring bug-prevention patterns (from Feb 2025 fix review of 25 bugs) to review agents and skills
