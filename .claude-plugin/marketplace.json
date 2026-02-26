@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "AI coding agent skills for Freenet development",
-    "version": "1.0.6"
+    "version": "1.0.7"
   },
   "plugins": [
     {
@@ -19,7 +19,8 @@
         "./skills/pr-creation",
         "./skills/pr-review",
         "./skills/release",
-        "./skills/systematic-debugging"
+        "./skills/systematic-debugging",
+        "./skills/linux-test"
       ]
     }
   ]
