@@ -42,6 +42,15 @@ Invoke this methodology automatically when:
 
 ## Debugging Workflow
 
+### Phase 0: Claim the Issue
+
+If you're working on a GitHub issue, **check if it's already assigned** before starting. If someone else is assigned, stop and inform the user — don't duplicate effort. If unassigned, assign it to yourself so others know it's being worked on:
+
+```bash
+gh issue view <ISSUE> --repo freenet/<REPO>  # Check assignees
+gh issue edit <ISSUE> --repo freenet/<REPO> --add-assignee @me
+```
+
 ### Phase 1: Reproduce and Isolate
 
 1. **Reproduce the failure** — Confirm the bug exists and is reproducible

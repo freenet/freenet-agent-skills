@@ -12,6 +12,14 @@ license: LGPL-3.0
 
 ## Before Creating the PR
 
+### Claim the Issue
+
+If your PR fixes a GitHub issue, **verify the issue is unassigned** before starting work. If someone else is already assigned, check with them or the user before proceeding — don't duplicate effort. If the issue is unassigned, assign it to yourself immediately so others know it's being worked on:
+
+```bash
+gh issue edit <ISSUE> --repo freenet/<REPO> --add-assignee @me
+```
+
 ### Sync with Latest Main from GitHub
 
 **CRITICAL:** Always ensure you're working from the latest `main` branch from GitHub, not a stale local copy:
@@ -185,6 +193,10 @@ Modified files:
 
 Once the PR is complete, code is simplified, and CI is passing, run four parallel review agents (code-first, testing, skeptical, big-picture) using the Task tool with `subagent_type="general-purpose"`. Each agent should focus on one perspective and report findings without making edits.
 
+### External Skeptical Review with Codex
+
+After the internal review agents complete, ask Codex to do a skeptical review of the PR. Codex uses a different model and catches different classes of issues — having an independent perspective reduces blind spots. Share the PR number and ask it to look for bugs, race conditions, edge cases, and failure modes.
+
 ### Handling Review Feedback
 
 **Take all feedback seriously.** Freenet is complex code and we need to be perfectionists. Don't cherrypick easy wins and ignore harder issues. For each point raised:
@@ -272,7 +284,7 @@ Full rules: `.claude/rules/code-style.md`, `.claude/rules/ring.md`, `.claude/rul
 - [ ] **Simulation health tested** if PR touches routing/topology/operations/subscriptions — key metrics (subscribe rate, GET rate, tree formation) asserted in simulation tests
 - [ ] **Bug-prevention patterns checked** — if PR touches select!/spawn/cleanup/backoff/deployment, verify compliance with the 5 rules above
 - [ ] CI passing
-- [ ] **PR review completed** (code-first, testing, skeptical, big-picture review agents)
+- [ ] **PR review completed** (code-first, testing, skeptical, big-picture review agents + Codex skeptical review)
 - [ ] All review feedback addressed (fixed or explained why not applicable)
 - [ ] All human review feedback addressed
 - [ ] Responses posted to review comments

@@ -240,6 +240,10 @@ Spawn all four in parallel using Task tool (all use subagent_type="general-purpo
     Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
 ```
 
+## External Skeptical Review with Codex
+
+After completing the internal review, ask Codex to do a skeptical review of the PR. Codex uses a different model and catches different classes of issues — having an independent perspective reduces blind spots. Share the PR number and ask it to look for bugs, race conditions, edge cases, and failure modes. Incorporate any findings into the final review report.
+
 ## Quality Standards
 
 - Be thorough but constructive
