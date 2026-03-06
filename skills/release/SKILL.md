@@ -107,6 +107,16 @@ The release script is **resumable**. If it fails partway through, re-running wit
 
 You can also resume explicitly: `./scripts/release.sh --resume /tmp/release-<VERSION>.state`
 
+### Branch Safety
+
+The script automatically restores the original git branch on exit (success or failure). If the script is interrupted, your working directory won't be left on the `release/v*` branch.
+
+### CI Wait Behavior
+
+- **Main CI check**: If main branch CI is still running when the script starts, it polls every 30s (up to 10 min) instead of exiting immediately
+- **PR merge wait**: Polls every 30s (up to 30 min) for the PR to pass CI and auto-merge
+- **Merge queue optimization**: Release PRs skip expensive tests (Unit & Integration, Simulation, NAT Validation) in the merge queue since main CI already validated the code. This reduces merge queue time from ~6 min to ~1 min.
+
 ## Step 5: Handle Common Issues
 
 **PR title / Conventional Commits check fails:**
@@ -118,6 +128,7 @@ gh api repos/freenet/freenet-core/pulls/XXXX --method PATCH -f title="build: rel
 **Auto-merge not triggering:**
 - GitHub auto-merge can take 5-10 minutes after checks pass
 - The script waits up to 30 minutes (showing progress every 30s)
+- Release PRs skip expensive tests in the merge queue (commit message detection), so merge queue should complete in ~1 min
 - You can manually merge the PR — the script detects manual merges and continues
 
 **Test failures:**
@@ -209,6 +220,8 @@ These are real issues from past releases that the release process has been harde
 - **Binary vs running process mismatch** — Deploying a new binary doesn't mean the service is running it; verify via `systemctl show -p MainPID` + `/proc/PID/exe`, not just binary on disk
 - **Don't announce before binaries exist** — Cross-compile takes 15-20 min; gateway auto-update (especially aarch64) depends on release binaries being attached
 - **Log spam can fill disks** — Always review logs 10-15 min after release; previous releases introduced logging that consumed disk space within hours
+- **Merge queue ran full CI for release PRs** — `github.head_ref` is a queue branch in merge_group events, not the PR branch. Fixed by detecting release PRs via commit message (`build: release*`) and skipping expensive test steps
+- **Script left user on release branch** — Added EXIT trap to restore original branch on any exit
 
 ## Gateway Updates
 
