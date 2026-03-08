@@ -230,64 +230,6 @@ Your app should handle reconnection when the tab becomes visible again.
 Consider implementing a `visibilitychange` listener that re-establishes
 the WebSocket connection.
 
-### Dioxus WASM apps: Firefox mobile RefCell panics
-
-Firefox mobile runs Dioxus signal subscriber notifications synchronously
-during Drop, unlike Chrome/Safari which defer to microtask boundaries. This
-causes `RefCell already borrowed` panics in WASM at three levels:
-
-1. **Dioxus signal re-entrancy** — `SIGNAL.with_mut()` Drop triggers subscriber
-   notifications that cascade into `SIGNAL.read()`. Fix: use `try_read()` for
-   all reactive signal reads. `try_read()` still registers Dioxus subscriptions
-   (confirmed in Dioxus 0.7.x source) but returns `Err` instead of panicking.
-
-2. **wasm-bindgen-futures task re-entrancy** — `spawn_local` inside a polled
-   future causes re-entrant `Task::run()` at `singlethread.rs:132`. Fix: use
-   a `safe_spawn_local()` helper that wraps spawn_local in `setTimeout(0)`:
-
-```rust
-#[cfg(target_arch = "wasm32")]
-pub fn safe_spawn_local<F>(f: F)
-where
-    F: std::future::Future<Output = ()> + 'static,
-{
-    let boxed: std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> = Box::pin(f);
-    let cb = wasm_bindgen::prelude::Closure::once_into_js(move || {
-        wasm_bindgen_futures::spawn_local(boxed);
-    });
-    web_sys::window()
-        .expect("no window")
-        .set_timeout_with_callback(&cb.into())
-        .ok();
-}
-```
-
-3. **Signal mutation inside spawn_local** — `SIGNAL.with_mut()` inside a
-   spawn_local task triggers notifications that re-queue the same task. Fix:
-   move signal mutations out of spawn_local via `setTimeout(0)`:
-
-```rust
-// WRONG — can cause re-entrant borrow in Firefox
-spawn_local(async {
-    // ... async work ...
-    MY_SIGNAL.with_mut(|data| { /* mutate */ });
-});
-
-// RIGHT — defer mutation to clean execution context
-#[cfg(target_arch = "wasm32")]
-{
-    let cb = Closure::once_into_js(move || {
-        MY_SIGNAL.with_mut(|data| { /* mutate */ });
-    });
-    web_sys::window().unwrap()
-        .set_timeout_with_callback(&cb.into()).ok();
-}
-```
-
-**Important:** Signal clears in `use_effect` must be synchronous, not deferred.
-Deferring a clear that the effect subscribes to causes an infinite loop (the
-set remains non-empty → effect re-runs → defers clear → effect re-runs...).
-
 ### Common issues
 
 | Symptom | Cause | Fix |
@@ -299,10 +241,7 @@ set remains non-empty → effect re-runs → defers clear → effect re-runs...)
 | "Connection reset by peer" | Browser killed WebSocket | Check if page is in background tab |
 | "peer connection dropped" on put | Publishing to live node failed | Use isolated test node (`--skip-load-from-network`) |
 | Contract not found | Not published to this node | Publish with `fdev --port {PORT}` |
-| `RefCell already borrowed` on Firefox mobile | Dioxus signal re-entrant borrow during Drop | Use `try_read()` instead of `read()` for reactive signal access |
-| Crash at `singlethread.rs:132` | spawn_local inside polled future on Firefox | Use `safe_spawn_local()` to defer via setTimeout(0) |
-| Blank page after code change (no panic) | Infinite loop from deferred signal clear | Keep signal clears synchronous in use_effect; only defer spawns |
-| Blank page (cached old WASM) | Firefox mobile caches aggressively | Clear cache, force close browser, or use `?_v=timestamp` |
+| Blank page (cached old WASM) | Mobile browser caches aggressively | Clear cache, force close browser, or use `?_v=timestamp` |
 | `sed -i` fails on macOS | BSD sed requires backup extension | Use build tools directly instead of sed |
 | `cargo make` targets Linux | Cross-compilation for web-container-tool | Build natively: `cargo build --release -p web-container-tool` |
 
