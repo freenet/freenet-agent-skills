@@ -6,13 +6,12 @@ license: LGPL-3.0
 
 # Freenet Local Development
 
-This skill provides guidance for running local Freenet nodes, publishing contracts, and debugging dApps during development.
+Guidance for running local Freenet nodes, publishing contracts, and debugging dApps during development.
 
 ## Prerequisites
 
 ```bash
 which freenet fdev
-# Ensure wasm target is installed:
 rustup target add wasm32-unknown-unknown
 ```
 
@@ -27,12 +26,28 @@ rustup target add wasm32-unknown-unknown
 
 ### Node Data Locations
 
-| Platform | Path |
-|----------|------|
+| Platform | Default Data Path |
+|----------|-------------------|
 | macOS | `~/Library/Application Support/The-Freenet-Project-Inc.Freenet/` |
 | Linux | `~/.local/share/freenet/` |
 
 Contents: `contracts/` (WASM), `delegates/`, `secrets/`, `db/`, `config.toml`
+
+### Log Directory Convention
+
+Choose an appropriate log directory for your OS:
+- **macOS**: `~/Library/Logs/freenet-test-node`
+- **Linux**: `~/.local/share/freenet-test-node/logs`
+
+The examples below use `$LOG_DIR` as a placeholder. Set it once:
+```bash
+# macOS:
+LOG_DIR=~/Library/Logs/freenet-test-node
+# Linux:
+LOG_DIR=~/.local/share/freenet-test-node/logs
+
+mkdir -p "$LOG_DIR"
+```
 
 ## Running Local Nodes
 
@@ -46,7 +61,6 @@ Your existing node on port 7509 works. Publish test contracts to it directly.
 `--log-dir` to isolate logs from your main node.
 
 ```bash
-mkdir -p ~/Library/Logs/freenet-test-node
 freenet network \
   --network-port 31338 \
   --ws-api-port 7510 \
@@ -55,7 +69,7 @@ freenet network \
   --skip-load-from-network \
   --data-dir ~/freenet-test-node/data \
   --public-network-address 127.0.0.1 \
-  --log-dir ~/Library/Logs/freenet-test-node \
+  --log-dir "$LOG_DIR" \
   --log-level debug
 ```
 
@@ -69,7 +83,6 @@ Use `--data-dir` for persistent isolation instead.
 
 ```bash
 # Terminal 1: Gateway
-mkdir -p ~/Library/Logs/freenet-local-gw
 freenet network \
   --network-port 31337 \
   --ws-api-port 7509 \
@@ -77,11 +90,10 @@ freenet network \
   --skip-load-from-network \
   --data-dir ~/freenet-local-gw/data \
   --public-network-address 127.0.0.1 \
-  --log-dir ~/Library/Logs/freenet-local-gw \
+  --log-dir ~/freenet-local-gw/logs \
   --log-level debug
 
 # Terminal 2: Peer (get gateway pubkey first)
-mkdir -p ~/Library/Logs/freenet-local-peer
 GATEWAY_KEY=$(cat ~/.config/Freenet/secrets/local-gw/transport.pub 2>/dev/null || echo "CHECK_PUBKEY")
 freenet network \
   --network-port 31338 \
@@ -89,7 +101,7 @@ freenet network \
   --gateway "127.0.0.1:31337,${GATEWAY_KEY}" \
   --skip-load-from-network \
   --data-dir ~/freenet-local-peer/data \
-  --log-dir ~/Library/Logs/freenet-local-peer \
+  --log-dir ~/freenet-local-peer/logs \
   --log-level debug
 ```
 
@@ -97,7 +109,6 @@ freenet network \
 
 ```bash
 # Bind WebSocket API to all interfaces (--ws-api-address 0.0.0.0)
-mkdir -p ~/Library/Logs/freenet-mobile-test
 freenet network \
   --ws-api-address 0.0.0.0 \
   --ws-api-port 7510 \
@@ -106,12 +117,13 @@ freenet network \
   --skip-load-from-network \
   --data-dir ~/freenet-mobile-test/data \
   --public-network-address 127.0.0.1 \
-  --log-dir ~/Library/Logs/freenet-mobile-test \
+  --log-dir ~/freenet-mobile-test/logs \
   --log-level debug
 
 # Phone opens: http://{YOUR_LAN_IP}:7510/v1/contract/web/{CONTRACT_ID}/
-# Find LAN IP: ifconfig en0 | grep "inet "   (macOS)
-#              ip addr show wlan0              (Linux)
+# Find LAN IP:
+#   macOS:  ifconfig en0 | grep "inet "
+#   Linux:  ip addr show wlan0
 ```
 
 ### Multi-instance deployment (10 peers + gateway)
@@ -160,20 +172,18 @@ fdev --port 7510 execute put --code ... contract ...
 curl -s http://127.0.0.1:7510/
 
 # Active WebSocket connections
-lsof -i :7510 -P | grep ESTABLISHED
+lsof -i :7510 -P | grep ESTABLISHED     # macOS
+ss -tnp | grep 7510                      # Linux
 ```
 
 ### Check node logs
 
 ```bash
-# Main node (default log dir)
-tail -f ~/Library/Logs/freenet/freenet.$(date +%Y-%m-%d-%H).log
-
-# Test node (isolated log dir)
-tail -f ~/Library/Logs/freenet-test-node/freenet.$(date +%Y-%m-%d-%H).log
+# Follow logs (use your --log-dir path)
+tail -f "$LOG_DIR"/freenet.$(date +%Y-%m-%d-%H).log
 
 # Filter for contract/delegate events
-tail -f ~/Library/Logs/freenet-test-node/freenet.*.log | grep -i "delegate\|contract\|websocket\|error\|sign"
+tail -f "$LOG_DIR"/freenet.*.log | grep -i "delegate\|contract\|websocket\|error\|sign"
 ```
 
 Each node instance should use `--log-dir` pointing to a unique directory
@@ -185,13 +195,13 @@ Key patterns to search for:
 
 ```bash
 # Follow all delegate + contract activity
-grep -i "delegate\|sign\|update\|put\|subscribe" ~/Library/Logs/freenet-test-node/freenet.*.log | tail -50
+grep -i "delegate\|sign\|update\|put\|subscribe" "$LOG_DIR"/freenet.*.log | tail -50
 
 # Track a specific operation by transaction ID
-grep "01KK70QEAR" ~/Library/Logs/freenet-test-node/freenet.*.log
+grep "01KK70QEAR" "$LOG_DIR"/freenet.*.log
 
 # WebSocket lifecycle
-grep -i "websocket\|connection\|disconnect\|client" ~/Library/Logs/freenet-test-node/freenet.*.log | tail -20
+grep -i "websocket\|connection\|disconnect\|client" "$LOG_DIR"/freenet.*.log | tail -20
 ```
 
 ### Debugging with Playwright (automated browser testing)
@@ -205,9 +215,9 @@ Use the Playwright MCP tools to test the full UI flow without manual interaction
 4. browser_console_messages → check for WASM panics or JS errors
 ```
 
-This is especially useful for reproducing mobile issues on desktop, where
-console output is visible. If a flow works in Playwright but not on mobile,
-the issue is likely WebSocket suspension or browser caching.
+Especially useful for reproducing mobile issues on desktop, where console
+output is visible. If a flow works in Playwright but not on mobile, the
+issue is likely WebSocket suspension or browser caching.
 
 ### Mobile-specific debugging
 
