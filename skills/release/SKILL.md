@@ -18,9 +18,12 @@ This skill orchestrates a complete Freenet release. It determines the next versi
 
 ## Step 1: Determine Current State
 
-Run these commands to gather release context:
+**First, pull the latest changes from origin.** Without this, you may see zero commits since the last tag and incorrectly conclude there's nothing to release.
 
 ```bash
+# Pull latest — MUST do this before anything else
+git pull origin main
+
 # Get current version from Cargo.toml
 grep "^version" crates/core/Cargo.toml | cut -d'"' -f2
 
