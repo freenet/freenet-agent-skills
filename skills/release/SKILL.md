@@ -169,7 +169,8 @@ Only after binaries are confirmed available. Use the `matrix-comms` and `river-o
 
 **Matrix** (#freenet-locutus channel) — use the `matrix-comms` skill:
 ```bash
-timeout 30 matrix-commander -r "!ygHfYcXtXmivTbOwjX:matrix.org" -m "announcement text"
+# -z flag is REQUIRED for Markdown rendering (bold, links, etc.)
+timeout 30 matrix-commander -z -r "!ygHfYcXtXmivTbOwjX:matrix.org" -m "announcement text"
 ```
 
 **River** (Freenet Official room) — use the `river-official-room` skill:
