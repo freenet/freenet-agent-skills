@@ -82,6 +82,8 @@ git branch -d release-work
 
 ## Step 4: Run the Release
 
+**CRITICAL: You MUST run `release.sh` as a single command. Do NOT manually execute individual release steps (gh release create, cargo publish, etc.).** The script handles draft releases, binary waits, and publish ordering that prevent users from seeing a version before its binaries exist. Doing steps manually caused a user-facing 404 during v0.1.177.
+
 Execute the release script:
 
 ```bash
@@ -93,11 +95,12 @@ The script handles the entire pipeline:
 2. **Release PR** - Creates a branch, commits, pushes, opens PR with auto-merge
 3. **Wait for CI** - Monitors GitHub CI on the release PR (up to 30 min)
 4. **Publish crates** - Publishes `freenet` then `fdev` to crates.io
-5. **GitHub Release** - Creates tag, generates release notes, creates release
+5. **GitHub Release** - Creates tag, generates release notes, creates **draft** release
 6. **Cross-compile** - Triggered automatically by the tag push
 7. **Wait for binaries** - Waits for cross-compile to attach binaries to the release
-8. **Gateway updates** - SSHes into all gateways and triggers immediate update
-9. **Announcements** - Matrix and River notifications (if tools available)
+8. **Publish draft** - Publishes the draft release only after binaries are attached
+9. **Gateway updates** - SSHes into all gateways and triggers immediate update
+10. **Announcements** - Matrix and River notifications (if tools available)
 
 ### Important Options
 
