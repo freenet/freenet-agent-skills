@@ -158,17 +158,25 @@ gh run list --workflow=cross-compile.yml --limit 3
 
 ## Step 7: Announcements
 
-Only after binaries are confirmed available:
+Only after binaries are confirmed available. Use the `matrix-comms` and `river-official-room` skills for detailed instructions on each platform.
 
-**Matrix** (#freenet-locutus channel):
-```bash
-# Use matrix-send wrapper if available (handles E2E encryption, retries, timeouts)
-matrix-send -r '!ygHfYcXtXmivTbOwjX:matrix.org' -m "Freenet vX.Y.Z released - [summary]. https://github.com/freenet/freenet-core/releases/tag/vX.Y.Z"
+**Announcement content:** Write a 1-3 sentence Markdown summary of the key changes in this release, followed by a link to the GitHub release for full details. Both Matrix and River support Markdown formatting.
+
+**Example format:**
+```
+**Freenet v0.1.177 released.** Transient WebSocket errors no longer kill the client slot permanently. See [release notes](https://github.com/freenet/freenet-core/releases/tag/v0.1.177) for details.
 ```
 
-**River** (Freenet Official room):
+**Matrix** (#freenet-locutus channel) — use the `matrix-comms` skill:
 ```bash
-riverctl message send 69Ht4YjZsT884MndR2uWhQYe1wb9b2x77HRq7Dgq7wYE "Freenet vX.Y.Z released - [summary]. https://github.com/freenet/freenet-core/releases/tag/vX.Y.Z"
+timeout 30 matrix-commander -r "!ygHfYcXtXmivTbOwjX:matrix.org" -m "announcement text"
+```
+
+**River** (Freenet Official room) — use the `river-official-room` skill:
+```bash
+# Ensure Room Owner identity is restored first (see river-official-room skill)
+cd /home/ian/code/freenet/river/main
+cargo run -p riverctl -- message send 69Ht4YjZsT884MndR2uWhQYe1wb9b2x77HRq7Dgq7wYE "announcement text"
 ```
 
 ## Step 8: Post-Release Verification
