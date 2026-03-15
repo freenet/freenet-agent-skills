@@ -233,9 +233,13 @@ fdev publish \
 description = "Send update to local contract"
 script = '''
 fdev execute update ${CONTRACT_KEY} \
-    --delta delta.bin \
-    --address 127.0.0.1 \
-    --port 7509
+    --delta delta.bin
+'''
+
+[tasks.get-local]
+description = "Get current state of a local contract"
+script = '''
+fdev execute get ${CONTRACT_KEY} --output state.bin
 '''
 ```
 
@@ -359,6 +363,12 @@ fdev execute update HjT8Kf2... \
 
 # Get current state
 fdev execute get HjT8Kf2...
+
+# Get state and save to file
+fdev execute get HjT8Kf2... --output state.bin
+
+# Subscribe to updates (streams until Ctrl+C)
+fdev execute subscribe HjT8Kf2...
 ```
 
 **Terminal 3: Run UI**
