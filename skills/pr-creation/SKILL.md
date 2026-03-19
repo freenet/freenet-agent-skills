@@ -219,6 +219,23 @@ CI typically takes ~20 minutes. Use:
 gh pr checks <PR-NUMBER> --watch
 ```
 
+### Addressing Claude Rule Review Findings
+
+The `Claude PR Rule Review` GitHub Action automatically reviews PRs against `.claude/rules/` and posts a comment with findings. The `rule-review/findings` status check **blocks merge** until all Critical and Warning findings are acknowledged.
+
+**To resolve:**
+1. **Fix the finding** (preferred) — e.g., replace magic numbers with named constants, use `thiserror` for error types, remove stale doc comments
+2. **Check the box** in the review comment once addressed
+3. **Or post `/ack`** to dismiss all findings for the current revision (use sparingly — only when the finding is genuinely inapplicable)
+
+Common findings:
+- Inline magic numbers → extract as named constants
+- Manual `Display`/`Error` impls → use `thiserror::Error` derive
+- Stale doc comments that no longer match the code
+- Missing test coverage for new code paths
+
+**Always fix findings rather than `/ack`-ing them unless you have a clear reason.**
+
 ### Responding to Reviews
 
 1. **Fix all issues** found during review before requesting re-review
