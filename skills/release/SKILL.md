@@ -18,13 +18,14 @@ This skill orchestrates a complete Freenet release. It determines the next versi
 
 ## Step 0: Set Up Tab Context
 
-Rename the current tmux tab to identify this release session:
+Capture the current tmux window ID and rename it. The window ID is stable even if the user switches tabs during the long-running release, so always use `-t` with the saved ID for subsequent renames.
 
 ```bash
-tmux rename-window "release X.Y.Z"
+RELEASE_WINDOW=$(tmux display-message -p '#{window_id}')
+tmux rename-window -t "$RELEASE_WINDOW" "release X.Y.Z"
 ```
 
-Replace `X.Y.Z` with the target version (determine it first if auto-detecting). This makes it easy to identify the release session among other tabs.
+Replace `X.Y.Z` with the target version (determine it first if auto-detecting). Keep `$RELEASE_WINDOW` available for Step 8 (success criteria).
 
 ## Step 1: Determine Current State
 
@@ -265,8 +266,8 @@ Release is complete when:
 - ✓ River announcement sent
 - ✓ Network verified healthy post-release (logs clean, telemetry normal)
 
-Once ALL criteria are met (including post-release monitoring), mark the release as complete:
+Once ALL criteria are met (including post-release monitoring), mark the release as complete using the window ID captured in Step 0:
 
 ```bash
-tmux rename-window "✓ release X.Y.Z"
+tmux rename-window -t "$RELEASE_WINDOW" "✓ release X.Y.Z"
 ```
