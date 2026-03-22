@@ -16,6 +16,16 @@ This skill orchestrates a complete Freenet release. It determines the next versi
 - If an argument is provided (e.g., `/release 0.1.133`), use that as the target version
 - If no argument is provided, auto-detect the next patch version
 
+## Step 0: Set Up Tab Context
+
+Rename the current tmux tab to identify this release session:
+
+```bash
+tmux rename-window "release X.Y.Z"
+```
+
+Replace `X.Y.Z` with the target version (determine it first if auto-detecting). This makes it easy to identify the release session among other tabs.
+
 ## Step 1: Determine Current State
 
 **First, pull the latest changes from origin.** Without this, you may see zero commits since the last tag and incorrectly conclude there's nothing to release.
@@ -254,3 +264,9 @@ Release is complete when:
 - ✓ Matrix announcement sent
 - ✓ River announcement sent
 - ✓ Network verified healthy post-release (logs clean, telemetry normal)
+
+Once ALL criteria are met (including post-release monitoring), mark the release as complete:
+
+```bash
+tmux rename-window "✓ release X.Y.Z"
+```
