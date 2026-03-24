@@ -170,6 +170,23 @@ gh release view v<VERSION> --json assets --jq '.assets[].name'
 gh run list --workflow=cross-compile.yml --limit 3
 ```
 
+## Step 6.5: Smoke Test River Compatibility
+
+**Before announcing, verify that River clients can still talk to the gateway.** Protocol changes (new message variants, streaming defaults, serialization changes) can silently break River even when all freenet-core tests pass.
+
+```bash
+cd /home/ian/code/freenet/river/main
+cargo run -p riverctl -- member list 4uNUKFzZQCnzo4K2ecZ16cMsYEEfoaRS35z6exEsbvm4
+```
+
+This GETs the official room state from the gateway and deserializes it. If it fails:
+- **STOP — do not announce the release**
+- The failure likely means a protocol or serialization change broke River client compatibility
+- Check if River's freenet-stdlib dependency needs updating to match the new release
+- Fix the issue before proceeding to announcements
+
+**Why this matters:** During v0.2.11, enabling WebSocket streaming by default broke riverctl because it was pinned to an older stdlib that couldn't deserialize the new `StreamHeader`/`StreamChunk` variants. This smoke test would have caught that before users were affected.
+
 ## Step 7: Announcements
 
 Only after binaries are confirmed available. Use the `matrix-comms` and `river-official-room` skills for detailed instructions on each platform.
@@ -248,6 +265,7 @@ These are real issues from past releases that the release process has been harde
 - **Log spam can fill disks** — Always review logs 10-15 min after release; previous releases introduced logging that consumed disk space within hours
 - **Merge queue ran full CI for release PRs** — `github.head_ref` is a queue branch in merge_group events, not the PR branch. Fixed by detecting release PRs via commit message (`build: release*`) and skipping expensive test steps
 - **Script left user on release branch** — Added EXIT trap to restore original branch on any exit
+- **Streaming default broke riverctl** — v0.2.11 enabled WebSocket streaming by default, but riverctl was pinned to stdlib 0.1.40 which couldn't deserialize `StreamHeader`/`StreamChunk` variants. Always smoke-test River CLI against the gateway before announcing.
 
 ## Gateway Updates
 
