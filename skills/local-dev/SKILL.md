@@ -1,12 +1,12 @@
 ---
 name: local-dev
-description: Set up and manage local Freenet development environments for building, publishing, and iterating on dApps (contracts, delegates, UIs). Use when the user wants to test contract changes locally, debug UI issues, run a local node with a test contract, or iterate on a Freenet application without deploying to the live network.
+description: Set up and manage local Freenet development environments and interact with a running node. Use when the user wants to test contract changes locally, debug UI issues, run a local node, query connections/diagnostics, inspect the dashboard, use the WebSocket API, or iterate on a Freenet application without deploying to the live network.
 license: LGPL-3.0
 ---
 
-# Freenet Local Development
+# Freenet Local Development & Node Interaction
 
-Guidance for running local Freenet nodes, publishing contracts, and debugging dApps during development.
+Guidance for running local Freenet nodes, publishing contracts, querying node state, and debugging dApps during development.
 
 ## Prerequisites
 
@@ -23,6 +23,34 @@ rustup target add wasm32-unknown-unknown
 |---------|-------------|------|---------|
 | Network (P2P) | 31337 | `--network-port` | Peer-to-peer connections |
 | WebSocket API | 7509 | `--ws-api-port` | Client API (UI, CLI tools, fdev) |
+
+### HTTP Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /` | Home dashboard (auto-refreshes every 5s) |
+| `GET /peer/{address}` | Peer detail page |
+| `GET /v1/contract/web/{key}` | Contract web interface |
+| `WS /v1/contract/command?encodingProtocol=native` | WebSocket API v1 |
+| `WS /v2/contract/command?encodingProtocol=native` | WebSocket API v2 |
+
+### Dashboard
+
+The home dashboard at `http://localhost:7509/` shows:
+- Connection status, peer count, own ring location
+- Peer table: address, ring location, type (Peer/Gateway), bytes sent/received, connected duration
+- External address (NAT traversal result), NAT statistics
+- Contract counts (hosted, subscribed, managed)
+- Operation stats (GET/PUT/UPDATE/SUBSCRIBE success/failure counts)
+
+Scraping peer data:
+```bash
+# Get own location
+curl -s http://localhost:7509/ | grep -o 'own-loc[^<]*<[^>]*>[^<]*'
+
+# Get peer rows (address, location, type, sent, recv, uptime)
+curl -s http://localhost:7509/ | grep -o 'peer-row[^}]*'
+```
 
 ### Node Data Locations
 
@@ -162,6 +190,95 @@ Override the WebSocket port for fdev:
 ```bash
 fdev --port 7510 execute put --code ... contract ...
 ```
+
+### Querying Node State
+
+```bash
+# List connected peers and subscriptions
+fdev query
+
+# Get detailed node diagnostics
+fdev diagnostics
+
+# Get diagnostics for specific contracts
+fdev diagnostics --contract <base58_contract_id>
+```
+
+## WebSocket API
+
+### Connection
+
+```
+ws://127.0.0.1:7509/v1/contract/command?encodingProtocol=native
+```
+
+- **Encoding:** `native` (bincode) or `flatbuffers`
+- **Auth:** Send `ClientRequest::Authenticate { token }` after connecting
+- **Tokens:** Generated per-connection, base58-encoded 32 bytes. Invalidated on node restart (error prefix: `AUTH_TOKEN_INVALID`).
+
+### Request Types
+
+```rust
+pub enum ClientRequest {
+    ContractOp(ContractRequest),   // GET, PUT, UPDATE, Subscribe
+    DelegateOp(DelegateRequest),   // Delegate operations
+    Authenticate { token },         // Auth token
+    NodeQueries(NodeQuery),         // Queries (see below)
+    Disconnect { cause },           // Close with reason
+    Close,                          // Graceful close
+}
+```
+
+### NodeQuery Variants
+
+| Query | Response | Data |
+|-------|----------|------|
+| `ConnectedPeers` | `ConnectedPeers { peers }` | `Vec<(peer_id, socket_addr)>` |
+| `SubscriptionInfo` | `NetworkDebug(info)` | Subscriptions + connected peers |
+| `NodeDiagnostics { config }` | `NodeDiagnostics(response)` | Configurable (see below) |
+| `ProximityCacheInfo` | `ProximityCache(info)` | Proximity cache state for update propagation |
+
+### NodeDiagnostics Config
+
+```rust
+NodeDiagnosticsConfig {
+    include_node_info: bool,           // Peer ID, location, uptime
+    include_network_info: bool,        // Active connections, peer list
+    include_subscriptions: bool,       // Active subscriptions
+    contract_keys: Vec<ContractKey>,   // Specific contracts (empty = all)
+    include_system_metrics: bool,      // Connection count, seeding contracts
+    include_detailed_peer_info: bool,  // Full peer details
+    include_subscriber_peer_ids: bool, // Peer IDs of subscribers per contract
+}
+```
+
+## Config File Reference
+
+```toml
+mode = "network"                      # "network" or "local"
+network-address = "0.0.0.0"
+network-port = 54761                  # UDP port for peer traffic
+ws-api-address = "0.0.0.0"
+ws-api-port = 7509                    # HTTP + WebSocket port
+min-number-of-connections = 25
+max-number-of-connections = 100
+transient-budget = 2048               # Max concurrent transient connections (gateway)
+transient-ttl-secs = 30              # TTL for unpromoted transient connections
+token-ttl-seconds = 86400            # Auth token lifetime
+token-cleanup-interval-seconds = 300
+log_level = "info"
+is_gateway = false
+```
+
+## Ring Distance
+
+Each peer has a ring location in [0.0, 1.0). Distance between two locations:
+
+```
+distance = min(|a - b|, 1.0 - |a - b|)
+```
+
+Max distance is 0.5. Use the dashboard peer table to get locations and compute distances.
 
 ## Debugging
 
