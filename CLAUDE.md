@@ -1,8 +1,17 @@
 # Freenet Agent Skills - Version Information
 
-**Current Version:** 1.0.7
+**Current Version:** 1.0.9
 
 ## Version History
+
+### 1.0.9 (2026-03-26)
+- Updated release skill: River smoke test step, tmux tab naming, release.sh enforcement, matrix-commander Markdown fix, merge queue optimization docs
+- Updated pr-creation skill: added Claude Rule Review handling
+- Fixed phantom fdev commands in dapp-builder skill
+- Added issue assignment checks to prevent duplicate work
+
+### 1.0.8 (2026-03-08)
+- Added local-dev skill for local node management and dApp iteration (`/freenet:local-dev`)
 
 ### 1.0.7 (2026-02-26)
 - Added linux-test skill: runs integration tests requiring Linux loopback range via Docker (`/freenet:linux-test`)
