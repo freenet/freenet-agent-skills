@@ -30,3 +30,13 @@ jobs:
           fi
 
           echo "Version bumped: $OLD_VERSION → $NEW_VERSION ✓"
+
+      - name: Check CHANGELOG.md was updated
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if git diff "$BASE"...HEAD --name-only | grep -q '^CHANGELOG.md$'; then
+            echo "CHANGELOG.md updated ✓"
+          else
+            echo "::error::Plugin content changed but CHANGELOG.md was not updated. Add an entry for this version."
+            exit 1
+          fi
