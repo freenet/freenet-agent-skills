@@ -1,8 +1,11 @@
 # Freenet Agent Skills - Version Information
 
-**Current Version:** 1.0.9
+**Current Version:** 1.0.10
 
 ## Version History
+
+### 1.0.10 (2026-03-26)
+- Merged local-node skill content into local-dev: HTTP endpoints, dashboard scraping, WebSocket API protocol details, NodeDiagnostics config, config.toml reference, ring distance formula, fdev query/diagnostics commands
 
 ### 1.0.9 (2026-03-26)
 - Updated release skill: River smoke test step, tmux tab naming, release.sh enforcement, matrix-commander Markdown fix, merge queue optimization docs
