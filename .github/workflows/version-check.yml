@@ -1,0 +1,32 @@
+name: Version bump check
+
+on:
+  pull_request:
+    paths:
+      - 'skills/**'
+      - 'agents/**'
+      - 'hooks/**'
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check marketplace.json version was bumped
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          OLD_VERSION=$(git show "$BASE":.claude-plugin/marketplace.json | jq -r '.metadata.version')
+          NEW_VERSION=$(git show "$HEAD":.claude-plugin/marketplace.json | jq -r '.metadata.version')
+
+          if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
+            echo "::error::Plugin content changed but .claude-plugin/marketplace.json version was not bumped (still $OLD_VERSION)."
+            echo "Bump the version in .claude-plugin/marketplace.json and CLAUDE.md."
+            exit 1
+          fi
+
+          echo "Version bumped: $OLD_VERSION → $NEW_VERSION ✓"
