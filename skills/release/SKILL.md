@@ -211,7 +211,71 @@ cd /home/ian/code/freenet/river/main
 cargo run -p riverctl -- message send 69Ht4YjZsT884MndR2uWhQYe1wb9b2x77HRq7Dgq7wYE "announcement text"
 ```
 
-## Step 8: Post-Release Verification
+## Step 8: Soak Test on Non-Gateway Peer (~30 minutes)
+
+**Unless the release is urgent**, run the new version on a non-gateway peer for 30 minutes before announcing. This catches problems that CI simulations miss (resource leaks, log spam, connection instability, protocol regressions).
+
+**Why not the gateway?** The gateway is production infrastructure — testing there risks user-visible outages. Use a separate peer instead.
+
+### Choose a test peer
+
+Pick one of these, in order of preference:
+
+1. **nova (local peer)** — Start a non-gateway peer on nova (avoids conflicting with the gateway peer running as the `freenet` user):
+   ```bash
+   # Run as your own user, NOT as freenet
+   freenet serve --config /tmp/soak-test-config.toml 2>&1 | tee /tmp/soak-test.log &
+   SOAK_PID=$!
+   echo "Soak test peer PID: $SOAK_PID"
+   ```
+
+2. **SSH peers (framework, technic)** — If available, SSH in and run there:
+   ```bash
+   # Check availability first
+   ssh framework "uptime" 2>/dev/null && echo "framework available" || echo "framework unavailable"
+   ssh technic "uptime" 2>/dev/null && echo "technic available" || echo "technic unavailable"
+
+   # On the chosen peer:
+   ssh <peer> "freenet serve 2>&1 | tee /tmp/soak-test.log &"
+   ```
+
+### What to monitor during the soak
+
+Check every ~10 minutes for 30 minutes:
+
+```bash
+# Log growth rate (should be ~1MB/hour, not faster)
+ls -la /tmp/soak-test.log
+
+# Log spam (same message repeating hundreds of times)
+tail -200 /tmp/soak-test.log | sort | uniq -c | sort -rn | head -10
+
+# New error patterns
+grep -i "error\|panic\|fatal\|oom\|out of memory" /tmp/soak-test.log | tail -20
+
+# Connection health
+grep -i "connection refused\|timeout\|handshake failed" /tmp/soak-test.log | tail -10
+
+# Resource usage
+ps -p $SOAK_PID -o pid,rss,vsz,%mem,%cpu,etime 2>/dev/null
+```
+
+For SSH peers, prefix commands with `ssh <peer>`.
+
+### Soak test outcomes
+
+- **Clean for 30 minutes** → Proceed to Step 9 (Post-Release Verification & Announcements)
+- **Issues found** → Roll back immediately (see Rollback section), create GitHub issue, do NOT announce
+
+### Clean up the soak peer
+
+```bash
+kill $SOAK_PID 2>/dev/null  # local
+# or
+ssh <peer> "pkill -f 'freenet serve'" 2>/dev/null  # remote
+```
+
+## Step 9: Post-Release Verification & Announcements
 
 **A release is NOT complete until the network is verified healthy.**
 
@@ -280,6 +344,7 @@ Release is complete when:
 - ✓ Published to crates.io
 - ✓ GitHub release created with tag and binaries attached
 - ✓ Gateways updated to new version
+- ✓ Soak test passed (~30 min on non-gateway peer, unless urgent release)
 - ✓ Matrix announcement sent
 - ✓ River announcement sent
 - ✓ Network verified healthy post-release (logs clean, telemetry normal)

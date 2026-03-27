@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.11 (2026-03-27)
+- Updated release skill: added 30-minute soak test step on non-gateway peer (nova local, or SSH peers framework/technic)
+- Soak test runs between gateway update and announcements to catch resource leaks, log spam, and protocol regressions
+- Skippable for urgent releases
+
 ## 1.0.10 (2026-03-26)
 - Merged local-node skill content into local-dev: HTTP endpoints, dashboard scraping, WebSocket API protocol details, NodeDiagnostics config, config.toml reference, ring distance formula, fdev query/diagnostics commands
 
