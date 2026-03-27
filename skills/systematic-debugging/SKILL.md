@@ -74,6 +74,32 @@ RUST_LOG=info cargo test -p freenet --features simulation_tests --test sim_netwo
 cargo run -p fdev -- test --seed 0xDEADBEEF single-process
 ```
 
+### Phase 1b: When the Bug Is Reported from the Live Network
+
+When a bug comes from production observations (user reports, telemetry, monitoring), the goal is to **translate the network observation into a local reproduction as fast as possible**. Live-network debugging has the slowest feedback loop — adding telemetry, redeploying, waiting — so minimize time spent there.
+
+**The workflow:**
+
+1. **Constrain the problem from network data** — What operation type? Which peers? What hop count? What timing pattern? Use telemetry or user reports to narrow this down.
+2. **Translate constraints into simulation parameters:**
+
+| Network Observation | Simulation Translation |
+|---------------------|----------------------|
+| "GET times out at hop 3" | `#[freenet_test]` with 4+ nodes, specific `node_locations` matching topology |
+| "Peer X never responds" | Node configured to drop/delay messages via `FaultConfig` |
+| "73% timeout rate" | `FaultConfig { message_loss_rate: 0.7, .. }` or unresponsive target node |
+| "Works for PUT but not GET" | Test both operations — likely incomplete wiring in dispatch path |
+| "Rapid connect/disconnect cycles" | Simulation with transport-level fault injection |
+| "Messages dropped after acknowledgement" | `FaultConfig` with selective message loss after initial handshake |
+
+3. **Write the simulation test** — Start with `#[freenet_test]` or `SimNetwork + FaultConfig`. Use a deterministic seed.
+4. **Debug locally** — Now iterate with full control: add tracing, assertions, state inspection. No redeployment needed.
+5. **Validate** — Optionally confirm via telemetry that the deployed fix improves live behavior.
+
+**If a `telemetry-monitor` skill is available** (project-local, not part of this plugin), use it to query the centralized OpenTelemetry collector for constraining the problem. But treat telemetry as input to simulation design, not as the primary debugging tool.
+
+**Resist the temptation to keep adding telemetry to find the root cause.** Once you know *what* fails (operation type, peer pattern, timing), stop analyzing network data and reproduce locally. The simulation feedback loop is orders of magnitude faster.
+
 ### Phase 2: Form Hypotheses
 
 Before touching any code, explicitly list potential causes:
@@ -121,8 +147,10 @@ See [Module-Specific Debugging Guide](references/module-debugging.md) for detail
 | Git history of affected code | `git log --oneline -20 -- path/to/file.rs` | Everyone |
 | Fault injection results | SimNetwork + FaultConfig, then inspect stats | Everyone |
 | Gateway logs | Access to running gateway node | **Limited — not all contributors** |
-| Aggregate telemetry | Production monitoring dashboards | **Limited — core team only** |
+| Aggregate telemetry | `telemetry-monitor` skill (if available) or production dashboards | **Limited — core team only** |
 | Real network packet captures | Physical access to test machines | **Limited — specific environments** |
+
+**Note on telemetry:** If a `telemetry-monitor` skill is available in the project, use it to query network telemetry for constraining the problem (see Phase 1b). But remember: telemetry constrains, simulation reproduces. Don't spend cycles iterating on telemetry queries when you have enough information to write a simulation test.
 
 For module-specific data gathering techniques, see [Module-Specific Debugging Guide](references/module-debugging.md) — it covers observation APIs, `#[freenet_test]` event capture, `RUST_LOG` targets, and fault injection per module.
 

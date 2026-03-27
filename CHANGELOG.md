@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12 (2026-03-27)
+- Updated systematic-debugging skill: added Phase 1b "When the Bug Is Reported from the Live Network" — bridge from network telemetry observations to simulation reproduction with concrete translation table
+- Added guidance for optional `telemetry-monitor` project-local skill integration
+- Reinforced simulation-first philosophy: telemetry constrains the problem space, simulation reproduces it
+
 ## 1.0.11 (2026-03-27)
 - Updated release skill: added 30-minute soak test step on non-gateway peer (nova local, or SSH peers framework/technic)
 - Soak test runs between gateway update and announcements to catch resource leaks, log spam, and protocol regressions
