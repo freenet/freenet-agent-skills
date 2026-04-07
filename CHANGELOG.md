@@ -2,8 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.13 (2026-04-07)
+- Fixed release skill: River announcements now use `cargo run -p riverctl` from river repo instead of installed binary
+- Installed `riverctl` embeds stale room_contract.wasm causing "missing contract parameters" failures
+- Updated Room Owner VK in release skill to current value
+- Added incident learning about stale WASM in installed riverctl
+
 ## 1.0.12 (2026-03-27)
-- Updated systematic-debugging skill: added Phase 1b "When the Bug Is Reported from the Live Network" — bridge from network telemetry observations to simulation reproduction with concrete translation table
+- Updated systematic-debugging skill: added Phase 1b "When the Bug Is Reported from the Live Network" -- bridge from network telemetry observations to simulation reproduction with concrete translation table
 - Added guidance for optional `telemetry-monitor` project-local skill integration
 - Reinforced simulation-first philosophy: telemetry constrains the problem space, simulation reproduces it
 

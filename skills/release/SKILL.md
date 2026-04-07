@@ -205,10 +205,13 @@ timeout 30 matrix-commander -z -r "!ygHfYcXtXmivTbOwjX:matrix.org" -m "announcem
 ```
 
 **River** (Freenet Official room) — use the `river-official-room` skill:
+
+**IMPORTANT:** Always use `cargo run -p riverctl` from the river repo, NOT the installed `riverctl` binary. The installed binary embeds a stale `room_contract.wasm` and will fail with "missing contract parameters" after any contract WASM update.
+
 ```bash
 # Ensure Room Owner identity is restored first (see river-official-room skill)
 cd /home/ian/code/freenet/river/main
-cargo run -p riverctl -- message send 69Ht4YjZsT884MndR2uWhQYe1wb9b2x77HRq7Dgq7wYE "announcement text"
+cargo run -p riverctl -- message send 4uNUKFzZQCnzo4K2ecZ16cMsYEEfoaRS35z6exEsbvm4 "announcement text"
 ```
 
 ## Step 8: Soak Test on Non-Gateway Peer (~30 minutes)
@@ -330,6 +333,7 @@ These are real issues from past releases that the release process has been harde
 - **Merge queue ran full CI for release PRs** — `github.head_ref` is a queue branch in merge_group events, not the PR branch. Fixed by detecting release PRs via commit message (`build: release*`) and skipping expensive test steps
 - **Script left user on release branch** — Added EXIT trap to restore original branch on any exit
 - **Streaming default broke riverctl** — v0.2.11 enabled WebSocket streaming by default, but riverctl was pinned to stdlib 0.1.40 which couldn't deserialize `StreamHeader`/`StreamChunk` variants. Always smoke-test River CLI against the gateway before announcing.
+- **Installed riverctl binary has stale WASM** — `cargo install riverctl` embeds `room_contract.wasm` at install time. When the contract WASM later changes (via river-publish), the installed binary computes the wrong contract key and all messages fail with "missing contract parameters". Fix: release.sh now uses `cargo run -p riverctl` from the river repo instead, which always picks up the current WASM via build script. Never use the installed `riverctl` for room operations.
 
 ## Gateway Updates
 
