@@ -103,6 +103,7 @@ Determine what private data each user needs stored locally.
 2. Implement `DelegateInterface` trait
 3. Handle secret storage operations (Store, Get, Delete, List)
 4. Implement cryptographic operations (signing, encryption)
+5. **Include an `ExportSecrets` handler from v1** -- when delegate WASM changes, the delegate key changes and all stored secrets become inaccessible. The old delegate must be able to hand over its secrets to the new version. See delegate-patterns.md for the authorized migration pattern.
 
 Reference: `references/delegate-patterns.md`
 

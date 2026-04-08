@@ -37,6 +37,14 @@ This prevents:
 - Merge conflicts when the PR is ready
 - Basing work on code that's already been superseded
 
+### Assign the Issue
+
+If you're working on a GitHub issue, assign it to yourself so others know it's being worked on:
+
+```bash
+gh issue edit <ISSUE> --repo freenet/<REPO> --add-assignee @me
+```
+
 ### Create a Worktree
 
 Never work directly in the main worktree. Create a dedicated worktree for your branch:

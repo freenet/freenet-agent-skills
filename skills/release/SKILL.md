@@ -206,79 +206,16 @@ timeout 30 matrix-commander -z -r "!ygHfYcXtXmivTbOwjX:matrix.org" -m "announcem
 
 **River** (Freenet Official room) — use the `river-official-room` skill:
 
-**IMPORTANT:** Always use `cargo run -p riverctl` from the river repo, NOT the installed `riverctl` binary. The installed binary embeds a stale `room_contract.wasm` and will fail with "missing contract parameters" after any contract WASM update.
+**IMPORTANT:** You MUST invoke the `river-official-room` skill first to get the correct Room Owner VK and identity restoration instructions. The Room Owner identity must be restored before sending messages. Do NOT hardcode the VK here — it changes when the room is recreated.
 
 ```bash
-# Ensure Room Owner identity is restored first (see river-official-room skill)
+# 1. Restore Room Owner identity (see river-official-room skill for current VK and key location)
+# 2. Send message using the VK from the skill
 cd /home/ian/code/freenet/river/main
-cargo run -p riverctl -- message send 4uNUKFzZQCnzo4K2ecZ16cMsYEEfoaRS35z6exEsbvm4 "announcement text"
+cargo run -p riverctl -- message send <ROOM_OWNER_VK> "announcement text"
 ```
 
-## Step 8: Soak Test on Non-Gateway Peer (~30 minutes)
-
-**Unless the release is urgent**, run the new version on a non-gateway peer for 30 minutes before announcing. This catches problems that CI simulations miss (resource leaks, log spam, connection instability, protocol regressions).
-
-**Why not the gateway?** The gateway is production infrastructure — testing there risks user-visible outages. Use a separate peer instead.
-
-### Choose a test peer
-
-Pick one of these, in order of preference:
-
-1. **nova (local peer)** — Start a non-gateway peer on nova (avoids conflicting with the gateway peer running as the `freenet` user):
-   ```bash
-   # Run as your own user, NOT as freenet
-   freenet serve --config /tmp/soak-test-config.toml 2>&1 | tee /tmp/soak-test.log &
-   SOAK_PID=$!
-   echo "Soak test peer PID: $SOAK_PID"
-   ```
-
-2. **SSH peers (framework, technic)** — If available, SSH in and run there:
-   ```bash
-   # Check availability first
-   ssh framework "uptime" 2>/dev/null && echo "framework available" || echo "framework unavailable"
-   ssh technic "uptime" 2>/dev/null && echo "technic available" || echo "technic unavailable"
-
-   # On the chosen peer:
-   ssh <peer> "freenet serve 2>&1 | tee /tmp/soak-test.log &"
-   ```
-
-### What to monitor during the soak
-
-Check every ~10 minutes for 30 minutes:
-
-```bash
-# Log growth rate (should be ~1MB/hour, not faster)
-ls -la /tmp/soak-test.log
-
-# Log spam (same message repeating hundreds of times)
-tail -200 /tmp/soak-test.log | sort | uniq -c | sort -rn | head -10
-
-# New error patterns
-grep -i "error\|panic\|fatal\|oom\|out of memory" /tmp/soak-test.log | tail -20
-
-# Connection health
-grep -i "connection refused\|timeout\|handshake failed" /tmp/soak-test.log | tail -10
-
-# Resource usage
-ps -p $SOAK_PID -o pid,rss,vsz,%mem,%cpu,etime 2>/dev/null
-```
-
-For SSH peers, prefix commands with `ssh <peer>`.
-
-### Soak test outcomes
-
-- **Clean for 30 minutes** → Proceed to Step 9 (Post-Release Verification & Announcements)
-- **Issues found** → Roll back immediately (see Rollback section), create GitHub issue, do NOT announce
-
-### Clean up the soak peer
-
-```bash
-kill $SOAK_PID 2>/dev/null  # local
-# or
-ssh <peer> "pkill -f 'freenet serve'" 2>/dev/null  # remote
-```
-
-## Step 9: Post-Release Verification & Announcements
+## Step 8: Post-Release Verification
 
 **A release is NOT complete until the network is verified healthy.**
 
@@ -333,7 +270,6 @@ These are real issues from past releases that the release process has been harde
 - **Merge queue ran full CI for release PRs** — `github.head_ref` is a queue branch in merge_group events, not the PR branch. Fixed by detecting release PRs via commit message (`build: release*`) and skipping expensive test steps
 - **Script left user on release branch** — Added EXIT trap to restore original branch on any exit
 - **Streaming default broke riverctl** — v0.2.11 enabled WebSocket streaming by default, but riverctl was pinned to stdlib 0.1.40 which couldn't deserialize `StreamHeader`/`StreamChunk` variants. Always smoke-test River CLI against the gateway before announcing.
-- **Installed riverctl binary has stale WASM** — `cargo install riverctl` embeds `room_contract.wasm` at install time. When the contract WASM later changes (via river-publish), the installed binary computes the wrong contract key and all messages fail with "missing contract parameters". Fix: release.sh now uses `cargo run -p riverctl` from the river repo instead, which always picks up the current WASM via build script. Never use the installed `riverctl` for room operations.
 
 ## Gateway Updates
 
@@ -348,7 +284,6 @@ Release is complete when:
 - ✓ Published to crates.io
 - ✓ GitHub release created with tag and binaries attached
 - ✓ Gateways updated to new version
-- ✓ Soak test passed (~30 min on non-gateway peer, unless urgent release)
 - ✓ Matrix announcement sent
 - ✓ River announcement sent
 - ✓ Network verified healthy post-release (logs clean, telemetry normal)

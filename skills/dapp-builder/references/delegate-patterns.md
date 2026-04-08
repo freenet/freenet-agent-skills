@@ -278,6 +278,75 @@ fn encrypt_for_recipient(
      │◀─────────────│                   │
 ```
 
+## Delegate WASM Upgrade & Secret Migration
+
+**CRITICAL:** When delegate WASM changes (code changes, dependency updates, even transitive dependency changes), the delegate key changes: `delegate_key = BLAKE3(BLAKE3(wasm) || params)`. Secrets stored under the old key become inaccessible to the new delegate.
+
+### The Problem
+
+Delegates store secrets (signing keys, user data) keyed by delegate key. A new WASM = new key = old secrets invisible. Users lose all their private data.
+
+### The Solution: Export Handler from Day One
+
+Every delegate MUST include a handler that exports all stored secrets from v1. The UI orchestrates migration between old and new delegates.
+
+```rust
+// MUST be in the delegate from the very first version
+DelegateRequest::ExportSecrets { authorization } => {
+    // Verify the authorization is signed by the app author
+    let author_pubkey = ed25519_dalek::VerifyingKey::from_bytes(&AUTHOR_PUBKEY)?;
+    let new_delegate_hash = &authorization.new_delegate_hash;
+    author_pubkey.verify_strict(new_delegate_hash, &authorization.signature)
+        .map_err(|_| "unauthorized migration request")?;
+
+    // Return all secrets
+    let signing_key = ctx.get_secret(b"signing_key");
+    let user_data = ctx.get_secret(b"user_data");
+    DelegateResponse::ExportedSecrets {
+        signing_key,
+        user_data,
+    }
+}
+```
+
+### Migration Flow
+
+1. **Build time:** Build new delegate WASM, compute its hash
+2. **Build time:** App author signs the new WASM hash (embedded in UI, not delegate)
+3. **Runtime:** UI sends `ExportSecrets` to old delegate with signed authorization
+4. **Runtime:** Old delegate verifies signature against hardcoded author pubkey
+5. **Runtime:** Old delegate returns secrets
+6. **Runtime:** UI stores secrets in new delegate via `StoreSigningKey` etc.
+
+### Pre-Publish Safety Check
+
+Add a migration check to your publish task that blocks when the delegate WASM changed without a migration entry. See Delta's `scripts/check-migration.sh` for a complete implementation.
+
+### Migration Entry Registry
+
+Maintain a `legacy_delegates.toml` with all previous delegate WASM hashes:
+
+```toml
+[[entry]]
+version = "V1"
+description = "Initial release"
+date = "2026-03-28"
+code_hash = "abc123..."    # BLAKE3 of old WASM bytes
+delegate_key = "def456..."  # BLAKE3 of code_hash bytes
+```
+
+The UI's `build.rs` generates a Rust constant array from this file, which the migration code uses to probe old delegates at startup.
+
+### What Happens Without This
+
+If you deploy a new delegate WASM without migration:
+- All stored signing keys are lost
+- All user preferences are lost  
+- Users see their sites/rooms disappear
+- Recovery requires the old WASM to still be on the node AND to support export
+
+This happened to Delta in April 2026 and River multiple times. Ship the export handler from v1.
+
 ## River Delegate Reference
 
 See [River's chat-delegate](https://github.com/freenet/river/tree/main/delegates/chat-delegate) for a complete implementation:
