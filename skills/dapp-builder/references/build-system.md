@@ -415,6 +415,118 @@ RUST_BACKTRACE=1
 MODE=local
 ```
 
+## Pre-Publish Checks
+
+Add a preflight task that runs before every publish to catch issues early:
+
+```toml
+[tasks.preflight]
+description = "Run all checks before publishing"
+dependencies = ["check-migration"]
+script = '''
+#!/bin/bash
+set -euo pipefail
+echo "Running cargo fmt --check..."
+cargo fmt --check || { echo "FAILED: Run cargo fmt"; exit 1; }
+echo "Running cargo clippy..."
+cargo clippy --all-targets -- -D warnings || { echo "FAILED: Fix clippy"; exit 1; }
+echo "Running tests..."
+cargo test || { echo "FAILED: Fix tests"; exit 1; }
+echo "All checks passed."
+'''
+
+[tasks.publish]
+dependencies = ["build-tailwind", "preflight"]
+# ... build and publish steps
+```
+
+The `check-migration` task verifies that committed WASM files match what's built from source, and that delegate migration entries exist when the WASM has changed. See Delta's `scripts/check-migration.sh` for the full implementation.
+
+## GitHub Actions CI
+
+Every Freenet dApp should have CI that runs on push and PRs:
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: Check WASM builds
+        run: cargo build --release --target wasm32-unknown-unknown -p my-contract -p my-delegate
+      - name: Check UI builds
+        run: cargo check -p my-ui --target wasm32-unknown-unknown
+
+  wasm-staleness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo install b3sum
+      - name: Verify committed WASMs match source
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p my-delegate
+          COMMITTED=$(b3sum ui/public/contracts/my_delegate.wasm | cut -d' ' -f1)
+          BUILT=$(b3sum target/wasm32-unknown-unknown/release/my_delegate.wasm | cut -d' ' -f1)
+          [ "$COMMITTED" = "$BUILT" ] || { echo "::error::WASM stale"; exit 1; }
+```
+
+## Resilience Patterns
+
+### Delegate State Backup
+
+Back up contract state to the delegate after every GET or UPDATE response. If the network drops the contract, restore from the backup:
+
+```rust
+// After receiving state from the network
+delegate::backup_site_state(&prefix, &state);
+
+// When GET times out or returns NotFound
+delegate::request_state_backup(&prefix);
+// Response handler: PUT the backed-up state to re-publish it
+```
+
+### GET Timeout Handling
+
+GET timeouts arrive as WebSocket errors, not `ContractResponse::NotFound`. Handle both:
+
+```rust
+// In the WebSocket error callback
+if error_msg.contains("GET operation timed out") {
+    // Try restoring from delegate backup for any site still showing empty state
+    for (prefix, site) in sites.iter() {
+        if site.state == Default::default() {
+            delegate::request_state_backup(prefix);
+        }
+    }
+}
+```
+
 ## River Build Reference
 
 See [River's Makefile.toml](https://github.com/freenet/river/blob/main/Makefile.toml) for a complete build configuration.

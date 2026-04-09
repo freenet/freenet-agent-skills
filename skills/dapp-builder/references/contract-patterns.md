@@ -303,7 +303,7 @@ fn merge(a: &Self, b: &Self) -> Self {
 
 ## Cryptographic Verification
 
-All state changes should be signed:
+**CRITICAL: Every field in contract state must be covered by a signature.** Contracts run on untrusted peers who can modify state. The contract's `validate_state` checks signatures, but only for fields included in the signing bytes. An unsigned field is effectively world-writable.
 
 ```rust
 use ed25519_dalek::{SigningKey, VerifyingKey, Signature};
@@ -322,6 +322,45 @@ impl SignedMessage {
     }
 }
 ```
+
+When adding new fields to signed structs, include them in the signing bytes immediately. If backwards compatibility is needed (old data has signatures that don't cover the new field), use versioned signatures:
+
+```rust
+// V1 signing bytes (original)
+fn signing_bytes_v1(id: u64, title: &str, content: &str) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"myapp:item:");
+    buf.extend_from_slice(&id.to_le_bytes());
+    buf.extend_from_slice(title.as_bytes());
+    buf.extend_from_slice(content.as_bytes());
+    buf
+}
+
+// V2 signing bytes (adds new field)
+fn signing_bytes_v2(id: u64, title: &str, content: &str, order: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"myapp:item:v2:");  // different prefix!
+    buf.extend_from_slice(&id.to_le_bytes());
+    buf.extend_from_slice(title.as_bytes());
+    buf.extend_from_slice(content.as_bytes());
+    buf.extend_from_slice(&order.to_le_bytes());
+    buf
+}
+
+// Verification: try v2 first, fall back to v1
+fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
+    let v2 = signing_bytes_v2(id, &self.title, &self.content, self.order);
+    if owner.verify(&v2, &self.signature).is_ok() {
+        return Ok(());
+    }
+    // Fall back to v1 for old data
+    let v1 = signing_bytes_v1(id, &self.title, &self.content);
+    owner.verify(&v1, &self.signature)
+        .map_err(|e| format!("invalid signature: {e}"))
+}
+```
+
+**Write a test for every signed field** that verifies tampering with it causes verification to fail.
 
 ## Contract Parameters
 

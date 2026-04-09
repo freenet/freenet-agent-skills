@@ -86,6 +86,7 @@ Start by defining what state needs to be shared across all users.
 2. Implement `ComposableState` trait for each component
 3. Implement `ContractInterface` trait for the contract
 4. Ensure all state updates satisfy the commutative monoid requirement
+5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
 
 Reference: `references/contract-patterns.md`
 
@@ -125,9 +126,15 @@ Build the user interface connecting to contracts and delegates.
 
 Reference: `references/ui-patterns.md`
 
-### Phase 4: Build and Deploy
+### Phase 4: Build, Test, and Deploy
 
-Set up the build system and deployment pipeline.
+Set up the build system, CI, and deployment pipeline.
+
+**Implementation steps:**
+1. Set up `Makefile.toml` with build tasks for contract, delegate, and UI
+2. Add a `preflight` task that runs fmt, clippy, tests, and migration checks before publish
+3. Add GitHub Actions CI workflow (runs on push and PRs)
+4. Back up contract state to the delegate for network resilience
 
 Reference: `references/build-system.md`
 
