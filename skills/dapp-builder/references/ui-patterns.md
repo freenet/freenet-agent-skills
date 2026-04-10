@@ -115,48 +115,104 @@ pub enum SyncStatus {
 
 ## WebSocket Connection
 
-### Connection Manager
+### CRITICAL: How WebSocket Works in Freenet Gateway
+
+Freenet serves web apps inside **sandboxed iframes** for origin isolation.
+The app does NOT create a raw WebSocket directly. Instead:
+
+1. The **shell page** (outer frame) holds the auth token and manages the real WebSocket
+2. The **sandboxed iframe** (where your WASM app runs) has `window.WebSocket` replaced
+   with a postMessage-based shim (`FreenetWebSocket`)
+3. When your code calls `WebSocket::new(url)`, the shim intercepts it and routes
+   through postMessage to the shell page, which creates the real connection
+
+This means:
+- Your app calls `WebSocket::new()` normally (or uses `freenet-stdlib`'s `WebApi::start()`)
+- The **URL must use the correct path**: `/v1/contract/command?encodingProtocol=native`
+- The **URL must be derived from `window.location`**, not hardcoded, so it works on any host/port
+- The shell page automatically injects the auth token -- your app does NOT need to handle auth
+
+### WebSocket URL (IMPORTANT)
+
+**NEVER hardcode `ws://127.0.0.1:7509`.** Derive the URL from the page location:
 
 ```rust
-use web_sys::{WebSocket, MessageEvent};
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
+/// Get the WebSocket URL for connecting to the Freenet node.
+/// Derives from window.location so the app works on any host/port.
+#[cfg(target_arch = "wasm32")]
+fn get_websocket_url() -> String {
+    const FALLBACK: &str = "ws://localhost:7509/v1/contract/command?encodingProtocol=native";
 
-pub struct FreenetConnection {
-    ws: WebSocket,
+    if let Some(window) = web_sys::window() {
+        let location = window.location();
+        let protocol = location.protocol().unwrap_or_default();
+        let host = location.host().unwrap_or_default(); // includes port
+
+        let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
+        format!("{ws_protocol}//{host}/v1/contract/command?encodingProtocol=native")
+    } else {
+        FALLBACK.to_string()
+    }
 }
+```
 
-impl FreenetConnection {
-    pub async fn connect(gateway_url: &str) -> Result<Self, JsValue> {
-        let ws = WebSocket::new(gateway_url)?;
-        ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
+The full URL path is: `ws://{host}/v1/contract/command?encodingProtocol=native`
 
-        // Set up message handler
-        let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
-            if let Ok(buffer) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
-                let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-                handle_message(bytes);
+Reference: `river/ui/src/components/app/freenet_api/constants.rs`
+
+### Connection Manager (Using freenet-stdlib WebApi)
+
+The recommended approach is to use `freenet-stdlib`'s `WebApi::start()` which handles
+binary serialization/deserialization of Freenet protocol messages:
+
+```rust
+use freenet_stdlib::client_api::{WebApi, ClientError, HostResponse};
+
+pub async fn connect() -> Result<(), String> {
+    let url = get_websocket_url();
+    let websocket = web_sys::WebSocket::new(&url)
+        .map_err(|e| format!("Failed to create WebSocket: {e:?}"))?;
+
+    let web_api = WebApi::start(
+        websocket,
+        // Response callback
+        move |result: Result<HostResponse, ClientError>| {
+            match result {
+                Ok(response) => handle_response(&response),
+                Err(e) => log::warn!("API error: {e}"),
             }
-        }) as Box<dyn FnMut(MessageEvent)>);
+        },
+        // Error callback
+        move |_error| {
+            log::error!("WebSocket connection lost");
+        },
+        // Connected callback
+        move || {
+            log::info!("Connected to Freenet node");
+        },
+    );
 
-        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-        onmessage.forget();
-
-        Ok(Self { ws })
-    }
-
-    pub fn send(&self, message: &[u8]) -> Result<(), JsValue> {
-        self.ws.send_with_u8_array(message)
-    }
+    // Store web_api in a global signal for use by other components
+    *WEB_API.write() = Some(web_api);
+    Ok(())
 }
 ```
 
-### Gateway URL
+**Important:** `WebApi::start()` returns immediately. The connection is established
+asynchronously. Wait for the "connected" callback before sending requests.
 
-```rust
-// Default Freenet gateway WebSocket endpoint
-const GATEWAY_WS: &str = "ws://127.0.0.1:7509";
+### Dependencies for WebSocket
+
+The UI crate needs these dependencies for WebSocket to work on `wasm32-unknown-unknown`:
+
+```toml
+freenet-stdlib = { version = "0.3.5", features = ["net"] }
+# Required for wasm32-unknown-unknown: use JS crypto.getRandomValues for RNG
+getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
 ```
+
+Without the `getrandom` js feature, `getrandom 0.2` emits a `compile_error!` on
+`wasm32-unknown-unknown`. River uses this exact pattern.
 
 ## Contract Synchronization
 

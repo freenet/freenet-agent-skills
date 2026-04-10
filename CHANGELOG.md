@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.14 (2026-04-10)
+- Fixed dapp-builder: WebSocket connection documentation was incorrect
+  - WebSocket URL must be derived from `window.location`, not hardcoded to `ws://127.0.0.1:7509`
+  - Must use path `/v1/contract/command?encodingProtocol=native`
+  - Documented sandboxed iframe architecture (shell page postMessage bridge)
+  - Added required `getrandom` js feature for wasm32-unknown-unknown
+  - Added `freenet-stdlib` `net` feature requirement for WebApi
+  - Bug discovered during ghostkey delegate development: hardcoded URL fails in gateway
+
 ## 1.0.13 (2026-04-07)
 - Fixed release skill: River announcements now use `cargo run -p riverctl` from river repo instead of installed binary
 - Installed `riverctl` embeds stale room_contract.wasm causing "missing contract parameters" failures
