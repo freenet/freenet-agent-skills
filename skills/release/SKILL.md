@@ -162,10 +162,27 @@ cargo search freenet --limit 1
 # Check GitHub release exists
 gh release view v<VERSION>
 
-# Verify binaries are attached
+# Verify ALL required platform binaries are attached
 gh release view v<VERSION> --json assets --jq '.assets[].name'
-# Should show: freenet-x86_64-unknown-linux-musl.tar.gz, freenet-aarch64-unknown-linux-musl.tar.gz, etc.
+```
 
+**Required platform binaries** (all must be present):
+- `freenet-x86_64-unknown-linux-musl.tar.gz`
+- `freenet-aarch64-unknown-linux-musl.tar.gz`
+- `freenet-aarch64-apple-darwin.tar.gz`
+- `freenet-x86_64-apple-darwin.tar.gz`
+- `freenet-x86_64-pc-windows-msvc.zip`
+- `fdev-x86_64-unknown-linux-musl.tar.gz`
+- `fdev-aarch64-unknown-linux-musl.tar.gz`
+- `fdev-aarch64-apple-darwin.tar.gz`
+- `fdev-x86_64-apple-darwin.tar.gz`
+- `fdev-x86_64-pc-windows-msvc.zip`
+- `freenet.exe`
+- `SHA256SUMS.txt`
+
+If any binary is missing, **do not proceed to announcements**. Investigate the cross-compile workflow failure first.
+
+```bash
 # Monitor cross-compile workflow if binaries not yet available
 gh run list --workflow=cross-compile.yml --limit 3
 ```
