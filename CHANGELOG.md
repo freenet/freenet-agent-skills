@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.15 (2026-04-24)
+- Fixed dapp-builder: stale dependency versions across SKILL.md and references
+  - `freenet-stdlib` pinned to `0.6.0` (was `0.1` / `0.3.5`) to match current River
+  - `freenet-scaffold` / `freenet-scaffold-macro` pinned to `0.2.2` (was `0.1`)
+  - `dioxus` pinned to `0.7.3` with `features = ["web"]`
+  - Added warning about stdlib version drift and wire-format errors
+- Fixed dapp-builder/build-system.md: replaced stale `fdev publish --state ...` example
+  with current `fdev -p 7509 publish ... contract --webapp-archive --webapp-metadata`
+  form and noted `--code`/`--parameters` argument ordering vs the `contract` subcommand
+- Added dapp-builder/contract-patterns.md "Contract WASM Upgrade & State Migration":
+  end-to-end playbook for upgrading contract WASM without stranding state
+  (authorized-state precondition, backwards-compatible serialization,
+  `OptionalUpgrade` pointer, `legacy_contracts.toml` registry, CLI republish)
+- Added Phase 1 step to plan contract upgrade from v1 alongside delegate migration
+- Clarified two WebSocket connection models in ui-patterns.md: shell-managed
+  (inside the gateway iframe, token injected, no manual `Authenticate`) vs raw
+  (CLI / dev-server / direct node access, manual `Authenticate` required)
+- Includes prior unreleased commit 265a7de: release skill Step 6 now enumerates
+  the 12 required platform binaries explicitly (freenet/freenet-core#3825)
+
 ## 1.0.14 (2026-04-10)
 - Fixed dapp-builder: WebSocket connection documentation was incorrect
   - WebSocket URL must be derived from `window.location`, not hardcoded to `ws://127.0.0.1:7509`

@@ -87,6 +87,7 @@ Start by defining what state needs to be shared across all users.
 3. Implement `ContractInterface` trait for the contract
 4. Ensure all state updates satisfy the commutative monoid requirement
 5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
+6. **Plan contract upgrade from v1.** Contract keys change with every WASM hash change, so include an `OptionalUpgrade` pointer in state, keep serialization backwards-compatible, and maintain a `legacy_contracts.toml` migration registry. See contract-patterns.md "Contract WASM Upgrade & State Migration".
 
 Reference: `references/contract-patterns.md`
 
@@ -174,18 +175,28 @@ my-dapp/
 
 ## Key Dependencies
 
+Track the versions River (the reference dApp) uses. Mismatched versions cause
+deserialization failures, missing features, and "variant index out of range"
+errors. Check [River's workspace Cargo.toml](https://github.com/freenet/river/blob/main/Cargo.toml)
+before pinning.
+
+As of April 2026 (River `main`):
+
 ```toml
-# For contracts
-freenet-stdlib = { version = "0.1", features = ["contract"] }
-freenet-scaffold = "0.1"
+# Workspace-wide (Cargo.toml)
+freenet-stdlib = { version = "0.6.0", features = ["contract"] }
+freenet-scaffold = "0.2.2"
+freenet-scaffold-macro = "0.2.2"
 
-# For delegates
-freenet-stdlib = { version = "0.1", features = ["delegate"] }
+# UI crate (ui/Cargo.toml): enables WebApi/WebSocket helpers
+freenet-stdlib = { workspace = true, features = ["net"] }
 
-# For UI
-dioxus = "0.7"
-freenet-stdlib = "0.1"
+# UI framework
+dioxus = { version = "0.7.3", features = ["web"] }
 ```
+
+The `contract` feature is required for contract and delegate crates targeting
+`wasm32-unknown-unknown`. The `net` feature pulls in `WebApi` for the UI.
 
 ---
 

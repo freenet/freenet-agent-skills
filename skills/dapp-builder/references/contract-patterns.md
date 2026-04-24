@@ -390,9 +390,95 @@ let bytes = freenet_stdlib::rand::rand_bytes(32);
 let now: DateTime<Utc> = freenet_stdlib::time::now();
 ```
 
+## Contract WASM Upgrade & State Migration
+
+**CRITICAL:** A contract's key is derived from its WASM and parameters:
+`contract_key = BLAKE3(BLAKE3(wasm) || params)`. Any change to the contract
+WASM (code, dependencies, transitive dependency bumps) produces a new key.
+Without a migration plan, **state stored under the old key is stranded**:
+existing clients keep subscribing to a contract no one else is publishing to.
+
+Contract upgrade is a design concern you must address *before* the first release,
+just like delegate migration (see `delegate-patterns.md`). The rest of this
+section is the playbook River uses. Adapt it to your app.
+
+### Preconditions: authorized state + backwards-compatible format
+
+Permissionless contract migration only works if two invariants hold:
+
+1. **Every field in state is cryptographically authorized.** See
+   "Cryptographic Verification" above. The new contract must be able to
+   re-validate every byte of state carried over from the old contract without
+   trusting the node that delivered it. If any field can be forged by an
+   untrusted peer, migration becomes an attack vector.
+2. **State serialization is backwards-compatible.** New fields use
+   `#[serde(default)]`; fields are never removed or renamed; existing field
+   formats never change. If a breaking state change is genuinely required,
+   create an explicit `StateV2` type with a written migration. Do not try to
+   evolve `StateV1` in place.
+
+Without both, the new contract's `validate_state` will reject state from the
+old contract, and migration silently fails.
+
+### Embed an upgrade pointer in state from v1
+
+Include a field that the room/app owner can set to announce the new key to
+clients still running old code:
+
+```rust
+#[composable]
+pub struct AppStateV1 {
+    // ... your real state ...
+    pub upgrade: OptionalUpgradeV1,  // Some(new_contract_key) after upgrade
+}
+```
+
+The pointer is a **courtesy for stragglers**. Updated clients already know the
+new key (their bundled WASM hashes to it). Old clients read `upgrade` from the
+old contract's state and follow it.
+
+### Upgrade flow
+
+1. **Client ships with new WASM.** On startup, the client computes both keys:
+   - `old_key = BLAKE3(BLAKE3(old_wasm_it_knows_about) || params)`
+   - `new_key = BLAKE3(BLAKE3(bundled_wasm) || params)`
+2. **If `old_key != new_key`, the client migrates:**
+   - Subscribes to `new_key`.
+   - GETs state from `old_key`, PUTs/merges it to `new_key`. The new contract's
+     `validate_state` re-verifies every signature, so this is safe to do from
+     any client, not just the original owner.
+   - If the client *is* the owner, it also publishes an `OptionalUpgradeV1`
+     pointer on the old contract so stragglers can find the new one.
+3. **Old clients** that haven't upgraded their WASM yet keep reading the old
+   contract, see the `upgrade` pointer, and follow it (read-only) until they're
+   updated.
+
+### Register old WASM hashes in a migration file
+
+Maintain a file like `legacy_contracts.toml` (analogous to
+`legacy_delegates.toml` for delegates) at the repo root, listing every
+historical contract WASM hash plus the params bytes used to derive its key.
+The UI's `build.rs` generates a Rust `const` array from it; the runtime probes
+each old key at startup. River uses this pattern for delegates; apply the
+same idea to contracts.
+
+### Pre-publish check
+
+Add a preflight task that fails if the contract WASM hash has changed from the
+last published release without a corresponding entry in the migration file.
+This is the same discipline as delegate migration. See
+`delegate-patterns.md` for the equivalent script and CI check.
+
+### Rebuild all consumers when WASM changes
+
+CLI tools (e.g. a `riverctl`-style binary) and test harnesses that embed the
+contract WASM at build time must be rebuilt and republished together. A stale
+CLI with old WASM produces a different key and can't see the new contract's
+state. See River's `cargo make publish-all` for how to orchestrate this.
+
 ## River Contract Reference
 
-See [River's room-contract](https://github.com/freenet/river/tree/main/contracts/room-contract/src/lib.rs) for a complete implementation.
+See [River's room-contract](https://github.com/freenet/river/tree/main/contracts/room-contract/src/lib.rs) for a complete implementation, and River's `AGENTS.md` under "Contract Upgrade" for the full upgrade runbook.
 
 State components in [common/src/room_state/](https://github.com/freenet/river/tree/main/common/src/room_state):
 - `configuration.rs`

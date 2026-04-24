@@ -35,11 +35,19 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-freenet-stdlib = "0.1"
-freenet-scaffold = "0.1"
+# Mirror River's pinned versions; bump together when upgrading. Check
+# https://github.com/freenet/river/blob/main/Cargo.toml before pinning.
+freenet-stdlib = { version = "0.6.0", features = ["contract"] }
+freenet-scaffold = "0.2.2"
+freenet-scaffold-macro = "0.2.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
+
+**Version drift is a real hazard.** Each stdlib minor release has changed
+protocol enums and wire format at least once. Always rebuild *all* consumer
+binaries (CLI, webapp, test tools) against the same stdlib version as the
+gateway you publish to, and run the smoke-test below before shipping.
 
 ## Makefile.toml
 
@@ -169,23 +177,32 @@ tar -cJf ../../../../../webapp/webapp.tar.xz .
 description = "Sign webapp for deployment"
 dependencies = ["package-webapp"]
 script = '''
-# Requires web-container-tool from freenet-core
+# web-container-tool is built in the web-container-contract subcrate
+# (see contracts/web-container-contract/web-container-tool in River).
+# Version must be strictly greater than the currently-published metadata;
+# check the error message from a failed publish for the current version.
 web-container-tool sign \
-    --webapp target/webapp/webapp.tar.xz \
-    --metadata target/webapp/webapp.metadata \
-    --output target/webapp/webapp.parameters \
-    --key signing-key.pem
+    --input target/webapp/webapp.tar.xz \
+    --output target/webapp/webapp.metadata \
+    --parameters target/webapp/webapp.parameters \
+    --version ${WEBAPP_VERSION}
 '''
 
 [tasks.publish]
 description = "Publish to local Freenet node"
 dependencies = ["sign-webapp"]
 script = '''
-# Requires fdev from freenet-core
-fdev publish \
-    --code contracts/web-container-contract/target/wasm32-unknown-unknown/release/web_container_contract.wasm \
-    --state target/webapp/webapp.tar.xz \
-    --parameters target/webapp/webapp.parameters
+# Publishes a webapp-bearing contract. --code/--parameters go BEFORE the
+# `contract` subcommand; --webapp-archive/--webapp-metadata go AFTER.
+# --parameters must be the committed file whose bytes determine the contract
+# ID (changing it changes the contract key). fdev defaults to local mode on
+# 127.0.0.1:7509; override with -p if your node uses a different port.
+fdev -p 7509 publish \
+    --code target/wasm32-unknown-unknown/release/web_container_contract.wasm \
+    --parameters target/webapp/webapp.parameters \
+    contract \
+    --webapp-archive target/webapp/webapp.tar.xz \
+    --webapp-metadata target/webapp/webapp.metadata
 '''
 
 # ============================================
@@ -221,13 +238,13 @@ args = ["local"]
 description = "Publish contract to local node"
 dependencies = ["build-contract"]
 script = '''
-fdev publish \
+# For a plain (non-webapp) contract. fdev defaults to local mode (127.0.0.1:7509).
+fdev -p 7509 publish \
     --code target/wasm32-unknown-unknown/release/my_contract.wasm \
     --parameters parameters.bin \
     contract \
     --state initial_state.bin
 '''
-# fdev defaults to local mode (127.0.0.1:7509)
 
 [tasks.update-local]
 description = "Send update to local contract"
@@ -348,8 +365,9 @@ cargo make local-node
 # Build contract
 cargo make build-contract
 
-# Publish to local node (fdev defaults to local mode)
-fdev publish \
+# Publish to local node (fdev defaults to local mode; -p overrides the port).
+# --code/--parameters go BEFORE the `contract` subcommand; --state goes AFTER.
+fdev -p 7509 publish \
     --code target/wasm32-unknown-unknown/release/my_contract.wasm \
     --parameters params.bin \
     contract \

@@ -52,15 +52,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dioxus = { version = "0.7", features = ["web", "router"] }
-dioxus-logger = "0.7"
-freenet-stdlib = "0.1"
+# Mirror River's pinned versions; see https://github.com/freenet/river/blob/main/ui/Cargo.toml
+dioxus = { version = "0.7.3", features = ["web"] }
+dioxus-free-icons = { version = "0.10.0", features = ["font-awesome-solid"] }
+freenet-stdlib = { version = "0.6.0", features = ["net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent"] }
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "Window", "Location"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-gloo-timers = "0.3"
+# Required for wasm32-unknown-unknown; pulls crypto.getRandomValues from JS
+getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
 
 # Shared types with contract/delegate
 common = { path = "../common" }
@@ -115,7 +117,19 @@ pub enum SyncStatus {
 
 ## WebSocket Connection
 
-### CRITICAL: How WebSocket Works in Freenet Gateway
+### Two Connection Models: Pick the Right One
+
+A Freenet client can reach the local node over WebSocket in two different ways.
+The correct choice depends on **how the client loads**, not on what it wants to do.
+
+| Client load path | Connection model | What to do |
+|------------------|------------------|-----------|
+| Loaded as a **webapp via `/v1/contract/web/{key}/`** (runs inside the gateway's sandboxed iframe) | **Shell-managed WebSocket.** The gateway's outer page owns the real socket and injects the auth token. Your WASM calls `WebSocket::new(url)` and a shimmed `window.WebSocket` transparently forwards messages via `postMessage`. | Derive the URL from `window.location` (see below). **Do NOT call `Authenticate`; the shell injects it.** Use `freenet-stdlib::WebApi::start()`. |
+| Loaded **outside the gateway** (native CLI, Playwright page served from a dev port like `python3 -m http.server`, a Node script, or any page that did not come from `/v1/contract/web/...`) | **Raw WebSocket.** There is no shell; you talk directly to the node's WS API. | Hardcode or configure `ws://127.0.0.1:7509/v1/contract/command?encodingProtocol=native`. After the socket opens, **send `ClientRequest::Authenticate { token }` yourself** with a token from the node's config or `~/.config/freenet/`. See the `local-dev` skill for details. |
+
+In short: **if your code is running inside an iframe served by `/v1/contract/web/...`, the shell does auth for you.** Everywhere else, you do it yourself. Getting this wrong produces confusing symptoms: the shell model fails with "Auth token not found" if you try to authenticate manually, and the raw model hangs forever if you forget.
+
+### CRITICAL: How WebSocket Works in the Gateway (Shell-Managed Model)
 
 Freenet serves web apps inside **sandboxed iframes** for origin isolation.
 The app does NOT create a raw WebSocket directly. Instead:
@@ -206,10 +220,14 @@ asynchronously. Wait for the "connected" callback before sending requests.
 The UI crate needs these dependencies for WebSocket to work on `wasm32-unknown-unknown`:
 
 ```toml
-freenet-stdlib = { version = "0.3.5", features = ["net"] }
+freenet-stdlib = { version = "0.6.0", features = ["net"] }
 # Required for wasm32-unknown-unknown: use JS crypto.getRandomValues for RNG
 getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
 ```
+
+Pin `freenet-stdlib` to the same version as the rest of your workspace and the
+gateway you publish to. Mismatched stdlib versions between UI, CLI tools, and
+the gateway are the #1 cause of "variant index out of range" bincode errors.
 
 Without the `getrandom` js feature, `getrandom 0.2` emits a `compile_error!` on
 `wasm32-unknown-unknown`. River uses this exact pattern.
