@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.16 (2026-04-29)
+- Fixed release skill: documented the new tiered merge_group model
+  (freenet/freenet-core#3973). Release merge_group entries now run the FULL
+  suite (Unit & Integration, Simulation, NAT Validation) as the pre-publish
+  gate. Non-release merge_group entries skip Simulation and NAT Validation
+  (covered by PR-level CI). Updated wait timings: 60 min PR-merge wait, ~20-30
+  min for the release gate. Replaced the obsolete "skip on release" lesson with
+  the corrected understanding (the previous "main CI already validated"
+  premise was wrong — main push doesn't run those jobs at all).
+
 ## 1.0.15 (2026-04-24)
 - Fixed dapp-builder: stale dependency versions across SKILL.md and references
   - `freenet-stdlib` pinned to `0.6.0` (was `0.1` / `0.3.5`) to match current River

@@ -131,8 +131,8 @@ The script automatically restores the original git branch on exit (success or fa
 ### CI Wait Behavior
 
 - **Main CI check**: If main branch CI is still running when the script starts, it polls every 30s (up to 10 min) instead of exiting immediately
-- **PR merge wait**: Polls every 30s (up to 30 min) for the PR to pass CI and auto-merge
-- **Merge queue optimization**: Release PRs skip expensive tests (Unit & Integration, Simulation, NAT Validation) in the merge queue since main CI already validated the code. This reduces merge queue time from ~6 min to ~1 min.
+- **PR merge wait**: Polls every 30s (up to 60 min) for the PR to pass CI and auto-merge
+- **Release merge_group is the pre-publish gate** (#3973): The release PR's merge_group entry runs the FULL suite (Unit & Integration, Simulation, NAT Validation) on the heavy runner — this is the definitive "what ships is green" check. Non-release merge_group entries skip Simulation and NAT Validation (covered by PR-level CI), so the release entry is the only place those run against the rebased commit. Expect ~20-30 min for this gate. The previous "skip on release" assumption was based on a faulty 'main CI already validated' premise — main push doesn't run these jobs at all.
 
 ## Step 5: Handle Common Issues
 
@@ -144,8 +144,8 @@ gh api repos/freenet/freenet-core/pulls/XXXX --method PATCH -f title="build: rel
 
 **Auto-merge not triggering:**
 - GitHub auto-merge can take 5-10 minutes after checks pass
-- The script waits up to 30 minutes (showing progress every 30s)
-- Release PRs skip expensive tests in the merge queue (commit message detection), so merge queue should complete in ~1 min
+- The script waits up to 60 minutes (showing progress every 30s)
+- Release merge_group entries run the full suite as the pre-publish gate (#3973), so allow 20-30 min for the merge queue to complete
 - You can manually merge the PR — the script detects manual merges and continues
 
 **Test failures:**
@@ -284,7 +284,7 @@ These are real issues from past releases that the release process has been harde
 - **Binary vs running process mismatch** — Deploying a new binary doesn't mean the service is running it; verify via `systemctl show -p MainPID` + `/proc/PID/exe`, not just binary on disk
 - **Don't announce before binaries exist** — Cross-compile takes 15-20 min; gateway auto-update (especially aarch64) depends on release binaries being attached
 - **Log spam can fill disks** — Always review logs 10-15 min after release; previous releases introduced logging that consumed disk space within hours
-- **Merge queue ran full CI for release PRs** — `github.head_ref` is a queue branch in merge_group events, not the PR branch. Fixed by detecting release PRs via commit message (`build: release*`) and skipping expensive test steps
+- **Release merge_group now runs the full suite as the pre-publish gate** (#3973) — Inverted the previous "skip on release" model. Release detection still keys on the merge_group head_commit message (`build: release*`), which works because the release PR uses squash-merge auto-merge so the PR title becomes the merge_group commit subject. Non-release merge_group entries skip Simulation and NAT Validation (covered by PR-level CI) but keep Unit & Integration. The previous "main CI already validated" justification for skipping on release was wrong — `test_unit`, `test_simulation`, and `nat_validation` are gated to `pull_request | merge_group` only, so push to main never re-validates.
 - **Script left user on release branch** — Added EXIT trap to restore original branch on any exit
 - **Streaming default broke riverctl** — v0.2.11 enabled WebSocket streaming by default, but riverctl was pinned to stdlib 0.1.40 which couldn't deserialize `StreamHeader`/`StreamChunk` variants. Always smoke-test River CLI against the gateway before announcing.
 
