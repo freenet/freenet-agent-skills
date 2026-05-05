@@ -88,8 +88,11 @@ Start by defining what state needs to be shared across all users.
 4. Ensure all state updates satisfy the commutative monoid requirement
 5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
 6. **Plan contract upgrade from v1.** Contract keys change with every WASM hash change, so include an `OptionalUpgrade` pointer in state, keep serialization backwards-compatible, and maintain a `legacy_contracts.toml` migration registry. See contract-patterns.md "Contract WASM Upgrade & State Migration".
+7. **Read `state-authorization-patterns.md` before designing the second iteration.** It captures cross-cutting patterns (per-item vs bundled signatures, replay protection via monotonic counter / tombstones / cross-context binding, signed-payload hygiene, `time::now()` gotchas, related-contracts limits, wire-format stability) that bite on every contract beyond the trivial.
 
-Reference: `references/contract-patterns.md`
+References:
+- `references/contract-patterns.md` — `ContractInterface`, commutative monoid, composable state, basic signatures.
+- `references/state-authorization-patterns.md` — authentication, replay protection, signed-payload hygiene, time, related-contracts, wire-format stability, common pitfalls.
 
 ### Phase 2: Delegate Design (Private State)
 
