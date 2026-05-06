@@ -10,15 +10,9 @@ Build decentralized applications on Freenet following the architecture patterns 
 
 ## How Freenet Applications Work
 
-Freenet is a platform for building decentralized applications that run without centralized servers. Apps rely on a global, peer-to-peer **Key-Value Store** where the "Keys" are cryptographic contracts.
+Freenet is a platform for building decentralized applications that run without centralized servers. Apps store and exchange data through a global, peer-to-peer **Key-Value Store** shared by every Freenet node.
 
-### Core Concept: The Contract is the Key
-
-The "Key" for any piece of data is derived from the **cryptographic hash of the WebAssembly (WASM) code** that controls it, combined with **contract parameters** that identify a specific instance.
-
-- The WASM hash ties the *identity* of the data to its *logic* — change the code, and the key changes.
-- The parameters distinguish independent instances of the same contract code. In the database-table analogy below: the WASM is the table schema; each parametrized instance is a row with its own key and its own state.
-- This creates a "Trustless" system: you don't need to trust the node storing the data, because the data is self-verifying against the contract code.
+The keys in that store are not arbitrary strings — they're derived from small pieces of WebAssembly called **contracts** that define how each value is allowed to change. The next two sections introduce the kinds of components that make up a Freenet app, then explain exactly how contract keys are formed and why that makes the system trustless.
 
 ## The Three Kinds of Components in a Freenet App
 
@@ -28,7 +22,7 @@ A Freenet app is built from three *kinds* of components — contracts, delegates
 
 A Freenet app typically has **one or more contracts**, each defining a different kind of shared state. River has a single room contract today, but a more complex app might have several (e.g. rooms, user profiles, invitations, search indexes), and each one is a separate contract crate that compiles to its own WASM.
 
-- **Role:** Closer to a **database table** than a database. The contract WASM defines the *schema* (state shape) and the *rules* for validation and merging. Each instantiation with a different set of parameters has a different key and behaves like an independent row in that table — so a chat app can have thousands of "room" rows all governed by the same room-contract WASM.
+- **Role:** Closer to a **database table** than a database. The contract WASM defines the *schema* (state shape) and the *rules* for validation and merging. Each instance of the contract — there can be many — behaves like an independent row in that table, so a chat app can have thousands of "room" rows all governed by the same room-contract WASM. (How rows are addressed is covered in *How Contract Keys Work* below.)
 - **Location:** Runs on the public network (untrusted peers).
 - **Functionality:**
   - Defines what state is valid
@@ -57,6 +51,16 @@ A single UI typically talks to *all* of an app's contracts and delegates.
   - Connects to the local Freenet Kernel via WebSocket/HTTP
   - Built using standard web frameworks (Dioxus, React, Vue, etc.)
   - Agnostic to underlying P2P network complexity
+
+## How Contract Keys Work (and Why Freenet is Trustless)
+
+Now that contracts have been introduced, here's how they're addressed in the network.
+
+The key for a piece of data is derived from the **cryptographic hash of the contract's WebAssembly (WASM) code**, combined with a set of **contract parameters** that identify a specific instance.
+
+- The WASM hash ties the *identity* of the data to its *logic* — change the code, and the key changes.
+- The parameters distinguish independent instances of the same contract code. Tying back to the database-table analogy: the WASM is the table schema, and each parametrized instance is a row with its own key and its own state.
+- This is what makes the network "trustless" — you don't have to trust the peer that holds the data, because the data is self-verifying against the contract code referenced in the key.
 
 ## Data Synchronization & Consistency
 
