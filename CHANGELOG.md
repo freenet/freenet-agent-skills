@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.19 (2026-05-06)
+- Reordered concepts in `dapp-builder/SKILL.md`: the "Core Concept: The
+  Contract is the Key" section used to come before the components were
+  introduced, so it forward-referenced "the WASM that controls the data"
+  and the table-row analogy. Moved the key-derivation explanation below
+  "The Three Kinds of Components" and renamed it "How Contract Keys Work
+  (and Why Freenet is Trustless)" so the reader knows what a contract is
+  before reading how its key is formed. Trimmed the contracts-section
+  bullet to defer the addressing mechanism to the new section.
+
 ## 1.0.18 (2026-05-06)
 - Clarified `dapp-builder/SKILL.md` to make explicit that a Freenet app can
   have multiple contracts and multiple delegates (the previous "The Contract"
