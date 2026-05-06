@@ -14,34 +14,42 @@ Freenet is a platform for building decentralized applications that run without c
 
 ### Core Concept: The Contract is the Key
 
-The "Key" for any piece of data is the **cryptographic hash of the WebAssembly (WASM) code** that controls it.
+The "Key" for any piece of data is derived from the **cryptographic hash of the WebAssembly (WASM) code** that controls it, combined with **contract parameters** that identify a specific instance.
 
-- This ties the *identity* of the data to its *logic*
-- If you change the code (logic), the key changes
-- This creates a "Trustless" system: You don't need to trust the node storing the data, because the data is self-verifying against the contract code
+- The WASM hash ties the *identity* of the data to its *logic* — change the code, and the key changes.
+- The parameters distinguish independent instances of the same contract code. In the database-table analogy below: the WASM is the table schema; each parametrized instance is a row with its own key and its own state.
+- This creates a "Trustless" system: you don't need to trust the node storing the data, because the data is self-verifying against the contract code.
 
-## The Three Components of a Freenet App
+## The Three Kinds of Components in a Freenet App
 
-### 1. The Contract (Network Side)
+A Freenet app is built from three *kinds* of components — contracts, delegates, and a UI. Most non-trivial apps have **multiple contracts and multiple delegates**, each handling a different concern.
 
-- **Role:** Acts as the "Backend" or Database
-- **Location:** Runs on the public network (untrusted peers)
+### 1. Contracts (Network State)
+
+A Freenet app typically has **one or more contracts**, each defining a different kind of shared state. River has a single room contract today, but a more complex app might have several (e.g. rooms, user profiles, invitations, search indexes), and each one is a separate contract crate that compiles to its own WASM.
+
+- **Role:** Closer to a **database table** than a database. The contract WASM defines the *schema* (state shape) and the *rules* for validation and merging. Each instantiation with a different set of parameters has a different key and behaves like an independent row in that table — so a chat app can have thousands of "room" rows all governed by the same room-contract WASM.
+- **Location:** Runs on the public network (untrusted peers).
 - **Functionality:**
-  - Defines what data (State) is valid
-  - Defines how that data can be modified
-- **State:** Holds the actual application data (arbitrary bytes)
-- **Constraint:** Cannot hold private keys or secrets - all data is public (unless encrypted by the client)
+  - Defines what state is valid
+  - Defines how state can be modified (validate / update / summarize / delta)
+- **State:** Holds the actual application data for that instance (arbitrary bytes).
+- **Constraint:** Cannot hold private keys or secrets — all state is public unless encrypted by the client.
 
-### 2. The Delegate (Local Side)
+### 2. Delegates (Local Trust Zone)
 
-- **Role:** Acts as the "Middleware" or private agent
-- **Location:** Runs locally on the user's device (within the Freenet Kernel)
+A Freenet app may have **one or more delegates**, each handling a different local responsibility — key management, secret storage, background sync, notifications, and so on. Delegates are the local counterpart to contracts: where contracts hold *shared* state on the network, delegates hold *private* state on the user's device.
+
+- **Role:** Trusted middleware between the user and the network.
+- **Location:** Runs locally on the user's device, inside the Freenet kernel.
 - **Functionality:**
   - **Trust Zone:** Safely stores secrets, private keys, and user data
-  - **Computation:** Performs signing, encryption, and complex logic before sending data to the network
+  - **Computation:** Performs signing, encryption, and complex logic before publishing to the network
   - **Background Tasks:** Can run continuously to monitor contracts or handle notifications even when the UI is closed
 
 ### 3. The User Interface (Frontend)
+
+A single UI typically talks to *all* of an app's contracts and delegates.
 
 - **Role:** Interaction layer for the user
 - **Location:** Web Browser (SPA) or native app
@@ -73,13 +81,14 @@ Follow these phases in order:
 
 ### Phase 1: Contract Design (Shared State)
 
-Start by defining what state needs to be shared across all users.
+Start by listing each *kind* of shared state your app needs — each kind becomes its own contract crate. Then design each one in turn using the questions below.
 
-**Key questions:**
-- What data must all users see consistently?
+**Key questions (per contract):**
+- What data must all users see consistently for this concern?
 - How should conflicts be resolved when two users update simultaneously?
 - What cryptographic verification is needed?
 - What are the state components and their relationships?
+- What parameters distinguish one instance from another (e.g. room owner key, profile owner key)?
 
 **Implementation steps:**
 1. Define state structure using `#[composable]` macro from freenet-scaffold
@@ -96,9 +105,9 @@ References:
 
 ### Phase 2: Delegate Design (Private State)
 
-Determine what private data each user needs stored locally.
+Determine what private data each user needs stored locally and split it across delegates by responsibility (e.g. one delegate per trust boundary or per long-running background task). Most apps need at least one delegate; many need several.
 
-**Key questions:**
+**Key questions (per delegate):**
 - What user-specific data needs persistence? (keys, preferences, cached data)
 - What signing/encryption operations are needed?
 - What permissions are needed for sensitive operations?
@@ -150,14 +159,18 @@ my-dapp/
 │   └── src/
 │       ├── lib.rs
 │       └── state/            # State definitions
-├── contracts/
-│   └── my-contract/
-│       ├── Cargo.toml
-│       └── src/lib.rs        # ContractInterface implementation
-├── delegates/
-│   └── my-delegate/
-│       ├── Cargo.toml
-│       └── src/lib.rs        # DelegateInterface implementation
+├── contracts/                 # one subdirectory per contract crate
+│   ├── room-contract/
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs        # ContractInterface implementation
+│   └── profile-contract/      # add more as the app grows
+│       └── ...
+├── delegates/                 # one subdirectory per delegate crate
+│   ├── chat-delegate/
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs        # DelegateInterface implementation
+│   └── identity-delegate/     # add more as the app grows
+│       └── ...
 ├── ui/
 │   ├── Cargo.toml
 │   ├── Dioxus.toml

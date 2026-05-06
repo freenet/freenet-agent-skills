@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.18 (2026-05-06)
+- Clarified `dapp-builder/SKILL.md` to make explicit that a Freenet app can
+  have multiple contracts and multiple delegates (the previous "The Contract"
+  / "The Delegate" framing implied exactly one of each). Reframed the
+  contract analogy from "Backend or Database" to a database **table**: the
+  WASM is the schema, and each parametrized instance is a row with its own
+  key and state. Updated Phase 1 / Phase 2 wording and the project-structure
+  template to reflect the per-concern split.
+
 ## 1.0.17 (2026-05-06)
 - Fixed install instructions in `README.md` and `skills/dapp-builder/README.md`:
   the marketplace exposes a single bundled plugin named `freenet`, but the
