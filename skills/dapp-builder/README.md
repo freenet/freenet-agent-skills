@@ -16,8 +16,10 @@ Guides you through building decentralized apps following the architecture patter
 
 ```bash
 /plugin marketplace add freenet/freenet-agent-skills
-/plugin install freenet-dapp-builder
+/plugin install freenet@freenet-agent-skills
 ```
+
+The dapp-builder skill is bundled inside the `freenet` plugin along with the other Freenet skills.
 
 ### Manual Installation
 
