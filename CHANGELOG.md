@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.17 (2026-05-06)
+- Fixed install instructions in `README.md` and `skills/dapp-builder/README.md`:
+  the marketplace exposes a single bundled plugin named `freenet`, but the
+  READMEs told users to run `/plugin install freenet-dapp-builder` and
+  `/plugin install freenet-core-dev` (neither exists). Replaced with the
+  correct `/plugin install freenet@freenet-agent-skills` form.
+
 ## 1.0.16 (2026-04-29)
 - Fixed release skill: documented the new tiered merge_group model
   (freenet/freenet-core#3973). Release merge_group entries now run the FULL

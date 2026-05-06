@@ -63,17 +63,13 @@ Add the marketplace:
 /plugin marketplace add freenet/freenet-agent-skills
 ```
 
-Then install the plugin you need:
+Then install the plugin:
 
 ```bash
-# For building apps on Freenet
-/plugin install freenet-dapp-builder
-
-# For contributing to Freenet core
-/plugin install freenet-core-dev
+/plugin install freenet@freenet-agent-skills
 ```
 
-Or browse available plugins via `/plugin` → **Discover** tab.
+This installs all bundled skills (dapp-builder, pr-creation, pr-review, release, systematic-debugging, linux-test, local-dev). Browse via `/plugin` → **Discover** tab to confirm.
 
 ### Manual Installation
 
