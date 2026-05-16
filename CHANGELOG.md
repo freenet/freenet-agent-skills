@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.20 (2026-05-20)
+- Updated the `release` skill to point at the workflow-driven release
+  mechanism. Step 4 now invokes `gh workflow run release.yml` instead of
+  `scripts/release.sh` (the workflow-driven path went live with
+  freenet-core v0.2.58). Documents the prerequisite repo secrets and their
+  failure modes, keeps `scripts/release.sh` only as a documented emergency
+  fallback (with the `FREENET_RELEASE_SKIP_*` env vars to avoid duplicate
+  Matrix posts / gateway SSH), and rewrites Step 7 to note announcements
+  are now automatic via `release-announce.yml`. Canonical procedure is
+  `freenet-core/docs/RELEASING.md`.
+
 ## 1.0.19 (2026-05-06)
 - Reordered concepts in `dapp-builder/SKILL.md`: the "Core Concept: The
   Contract is the Key" section used to come before the components were
