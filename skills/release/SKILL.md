@@ -93,46 +93,52 @@ git branch -d release-work
 
 ## Step 4: Run the Release
 
-**CRITICAL: You MUST run `release.sh` as a single command. Do NOT manually execute individual release steps (gh release create, cargo publish, etc.).** The script handles draft releases, binary waits, and publish ordering that prevent users from seeing a version before its binaries exist. Doing steps manually caused a user-facing 404 during v0.1.177.
+**Canonical procedure: [`docs/RELEASING.md`](https://github.com/freenet/freenet-core/blob/main/docs/RELEASING.md) in the freenet-core repo.** Always read that for current details — this section is a summary of the workflow-driven approach that went live with v0.2.58 (#4082, #4114, #4115, #4122, #4123, #4124, #4135, #4136).
 
-Execute the release script:
+The release is driven by `release.yml` on GitHub Actions, not by a local script. Fire it with `gh workflow run`:
 
 ```bash
-./scripts/release.sh --version <VERSION> [--skip-tests]
+# Routine patch bump (no version input — auto-bumps from crates.io latest):
+gh workflow run release.yml --repo freenet/freenet-core
+
+# Explicit version (required for minor / major bumps):
+gh workflow run release.yml --repo freenet/freenet-core --field version=X.Y.Z
 ```
 
-The script handles the entire pipeline:
-1. **Version bump** - Updates `crates/core/Cargo.toml` and `crates/fdev/Cargo.toml`
-2. **Release PR** - Creates a branch, commits, pushes, opens PR with auto-merge
-3. **Wait for CI** - Monitors GitHub CI on the release PR (up to 30 min)
-4. **Publish crates** - Publishes `freenet` then `fdev` to crates.io
-5. **GitHub Release** - Creates tag, generates release notes, creates **draft** release
-6. **Cross-compile** - Triggered automatically by the tag push
-7. **Wait for binaries** - Waits for cross-compile to attach binaries to the release
-8. **Publish draft** - Publishes the draft release only after binaries are attached
-9. **Gateway updates** - SSHes into all gateways and triggers immediate update
-10. **Announcements** - Matrix and River notifications (if tools available)
+That's all the human has to do. The workflow handles the full cascade:
 
-### Important Options
+1. **Validate** - Parse/auto-bump version; warn if `RELEASE_PAT` is unset
+2. **Bump PR** - Creates `release/vX.Y.Z` branch, opens auto-merging PR
+3. **Wait for PR merge** - Polls until the bump PR lands on main
+4. **Publish crates** - `cargo publish` freenet then fdev
+5. **Create draft release** - Pushes the `vX.Y.Z` tag, creates a draft GitHub Release
+6. **Cross-compile** - Tag push triggers `cross-compile.yml`; builds Linux musl + macOS (Intel + arm64) + Windows + signed DMG
+7. **Attach binaries + undraft** - cross-compile uploads 14 artifacts and undrafts the release
+8. **Gateway updates** - `release.published` fires `gateway-update.yml`, which signs HMAC-authed `POST /update` to nova (HTTPS) and vega (HTTPS:8443). Workflow polls each gateway's `/version` for 120s
+9. **Announcements** - `release.published` also fires `release-announce.yml` → Matrix post + signed POST to nova's `/announce/river` (riverctl runs locally on nova)
 
-- `--skip-tests` - Skip local pre-release tests (CI still runs on the PR)
-- `--dry-run` - Show what would be done without executing
+### Prerequisites (repo secrets)
 
-### Resumability
+| Secret | Used by | Missing → |
+|---|---|---|
+| `RELEASE_PAT` | release.yml, cross-compile.yml | Bump PR has no CI; `release.published` doesn't fire downstream. Workflow emits `::warning::` |
+| `CARGO_REGISTRY_TOKEN` | release.yml | crates.io publish fails |
+| `MATRIX_HOMESERVER_URL`, `MATRIX_ACCESS_TOKEN` | release-announce.yml | Matrix job warns + skips |
+| `RELEASE_AGENT_HMAC_NOVA`, `_VEGA` | gateway-update.yml | gateway POST fails 401 |
 
-The release script is **resumable**. If it fails partway through, re-running with the same `--version` will auto-detect completed steps and skip them. State is saved to `/tmp/release-<VERSION>.state`.
+`RELEASE_PAT` is a PAT with `repo` + `workflow` scopes — required because GitHub suppresses workflow-triggering events when authenticated by `GITHUB_TOKEN` (anti-recursion safeguard).
 
-You can also resume explicitly: `./scripts/release.sh --resume /tmp/release-<VERSION>.state`
+### Legacy local script (`scripts/release.sh`)
 
-### Branch Safety
+The local script still exists for dry-runs and emergency manual recovery. To run it without conflicting with the workflow (which would cause duplicate Matrix posts + duplicate SSH gateway updates):
 
-The script automatically restores the original git branch on exit (success or failure). If the script is interrupted, your working directory won't be left on the `release/v*` branch.
+```bash
+FREENET_RELEASE_SKIP_ANNOUNCEMENTS=1 \
+FREENET_RELEASE_SKIP_GATEWAY_SSH=1 \
+./scripts/release.sh --version <VERSION>
+```
 
-### CI Wait Behavior
-
-- **Main CI check**: If main branch CI is still running when the script starts, it polls every 30s (up to 10 min) instead of exiting immediately
-- **PR merge wait**: Polls every 30s (up to 60 min) for the PR to pass CI and auto-merge
-- **Release merge_group is the pre-publish gate** (#3973): The release PR's merge_group entry runs the FULL suite (Unit & Integration, Simulation, NAT Validation) on the heavy runner — this is the definitive "what ships is green" check. Non-release merge_group entries skip Simulation and NAT Validation (covered by PR-level CI), so the release entry is the only place those run against the rebased commit. Expect ~20-30 min for this gate. The previous "skip on release" assumption was based on a faulty 'main CI already validated' premise — main push doesn't run these jobs at all.
+This is **not** the recommended path for normal releases. Use `gh workflow run release.yml` instead.
 
 ## Step 5: Handle Common Issues
 
@@ -204,33 +210,25 @@ This GETs the official room state from the gateway and deserializes it. If it fa
 
 **Why this matters:** During v0.2.11, enabling WebSocket streaming by default broke riverctl because it was pinned to an older stdlib that couldn't deserialize the new `StreamHeader`/`StreamChunk` variants. This smoke test would have caught that before users were affected.
 
-## Step 7: Announcements
+## Step 7: Announcements (handled by the workflow)
 
-Only after binaries are confirmed available. Use the `matrix-comms` and `river-official-room` skills for detailed instructions on each platform.
+In the workflow-driven path, **announcements are automatic** — they run as part of `release-announce.yml` when `release.published` fires. The human does not need to send anything manually.
 
-**Announcement content:** Write a 1-3 sentence Markdown summary of the key changes in this release, followed by a link to the GitHub release for full details. Both Matrix and River support Markdown formatting.
+What gets posted:
+- **Matrix** (#freenet-locutus channel, `!ygHfYcXtXmivTbOwjX:matrix.org`): one short message with the version + GitHub release URL. TXN_ID is deterministic per version so re-running the workflow against the same version dedupes at Matrix's API layer (no duplicate posts).
+- **River** (Freenet Official room): the workflow signs a request to `https://nova.locut.us/release-agent/announce/river`. nova's release-agent invokes `riverctl message send` locally using the room owner signing key (which never leaves nova).
 
-**Example format:**
-```
-**Freenet v0.1.177 released.** Transient WebSocket errors no longer kill the client slot permanently. See [release notes](https://github.com/freenet/freenet-core/releases/tag/v0.1.177) for details.
-```
+If you want a longer-form announcement with release notes, post it separately — the auto-announcement is intentionally terse.
 
-**Matrix** (#freenet-locutus channel) — use the `matrix-comms` skill:
-```bash
-# -z flag is REQUIRED for Markdown rendering (bold, links, etc.)
-timeout 30 matrix-commander -z -r "!ygHfYcXtXmivTbOwjX:matrix.org" -m "announcement text"
-```
+### Manual override (if the auto-announcement fails)
 
-**River** (Freenet Official room) — use the `river-official-room` skill:
-
-**IMPORTANT:** You MUST invoke the `river-official-room` skill first to get the correct Room Owner VK and identity restoration instructions. The Room Owner identity must be restored before sending messages. Do NOT hardcode the VK here — it changes when the room is recreated.
+If `release-announce.yml` failed and you need to re-fire it:
 
 ```bash
-# 1. Restore Room Owner identity (see river-official-room skill for current VK and key location)
-# 2. Send message using the VK from the skill
-cd /home/ian/code/freenet/river/main
-cargo run -p riverctl -- message send <ROOM_OWNER_VK> "announcement text"
+gh workflow run release-announce.yml --repo freenet/freenet-core --field version=X.Y.Z
 ```
+
+If only one platform needs manual recovery, the `matrix-comms` and `river-official-room` skills have the direct invocation patterns. Use `-z` for Matrix Markdown rendering. Use `river-official-room` skill first to get the correct Room Owner VK — never hardcode it.
 
 ## Step 8: Post-Release Verification
 
