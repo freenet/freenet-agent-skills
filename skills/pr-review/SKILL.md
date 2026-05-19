@@ -215,9 +215,10 @@ Produce a consolidated review report:
 ---
 
 ### Verdict
-**Ready to Merge:** <Yes / No - needs changes / No - needs discussion>
+**State:** <Ready to Merge / Needs Changes — Re-review Required After Fix / Needs Changes — Light Re-Check Sufficient / Needs Discussion>
+**HEAD SHA reviewed:** <sha>
 
-<If not ready, summarize what's needed>
+<If not ready, summarize what's needed. If re-review is required, list which findings triggered it so the next pass can confirm they're addressed.>
 ```
 
 ## Parallel Subagent Reviews
@@ -243,6 +244,56 @@ Spawn all four in parallel using Task tool (all use subagent_type="general-purpo
 ## External Skeptical Review with Codex
 
 After completing the internal review, ask Codex to do a skeptical review of the PR. Codex uses a different model and catches different classes of issues — having an independent perspective reduces blind spots. Share the PR number and ask it to look for bugs, race conditions, edge cases, and failure modes. Incorporate any findings into the final review report.
+
+## Re-Review After Fixes (Mandatory When Findings Were Significant)
+
+A review is per-CODE-CONTENT, not per-PR. If the review surfaced significant problems and the author then pushed fixes, the previously-completed review is **stale** and does not authorize merge — the new code has not been reviewed. Run the full review process again on the updated HEAD.
+
+### When re-review is required
+
+Re-run the full review (Steps 1–6, parallel subagents, and Codex) if **any** of the following is true after fixes are pushed:
+
+- **One or more "Must Fix" (blocking) findings** were addressed — even a single blocking fix can introduce its own bugs.
+- **Three or more "Should Fix" findings** were addressed in aggregate — many small changes compound into substantial new surface area.
+- **Any finding in a high-risk area** was addressed: security, cryptography, state authorization, contract/delegate migration, concurrency, persistence, wire format, deployment.
+- **The diff changed by more than ~30 lines** in response to review, regardless of severity classification.
+- **Conflict resolution during rebase, `git commit --amend`, or any force-push** altered the diff vs. main — this counts as new code even if no review finding prompted it. (See `~/.claude/rules/multi-model-review.md`.)
+
+When in doubt, re-review. The cost of a second pass is small; the cost of merging unreviewed code is large.
+
+### When a follow-up pass can be lighter
+
+Only skip re-review if all of these hold:
+
+- All findings were trivially mechanical (typo, comment wording, rename of a private symbol).
+- No "Must Fix" findings existed.
+- The diff vs. the previously-reviewed HEAD is purely additive and obviously safe (e.g. a CHANGELOG line, a version bump, a single `// TODO` comment).
+- No rebase or amend occurred.
+
+In that case, do a focused diff-of-the-diff check (just the new commits since the prior review) and note in the verdict that a light re-check was performed rather than a full re-review.
+
+### How to re-review
+
+1. Confirm CI is green on the **current HEAD SHA**, not the SHA you reviewed last time:
+   ```bash
+   gh pr view <NUMBER> --json statusCheckRollup,headRefOid
+   ```
+2. Re-run Steps 1–6 against the new HEAD. Read the *full* diff again, not just the fix commits — context shifts when code moves.
+3. Re-spawn the four parallel subagent reviews against the new HEAD.
+4. Re-run Codex review against the new HEAD.
+5. Produce a fresh review report. In the **Verdict** section, explicitly note this is a re-review and reference the prior review's findings: "Re-review after fixes for findings #1, #3, #5 from prior pass — all resolved; one new concern at X."
+6. If the new review surfaces its own significant findings, repeat the cycle. There is no cap on rounds; merge only when a review pass on the current HEAD comes back clean (or with only trivial findings the user accepts).
+
+### Verdict states involving re-review
+
+Extend the Output Format's Verdict to one of:
+
+- **Ready to Merge** — review pass on current HEAD is clean or only trivial findings remain.
+- **Needs Changes — Re-review Required After Fix** — significant findings exist; author must address them AND a fresh review must run on the updated HEAD before merge.
+- **Needs Changes — Light Re-Check Sufficient** — only trivial mechanical findings; a diff-of-the-diff pass on the fix commits is enough.
+- **Needs Discussion** — design-level disagreement that fixes alone won't resolve.
+
+Never use "Ready to Merge" on the basis of a review whose HEAD SHA differs from the current PR HEAD.
 
 ## Quality Standards
 

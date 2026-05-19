@@ -251,6 +251,7 @@ Common findings:
 3. **If you disagree**, explain your reasoning rather than ignoring the comment
 4. **After fixing**, leave brief replies like "Fixed" or "Addressed in [commit SHA]"
 5. **Re-request review only after substantial changes** — Don't re-ping reviewers for minor tweaks
+6. **Re-run `/freenet:pr-review` on the updated HEAD if findings were significant** — the prior review is per-CODE-CONTENT, not per-PR, and is stale once fixes are pushed. See the "Re-Review After Fixes" section of the pr-review skill for the exact thresholds (any Must Fix, 3+ Should Fix, anything in a high-risk area, or >~30 changed lines).
 
 ## PR Scope
 
