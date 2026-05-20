@@ -53,6 +53,9 @@ gh pr diff <NUMBER>
 git log --oneline -20 -- <affected-files>
 ```
 
+The PR branch is checked out locally — `Read`/`Grep` the affected files at the PR's
+version when you need more context than the diff provides.
+
 Red flags:
 - **Removed tests** - especially tests added to catch specific bugs
 - **Removed fix code** - not just tests, but actual fixes

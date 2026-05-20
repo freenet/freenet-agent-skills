@@ -1,143 +1,136 @@
 ---
 name: pr-review
-description: Executes comprehensive PR reviews following Freenet standards. Performs four-perspective review covering code-first analysis, testing, skeptical review, and big-picture assessment.
+description: Executes a comprehensive multi-perspective PR review — runs four specialist subagents in parallel (code-first, testing, skeptical, big-picture) plus an external Codex pass, then posts a consolidated review to the PR.
 license: LGPL-3.0
 ---
 
 # PR Reviewer
 
-Execute a comprehensive PR review covering all four review perspectives from Freenet quality standards.
+Run a comprehensive PR review covering all four Freenet review perspectives, plus an
+external (non-Claude) model, and post a consolidated review to the PR.
 
 ## When to Use
 
-Use `/freenet:pr-review <PR-NUMBER>` after a PR is ready for review, before merging.
+Invoke `/freenet:pr-review <PR-NUMBER>` after a PR is ready for review, before merging.
+The PR number is passed as the skill argument (`$1`); if none is given, detect the PR
+for the current branch with `gh pr view --json number -q .number`.
 
-## Review Process
+## How This Skill Works
 
-### Step 1: Gather PR Context
+This skill **orchestrates** a review — it does not do all four perspectives by hand.
+It checks out the PR, spawns four specialist subagents in parallel plus an external
+Codex pass, reconciles their findings into one report, and posts that report to the PR.
+
+The four subagents ship with this plugin as first-class agent types — invoke them
+directly with the `Agent` tool's `subagent_type` parameter. Do **not** paste agent
+definitions into a `general-purpose` prompt; that is obsolete.
+
+## Step 1: Check Out the PR and Gather Context
+
+**Critical:** check out the PR branch before spawning reviewers. Otherwise their
+`Read`/`Grep` calls see `main`'s code, not the PR's, and the review is invalid.
 
 ```bash
-# Get PR details
-gh pr view <NUMBER>
+PR=<PR-NUMBER>          # the $1 skill argument
 
-# Get the diff
-gh pr diff <NUMBER>
+gh pr checkout "$PR"                  # reviewers now Read/Grep the PR's actual code
+gh pr view "$PR"
+gh pr diff "$PR" --name-only
+gh pr checks "$PR"                    # CI status
 
-# Check for linked issues
-# Look for "Fixes #XXX" or "Closes #XXX" in description
-gh issue view <ISSUE_NUMBER>  # if linked
+# Linked issues — read the full issue so the review can judge goal alignment
+#   look for "Fixes #XXX" / "Closes #XXX" in the description, then:
+gh issue view <ISSUE_NUMBER>
 
-# List affected files
-gh pr diff <NUMBER> --name-only
-
-# Check CI status
-gh pr checks <NUMBER>
+# Existing review feedback — read it so the review ADDRESSES it and does not
+# re-litigate or duplicate points already raised
+gh pr view "$PR" --json comments,reviews
+gh api repos/{owner}/{repo}/pulls/"$PR"/comments   # inline review comments
 ```
 
-### Step 2: Code-First Review
+Inline review comments are easy to miss — the `gh-pr-interactions` skill documents
+how to fetch every comment type reliably. Consult it if the PR already has review
+activity.
 
-Review the code **before** reading the PR description to form an independent understanding.
+**Large diffs:** if the diff exceeds ~2000 changed lines or ~40 files, instruct each
+subagent to review by file batches rather than loading the whole diff into context.
 
-**Process:**
-1. Read the diff without looking at the description
-2. Answer: What does this code do? What problem does it solve?
-3. Now read the PR description
-4. Compare your understanding with stated intent
-5. Flag any gaps or mismatches
+**Cleanup:** when the review is complete, restore the prior branch with `git checkout -`.
 
-**Look for:**
-- Does the code do what I think it should?
-- Are there hidden side effects?
-- Is the implementation approach sound?
+Optionally, before reviewing, run the `freenet:code-simplifier` agent so reviewers
+see the cleanest version of the code with up-to-date docs.
 
-### Step 3: Testing Review
+## Step 2: Spawn the Four Review Subagents in Parallel
 
-Analyze test coverage at all levels.
+Spawn all four with the `Agent` tool in a **single message** so they run
+concurrently, each with `run_in_background: true`:
 
-**Check for:**
-- Unit tests for new/modified functions
-- Integration tests for component interactions
-- Simulation tests for distributed behavior (if applicable)
-- E2E tests for user-facing changes
+| `subagent_type` | Perspective |
+|-----------------|-------------|
+| `freenet:code-first-reviewer` | Reads the code before the description; flags gaps between stated intent and implementation |
+| `freenet:testing-reviewer` | Test-coverage gaps at unit / integration / simulation / E2E levels |
+| `freenet:skeptical-reviewer` | Adversarial — bugs, race conditions, edge cases, failure modes |
+| `freenet:big-picture-reviewer` | Goal alignment, removed tests/fixes, scope creep, stale skills/docs |
 
-**Questions to answer:**
-- Does the regression test fail without the fix and pass with it?
-- Are edge cases covered?
-- Are error paths tested?
-- Would these tests catch similar bugs?
+In each subagent's prompt, include: the PR number, the repo (`owner/repo`), and a
+note that **the PR branch is already checked out locally**, so the agent should
+`Read`/`Grep` the PR's actual code — not just the diff — for surrounding context.
+Each agent already carries its own review methodology; you do not need to supply it.
 
-**Red flags:**
-- No tests for bug fixes
-- Tests that only check happy path
-- Removed or weakened test assertions
-- `#[ignore]` annotations
+## Step 3: External Codex Review (different model = different blind spots)
 
-### Step 4: Skeptical Review
+In parallel with Step 2, run an external review with a non-Claude model — it catches
+classes of issues Claude consistently misses. Invoke the `codex-review` skill, or run
+directly against the checked-out branch:
 
-Adversarial review looking for bugs, race conditions, and edge cases.
-
-**Attack vectors to explore:**
-- Race conditions in concurrent code
-- Integer overflow/underflow
-- Null/None handling
-- Resource leaks (memory, file handles, connections)
-- Error propagation gaps
-- State machine invalid transitions
-- Timeout and retry edge cases
-
-**For each change, ask:**
-- What happens if this fails?
-- What happens under high load?
-- What happens with malicious input?
-- What happens if called twice?
-- What happens if called out of order?
-
-**5 Recurring Bug Patterns (from Feb 2025 fix review — 25/25 bugs):**
-
-Check if the PR introduces or touches code matching these patterns:
-
-| Pattern | What to Look For |
-|---------|-----------------|
-| `biased;` select starvation | Per-iteration caps? Cancellation safety? Which arm starves? |
-| Fire-and-forget spawns | JoinHandle stored? `try_send` on critical paths? Catch-all `_ =>` in metrics? |
-| State cleanup on failure | ALL related maps cleaned up? Peer lists filtered to live connections? GC exemptions time-bounded? |
-| Backoff without jitter | Jitter ±20%? Sleep interruptible via `select!`? Zero-connection re-bootstrap? Critical msgs retried? |
-| Deployment gaps | Exit codes declared? Auto-update gated on release? Security tested against app needs? Unused deps? |
-
-### Step 5: Big Picture Review
-
-Ensure the PR actually solves the stated problem and doesn't exhibit "CI chasing" anti-patterns.
-
-**Check for removed code:**
 ```bash
-# Look for deleted tests or fix code
-gh pr diff <NUMBER> | grep -E '^-.*#\[test\]|^-.*fn test_|^-.*assert'
+codex review --base main
 ```
 
-**Anti-patterns to detect:**
-| Anti-Pattern | What to Look For |
-|--------------|------------------|
-| Ignored tests | `#[ignore]`, `skip`, `@Ignore` |
-| Weakened assertions | Looser tolerances, `.ok()` on Results |
-| Commented code | Especially tests or validation |
-| Magic numbers | Hardcoded values replacing logic |
-| Error swallowing | `.unwrap_or_default()`, silent fallbacks |
+For a third independent model, the `gemini-cli-review` skill is also available — worth
+using on high-risk PRs (security, consensus, wire format, migrations).
 
-**Big picture questions:**
-1. Does this PR actually solve the stated problem?
-2. Does it fully address the linked issue?
-3. Does it conflict with other open PRs?
-4. Does it introduce patterns that will cause future problems?
-5. Is there scope creep?
+## Step 4: Freenet Bug-Pattern Check
 
-### Step 6: Documentation Review
+When reviewing **freenet-core**, the canonical and continuously-updated bug-pattern
+list lives at `.claude/rules/bug-prevention-patterns.md` in that repo. Read it and
+check the PR against every pattern listed there — it supersedes any snapshot in this
+skill or in the subagent definitions.
 
-Check if documentation is complete:
+Recurring patterns (non-exhaustive — the in-repo file is authoritative): `biased;`
+select starvation, fire-and-forget spawns, incomplete state cleanup on failure,
+backoff without jitter, `.send().await` on bounded channels inside event/recv loops,
+protocol-enum / wire-format breaks for older consumers, paired `Option` fields that
+must co-occur, and manually-mirrored telemetry counters that rot after op migrations.
 
-- **Code docs:** Do new public items have doc comments?
-- **Architecture docs:** Do changes require doc updates?
-- **User docs:** Are CLI/config changes documented?
-- **Stale docs:** Do any existing docs contradict the changes?
+## Step 5: Synthesize — Reconcile and Verify
+
+When all four subagents and the Codex pass have returned, **do not just concatenate
+their reports.** Synthesize:
+
+1. **Deduplicate** — the same finding will surface from multiple reviewers; merge it
+   into one entry.
+2. **Reconcile contradictions** — if two reviewers disagree, investigate the code
+   yourself and decide; note the disagreement in the report if it is genuinely open.
+3. **Verify before reporting** — subagents and Codex can cite wrong line numbers or
+   hallucinate. Open every cited `file:line` and confirm the finding is real before it
+   goes in the report. Drop false positives; downgrade speculative ones to questions.
+4. **Classify severity** — map every surviving finding to Must Fix / Should Fix /
+   Consider (see Output Format).
+5. **Check documentation** — new public items have doc comments? CLI/config changes
+   documented? Any existing doc now contradicted by the change?
+
+## Step 6: Post the Consolidated Review to the PR
+
+Post the synthesized report to the PR as a review comment:
+
+```bash
+gh pr review "$PR" --comment --body-file <report-file>
+```
+
+Use `--comment` — not `--approve` or `--request-changes`. This skill produces a
+review; it does not gate merge or speak for a human approver. Also print the report
+in the conversation. End the posted body with `[AI-assisted - Claude]`.
 
 ## Output Format
 
@@ -151,6 +144,7 @@ Produce a consolidated review report:
 - **Type:** <feat/fix/refactor/etc>
 - **CI Status:** <passing/failing/pending>
 - **Linked Issues:** <issue numbers or "none">
+- **Reviewers run:** code-first, testing, skeptical, big-picture, Codex<, Gemini>
 
 ---
 
@@ -182,7 +176,7 @@ Produce a consolidated review report:
 
 | Concern | Severity | Location | Details |
 |---------|----------|----------|---------|
-| <issue> | <high/med/low> | <file:line> | <explanation> |
+| <issue> | <high/med/low> | <file:line — verified> | <explanation> |
 
 ---
 
@@ -219,31 +213,9 @@ Produce a consolidated review report:
 **HEAD SHA reviewed:** <sha>
 
 <If not ready, summarize what's needed. If re-review is required, list which findings triggered it so the next pass can confirm they're addressed.>
+
+[AI-assisted - Claude]
 ```
-
-## Parallel Subagent Reviews
-
-For deeper analysis, spawn the specialized review agents in parallel using the Task tool with `subagent_type="general-purpose"`. Include the agent definition (from `agents/`) in each prompt so the subagent follows the correct review methodology.
-
-```
-Spawn all four in parallel using Task tool (all use subagent_type="general-purpose"):
-
-1. "You are a code-first-reviewer. [Include agents/code-first-reviewer.md instructions]
-    Review PR #<NUMBER> in freenet/freenet-core"
-
-2. "You are a testing-reviewer. [Include agents/testing-reviewer.md instructions]
-    Review test coverage for PR #<NUMBER> in freenet/freenet-core"
-
-3. "You are a skeptical-reviewer. [Include agents/skeptical-reviewer.md instructions]
-    Do a skeptical review of PR #<NUMBER> in freenet/freenet-core"
-
-4. "You are a big-picture-reviewer. [Include agents/big-picture-reviewer.md instructions]
-    Do a big-picture review of PR #<NUMBER> in freenet/freenet-core"
-```
-
-## External Skeptical Review with Codex
-
-After completing the internal review, ask Codex to do a skeptical review of the PR. Codex uses a different model and catches different classes of issues — having an independent perspective reduces blind spots. Share the PR number and ask it to look for bugs, race conditions, edge cases, and failure modes. Incorporate any findings into the final review report.
 
 ## Re-Review After Fixes (Mandatory When Findings Were Significant)
 
@@ -251,7 +223,7 @@ A review is per-CODE-CONTENT, not per-PR. If the review surfaced significant pro
 
 ### When re-review is required
 
-Re-run the full review (Steps 1–6, parallel subagents, and Codex) if **any** of the following is true after fixes are pushed:
+Re-run the full review (all of Steps 1–6) if **any** of the following is true after fixes are pushed:
 
 - **One or more "Must Fix" (blocking) findings** were addressed — even a single blocking fix can introduce its own bugs.
 - **Three or more "Should Fix" findings** were addressed in aggregate — many small changes compound into substantial new surface area.
@@ -278,15 +250,15 @@ In that case, do a focused diff-of-the-diff check (just the new commits since th
    ```bash
    gh pr view <NUMBER> --json statusCheckRollup,headRefOid
    ```
-2. Re-run Steps 1–6 against the new HEAD. Read the *full* diff again, not just the fix commits — context shifts when code moves.
-3. Re-spawn the four parallel subagent reviews against the new HEAD.
-4. Re-run Codex review against the new HEAD.
-5. Produce a fresh review report. In the **Verdict** section, explicitly note this is a re-review and reference the prior review's findings: "Re-review after fixes for findings #1, #3, #5 from prior pass — all resolved; one new concern at X."
-6. If the new review surfaces its own significant findings, repeat the cycle. There is no cap on rounds; merge only when a review pass on the current HEAD comes back clean (or with only trivial findings the user accepts).
+2. Re-run all of Steps 1–6 against the new HEAD — re-checkout the branch, re-spawn the
+   four parallel subagents, and re-run Codex. Read the *full* diff again, not just the
+   fix commits — context shifts when code moves.
+3. Produce a fresh review report. In the **Verdict** section, explicitly note this is a re-review and reference the prior review's findings: "Re-review after fixes for findings #1, #3, #5 from prior pass — all resolved; one new concern at X."
+4. If the new review surfaces its own significant findings, repeat the cycle. There is no cap on rounds; merge only when a review pass on the current HEAD comes back clean (or with only trivial findings the user accepts).
 
-### Verdict states involving re-review
+### What the re-review verdict states mean
 
-Extend the Output Format's Verdict to one of:
+The Verdict states (defined in Output Format) are:
 
 - **Ready to Merge** — review pass on current HEAD is clean or only trivial findings remain.
 - **Needs Changes — Re-review Required After Fix** — significant findings exist; author must address them AND a fresh review must run on the updated HEAD before merge.
@@ -298,7 +270,7 @@ Never use "Ready to Merge" on the basis of a review whose HEAD SHA differs from 
 ## Quality Standards
 
 - Be thorough but constructive
-- Cite specific files and line numbers
+- Cite specific files and line numbers — and verify each citation before reporting it
 - Explain WHY something is a problem, not just WHAT
 - Suggest fixes, not just criticisms
 - Acknowledge what's done well

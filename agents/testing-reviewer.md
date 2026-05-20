@@ -40,6 +40,8 @@ Review the test coverage for PR changes and identify gaps that could allow bugs 
 ```bash
 gh pr diff <NUMBER>
 ```
+The PR branch is checked out locally — `Read`/`Grep` test files and the code under
+test at the PR's version, not just the diff.
 
 ### 2. Check Direct Coverage
 
@@ -88,7 +90,11 @@ For each gap found, be specific:
 
 ## Freenet-Specific Test Gaps to Check
 
-These 5 bug patterns caused ALL 25 bugs in releases 0.1.147–0.1.150. Check if the PR introduces or modifies code matching these patterns and whether tests cover them:
+When reviewing **freenet-core**, the canonical bug-pattern list is
+`.claude/rules/bug-prevention-patterns.md` in that repo — check whether the PR's tests
+cover every applicable pattern there. The five below are a starting set (from a cluster
+of 25 production bugs in releases 0.1.147–0.1.150); they are **not exhaustive** — treat
+the in-repo file as authoritative:
 
 | Pattern | What Tests Should Verify |
 |---------|------------------------|

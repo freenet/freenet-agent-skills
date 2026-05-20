@@ -18,6 +18,10 @@ Review a PR using the code-first methodology to catch discrepancies between what
 
 Read ONLY the code changes using `gh pr diff <NUMBER>`. Do NOT read the PR description or comments yet.
 
+The PR branch is checked out locally, so you may also `Read`/`Grep` the surrounding
+code at the PR's version for context — just don't open the PR description or comments
+until Step 2.
+
 Form your own understanding of:
 - What the code actually does
 - What problem it appears to solve

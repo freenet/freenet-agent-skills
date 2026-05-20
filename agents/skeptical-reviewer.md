@@ -75,9 +75,14 @@ Ask: "If I trace through this code with specific inputs, do I get the correct ou
 - Information disclosure
 - Timing attacks
 
-### Freenet-Specific Bug Patterns (from Feb 2025 fix review — 25 bugs analyzed)
+### Freenet-Specific Bug Patterns
 
-These 5 patterns accounted for ALL 25 bugs in releases 0.1.147–0.1.150. Actively check for them:
+When reviewing **freenet-core**, the canonical and continuously-updated bug-pattern
+list is `.claude/rules/bug-prevention-patterns.md` in that repo — read it and check the
+PR against every pattern there. The five patterns below are a useful starting set
+(they accounted for a cluster of 25 production bugs in releases 0.1.147–0.1.150), but
+they are **not exhaustive** — the in-repo file has since grown well beyond them and is
+authoritative. Actively check for these, plus whatever else the canonical file lists:
 
 **1. `select!` Fairness Violations**
 - Any `biased;` select without per-iteration caps on high-throughput arms
@@ -118,9 +123,8 @@ These 5 patterns accounted for ALL 25 bugs in releases 0.1.147–0.1.150. Active
 # Get the diff
 gh pr diff <NUMBER>
 
-# Read related code for context
-# Look at how the changed code is called
-# Check error handling paths
+# The PR branch is checked out locally — Read/Grep surrounding code at the PR's
+# version: look at how the changed code is called, check error handling paths
 ```
 
 For each concern, think: "How could this fail in production?"
