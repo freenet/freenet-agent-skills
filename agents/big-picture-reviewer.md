@@ -53,6 +53,10 @@ gh pr diff <NUMBER>
 git log --oneline -20 -- <affected-files>
 ```
 
+The orchestrator's prompt gives you the absolute path to a worktree containing the
+PR's code — `Read`/`Grep` the affected files there when you need more context than
+the diff provides.
+
 Red flags:
 - **Removed tests** - especially tests added to catch specific bugs
 - **Removed fix code** - not just tests, but actual fixes

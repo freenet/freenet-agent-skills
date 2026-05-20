@@ -18,6 +18,10 @@ Review a PR using the code-first methodology to catch discrepancies between what
 
 Read ONLY the code changes using `gh pr diff <NUMBER>`. Do NOT read the PR description or comments yet.
 
+The orchestrator's prompt gives you the absolute path to a worktree containing the
+PR's code. You may `Read`/`Grep` the surrounding code there for context — just don't
+open the PR description or comments until Step 2.
+
 Form your own understanding of:
 - What the code actually does
 - What problem it appears to solve

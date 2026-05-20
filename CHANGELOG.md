@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.1.0 (2026-05-20)
+- Reworked `pr-review` to match current Claude Code capabilities and PR-review
+  best practices:
+  - **Risk-tiered review.** The skill triages each PR to Skip / Light / Full and
+    scales the reviewer set to match — trivial changes are not put through the full
+    multi-model treatment; high-risk surfaces (concurrency, crypto, migrations, wire
+    format, transport, contract/delegate WASM) always get the full review.
+  - **Parallel subagents are now the default path**, not an optional addendum.
+    The skill orchestrates the four reviewers concurrently rather than walking
+    one agent through six perspectives by hand.
+  - **Invokes the reviewers as first-class subagents** (`freenet:code-first-reviewer`,
+    `freenet:testing-reviewer`, `freenet:skeptical-reviewer`,
+    `freenet:big-picture-reviewer`) via the `Agent` tool's `subagent_type` with
+    `run_in_background: true`. Removed the obsolete "spawn `general-purpose` and
+    paste the agent definition into the prompt" instructions.
+  - **Reviews from a dedicated worktree** of the PR's code, so reviewers `Read`/`Grep`
+    the PR's actual code (not `main`'s) without disturbing the user's working tree —
+    avoids `gh pr checkout` clobbering uncommitted work. Added checkout-awareness
+    notes to all four agent definitions.
+  - **Fetches existing PR review comments** up front (issue-level and inline) so
+    the review addresses prior feedback instead of duplicating it.
+  - **Added a synthesis step**: deduplicate overlapping findings, reconcile
+    reviewer disagreements, and verify every cited `file:line` before reporting.
+  - **Posts the consolidated review to the PR** via `gh pr review --comment`.
+  - Replaced the vague "ask Codex" instruction with a concrete external-model pass
+    (`codex review`), optionally wrapped by a `codex-review` / `gemini-cli-review`
+    skill when the environment provides one.
+  - De-staled the Freenet bug-pattern guidance: SKILL.md and the skeptical/testing
+    agents now point at the canonical, continuously-updated
+    `.claude/rules/bug-prevention-patterns.md` in freenet-core and no longer claim
+    the frozen Feb-2025 snapshot of five patterns is complete.
+  - Added large-diff (file-batching) guidance and a mandatory worktree-cleanup step.
+
 ## 1.0.19 (2026-05-06)
 - Reordered concepts in `dapp-builder/SKILL.md`: the "Core Concept: The
   Contract is the Key" section used to come before the components were
