@@ -123,8 +123,8 @@ authoritative. Actively check for these, plus whatever else the canonical file l
 # Get the diff
 gh pr diff <NUMBER>
 
-# The PR branch is checked out locally — Read/Grep surrounding code at the PR's
-# version: look at how the changed code is called, check error handling paths
+# The PR's code is checked out in the worktree path given in your prompt — Read/Grep
+# there: look at how the changed code is called, check error handling paths
 ```
 
 For each concern, think: "How could this fail in production?"

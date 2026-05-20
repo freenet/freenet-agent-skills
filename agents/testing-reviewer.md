@@ -40,8 +40,8 @@ Review the test coverage for PR changes and identify gaps that could allow bugs 
 ```bash
 gh pr diff <NUMBER>
 ```
-The PR branch is checked out locally — `Read`/`Grep` test files and the code under
-test at the PR's version, not just the diff.
+The orchestrator's prompt gives you the absolute path to a worktree containing the
+PR's code — `Read`/`Grep` test files and the code under test there, not just the diff.
 
 ### 2. Check Direct Coverage
 

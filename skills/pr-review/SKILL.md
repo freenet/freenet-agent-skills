@@ -35,11 +35,14 @@ uncommitted changes onto the PR branch, contaminating the review.
 
 ```bash
 PR=<PR-NUMBER>          # the $1 skill argument
+BASE="$(gh pr view "$PR" --json baseRefName -q .baseRefName)"   # the PR's base branch
 
-git fetch origin "pull/$PR/head"
-REVIEW_DIR="$(mktemp -d)/pr-$PR"
-git worktree add --detach "$REVIEW_DIR" FETCH_HEAD   # PR code, isolated
-cd "$REVIEW_DIR"                                     # run the review from here
+git fetch origin "$BASE"                 # fresh base branch for the diff
+git fetch origin "pull/$PR/head"         # PR head — FETCH_HEAD now points here
+REVIEW_DIR="${TMPDIR:-/tmp}/pr-review-$PR"
+git worktree remove --force "$REVIEW_DIR" 2>/dev/null || true   # prune a stale prior worktree
+git worktree add --detach "$REVIEW_DIR" FETCH_HEAD              # PR code, isolated
+cd "$REVIEW_DIR"                                                # run the review from here
 ```
 
 Gather context (from the worktree):
@@ -123,11 +126,12 @@ carries its own review methodology; you do not need to supply it.
 
 Run this for **both Light and Full** tiers — the external model is the highest-value
 single pass, because its blind spots do not correlate with Claude-authored code.
-Spawn it concurrently with Step 2's subagents. Run a non-Claude model against the
-review worktree:
+Spawn it concurrently with Step 2's subagents. Run a non-Claude model from the review
+worktree, diffing against the PR's base branch (`$BASE`, fetched fresh in Step 1) —
+never a possibly-stale local `main`:
 
 ```bash
-codex review --base main
+codex review --base "origin/$BASE"
 ```
 
 (If your environment provides a `codex-review` skill, it wraps this command.) For a

@@ -53,8 +53,9 @@ gh pr diff <NUMBER>
 git log --oneline -20 -- <affected-files>
 ```
 
-The PR branch is checked out locally — `Read`/`Grep` the affected files at the PR's
-version when you need more context than the diff provides.
+The orchestrator's prompt gives you the absolute path to a worktree containing the
+PR's code — `Read`/`Grep` the affected files there when you need more context than
+the diff provides.
 
 Red flags:
 - **Removed tests** - especially tests added to catch specific bugs
