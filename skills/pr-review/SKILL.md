@@ -28,58 +28,68 @@ definitions into a `general-purpose` prompt; that is obsolete.
 
 ## Step 1: Check Out the PR, Gather Context, and Triage Risk
 
-**Critical:** check out the PR branch before spawning reviewers. Otherwise their
-`Read`/`Grep` calls see `main`'s code, not the PR's, and the review is invalid.
+**Critical:** reviewers must read the PR's *actual code*, and the review must not
+disturb the user's working tree. Check the PR out into a **dedicated worktree** — do
+NOT use `gh pr checkout`, which switches the user's working branch and drags any
+uncommitted changes onto the PR branch, contaminating the review.
 
 ```bash
 PR=<PR-NUMBER>          # the $1 skill argument
 
-gh pr checkout "$PR"                  # reviewers now Read/Grep the PR's actual code
+git fetch origin "pull/$PR/head"
+REVIEW_DIR="$(mktemp -d)/pr-$PR"
+git worktree add --detach "$REVIEW_DIR" FETCH_HEAD   # PR code, isolated
+cd "$REVIEW_DIR"                                     # run the review from here
+```
+
+Gather context (from the worktree):
+
+```bash
 gh pr view "$PR"
 gh pr diff "$PR" --name-only
 gh pr checks "$PR"                    # CI status
+gh issue view <ISSUE_NUMBER>          # linked issue (from "Fixes #" / "Closes #")
 
-# Linked issues — read the full issue so the review can judge goal alignment
-#   look for "Fixes #XXX" / "Closes #XXX" in the description, then:
-gh issue view <ISSUE_NUMBER>
-
-# Existing review feedback — read it so the review ADDRESSES it and does not
-# re-litigate or duplicate points already raised
+# Existing review feedback — read it so the review ADDRESSES it, not duplicates it:
 gh pr view "$PR" --json comments,reviews
 gh api repos/{owner}/{repo}/pulls/"$PR"/comments   # inline review comments
 ```
 
-Inline review comments are easy to miss — the `gh-pr-interactions` skill documents
-how to fetch every comment type reliably. Consult it if the PR already has review
-activity.
+The `gh api .../comments` call above is the reliable way to get inline comments —
+they are easy to miss. (If your environment provides a `gh-pr-interactions` skill, it
+documents the comment API in more depth.)
 
 **Large diffs:** if the diff exceeds ~2000 changed lines or ~40 files, instruct each
 subagent to review by file batches rather than loading the whole diff into context.
 
-**Cleanup:** when the review is complete, restore the prior branch with `git checkout -`.
+**Cleanup (mandatory — do this even if the review aborts partway):** remove the
+worktree with `git worktree remove --force "$REVIEW_DIR"`.
 
-Optionally, before reviewing, run the `freenet:code-simplifier` agent so reviewers
-see the cleanest version of the code with up-to-date docs.
+Do NOT run a code-simplifier or any other mutating step here — this skill reviews the
+PR as submitted; editing the checked-out code would make reviewers judge something
+other than the PR.
 
 ### Pick the Risk Tier
 
-Using the diff size and the files touched, choose the review tier — or honor an
-explicit tier the user named (e.g. "full review of PR 42"). Tiers are defined in the
-multi-model-review standard:
+Choose the tier by checking these in order — **first match wins** — or honor an
+explicit tier the user named (e.g. "full review of PR 42"):
 
-- **Skip** — typo / comment-only / formatting / version bump / CHANGELOG-only, or
-  similarly mechanical. Report "trivial — CI is the only gate" and **stop**; do not
-  spawn reviewers.
-- **Light** — low-risk, small, self-contained diff with no high-risk surface. Spawn a
-  reduced reviewer set (Step 2) plus the external model pass (Step 3).
-- **Full** — touches a high-risk surface, or a large / cross-cutting diff, or genuine
-  uncertainty. Run the complete process.
+1. **Skip** — the *entire* diff is mechanical: typo / comment-only / formatting /
+   version bump / CHANGELOG-only. Judge this against the whole diff, not the PR title —
+   a PR labelled "version bump" that also edits logic is **not** Skip. Report
+   "trivial — CI is the only gate" and **stop**; do not spawn reviewers.
+2. **Full** — the change touches a high-risk surface (below), OR the diff is large or
+   cross-cutting, OR you are genuinely uncertain. Run the complete process.
+3. **Light** — everything else: a low-to-moderate-risk change with no high-risk
+   surface. Spawn a reduced reviewer set (Step 2) plus the external model pass (Step 3).
+
+These tiers are exhaustive — Light is the catch-all. When torn between two, pick the
+heavier one.
 
 **High-risk surfaces — always Full:** concurrency / async, cryptography / security /
 auth, state authorization, data or schema migration, wire format / protocol /
 serialization (freenet-stdlib enums), consensus / routing, transport / NAT traversal,
-contract or delegate WASM, deploy / release / CI config. When torn, pick the heavier
-tier.
+contract or delegate WASM, deploy / release / CI config.
 
 State the chosen tier and the one-line reason before proceeding.
 
@@ -100,24 +110,29 @@ tier picked in Step 1:
 | `freenet:skeptical-reviewer` | Adversarial — bugs, race conditions, edge cases, failure modes |
 | `freenet:big-picture-reviewer` | Goal alignment, removed tests/fixes, scope creep, stale skills/docs |
 
-In each subagent's prompt, include: the PR number, the repo (`owner/repo`), and a
-note that **the PR branch is already checked out locally**, so the agent should
-`Read`/`Grep` the PR's actual code — not just the diff — for surrounding context.
-Each agent already carries its own review methodology; you do not need to supply it.
+These `subagent_type` values are plugin-namespaced: `freenet:` is the plugin name and
+the files in `agents/` carry the bare name (`skeptical-reviewer`, etc.). Use the
+`freenet:`-prefixed form exactly as shown.
 
-## Step 3: External Codex Review (different model = different blind spots)
+In each subagent's prompt, include: the PR number, the repo (`owner/repo`), and the
+path to the review worktree from Step 1 (`$REVIEW_DIR`), so the agent can `Read`/`Grep`
+the PR's actual code — not just the diff — for surrounding context. Each agent already
+carries its own review methodology; you do not need to supply it.
+
+## Step 3: External Model Review (runs concurrently with Step 2)
 
 Run this for **both Light and Full** tiers — the external model is the highest-value
 single pass, because its blind spots do not correlate with Claude-authored code.
-In parallel with Step 2, run the external review with a non-Claude model. Invoke the
-`codex-review` skill, or run directly against the checked-out branch:
+Spawn it concurrently with Step 2's subagents. Run a non-Claude model against the
+review worktree:
 
 ```bash
 codex review --base main
 ```
 
-For a third independent model, the `gemini-cli-review` skill is also available — worth
-using on high-risk PRs (security, consensus, wire format, migrations).
+(If your environment provides a `codex-review` skill, it wraps this command.) For a
+Full review of a high-risk PR, add a third independent model when one is available —
+e.g. a `gemini-cli-review` skill or the `gemini` CLI.
 
 ## Step 4: Freenet Bug-Pattern Check
 
@@ -137,8 +152,8 @@ must co-occur, and manually-mirrored telemetry counters that rot after op migrat
 
 ## Step 5: Synthesize — Reconcile and Verify
 
-When all four subagents and the Codex pass have returned, **do not just concatenate
-their reports.** Synthesize:
+When all spawned subagents and the external model pass have returned, **do not just
+concatenate their reports.** Synthesize:
 
 1. **Deduplicate** — the same finding will surface from multiple reviewers; merge it
    into one entry.
@@ -283,9 +298,12 @@ In that case, do a focused diff-of-the-diff check (just the new commits since th
    ```bash
    gh pr view <NUMBER> --json statusCheckRollup,headRefOid
    ```
-2. Re-run all of Steps 1–6 against the new HEAD — re-checkout the branch, re-triage,
-   re-spawn the tier's reviewers, and re-run the external model pass. Read the *full*
-   diff again, not just the fix commits — context shifts when code moves.
+2. Re-run all of Steps 1–6 against the new HEAD — re-create the review worktree,
+   re-triage, re-spawn the tier's reviewers, and re-run the external model pass. Read
+   the *full* diff again, not just the fix commits — context shifts when code moves.
+   Re-triage against the **whole PR diff vs. base**, not just the fix commits: the
+   tier may rise but never falls below the original review's tier (a PR that needed a
+   Full review does not become Skip because the last fix was one line).
 3. Produce a fresh review report. In the **Verdict** section, explicitly note this is a re-review and reference the prior review's findings: "Re-review after fixes for findings #1, #3, #5 from prior pass — all resolved; one new concern at X."
 4. If the new review surfaces its own significant findings, repeat the cycle. There is no cap on rounds; merge only when a review pass on the current HEAD comes back clean (or with only trivial findings the user accepts).
 
