@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Executes a comprehensive multi-perspective PR review — runs four specialist subagents in parallel (code-first, testing, skeptical, big-picture) plus an external Codex pass, then posts a consolidated review to the PR.
+description: Executes a risk-tiered, multi-perspective PR review — triages the change, runs specialist subagents in parallel (code-first, testing, skeptical, big-picture) plus an external model pass scaled to risk, then posts a consolidated review to the PR.
 license: LGPL-3.0
 ---
 
@@ -17,15 +17,16 @@ for the current branch with `gh pr view --json number -q .number`.
 
 ## How This Skill Works
 
-This skill **orchestrates** a review — it does not do all four perspectives by hand.
-It checks out the PR, spawns four specialist subagents in parallel plus an external
-Codex pass, reconciles their findings into one report, and posts that report to the PR.
+This skill **orchestrates** a review — it does not do all the perspectives by hand.
+It checks out the PR, triages the change to a risk tier, spawns specialist subagents
+in parallel (scaled to that tier) plus an external model pass, reconciles their
+findings into one report, and posts that report to the PR.
 
 The four subagents ship with this plugin as first-class agent types — invoke them
 directly with the `Agent` tool's `subagent_type` parameter. Do **not** paste agent
 definitions into a `general-purpose` prompt; that is obsolete.
 
-## Step 1: Check Out the PR and Gather Context
+## Step 1: Check Out the PR, Gather Context, and Triage Risk
 
 **Critical:** check out the PR branch before spawning reviewers. Otherwise their
 `Read`/`Grep` calls see `main`'s code, not the PR's, and the review is invalid.
@@ -60,10 +61,37 @@ subagent to review by file batches rather than loading the whole diff into conte
 Optionally, before reviewing, run the `freenet:code-simplifier` agent so reviewers
 see the cleanest version of the code with up-to-date docs.
 
-## Step 2: Spawn the Four Review Subagents in Parallel
+### Pick the Risk Tier
 
-Spawn all four with the `Agent` tool in a **single message** so they run
-concurrently, each with `run_in_background: true`:
+Using the diff size and the files touched, choose the review tier — or honor an
+explicit tier the user named (e.g. "full review of PR 42"). Tiers are defined in the
+multi-model-review standard:
+
+- **Skip** — typo / comment-only / formatting / version bump / CHANGELOG-only, or
+  similarly mechanical. Report "trivial — CI is the only gate" and **stop**; do not
+  spawn reviewers.
+- **Light** — low-risk, small, self-contained diff with no high-risk surface. Spawn a
+  reduced reviewer set (Step 2) plus the external model pass (Step 3).
+- **Full** — touches a high-risk surface, or a large / cross-cutting diff, or genuine
+  uncertainty. Run the complete process.
+
+**High-risk surfaces — always Full:** concurrency / async, cryptography / security /
+auth, state authorization, data or schema migration, wire format / protocol /
+serialization (freenet-stdlib enums), consensus / routing, transport / NAT traversal,
+contract or delegate WASM, deploy / release / CI config. When torn, pick the heavier
+tier.
+
+State the chosen tier and the one-line reason before proceeding.
+
+## Step 2: Spawn the Review Subagents in Parallel
+
+Spawn the reviewers with the `Agent` tool in a **single message** so they run
+concurrently, each with `run_in_background: true`. Which reviewers run depends on the
+tier picked in Step 1:
+
+- **Full** — spawn all four.
+- **Light** — spawn `freenet:skeptical-reviewer`; also spawn `freenet:big-picture-reviewer`
+  if the diff removes code or spans multiple components.
 
 | `subagent_type` | Perspective |
 |-----------------|-------------|
@@ -79,9 +107,10 @@ Each agent already carries its own review methodology; you do not need to supply
 
 ## Step 3: External Codex Review (different model = different blind spots)
 
-In parallel with Step 2, run an external review with a non-Claude model — it catches
-classes of issues Claude consistently misses. Invoke the `codex-review` skill, or run
-directly against the checked-out branch:
+Run this for **both Light and Full** tiers — the external model is the highest-value
+single pass, because its blind spots do not correlate with Claude-authored code.
+In parallel with Step 2, run the external review with a non-Claude model. Invoke the
+`codex-review` skill, or run directly against the checked-out branch:
 
 ```bash
 codex review --base main
@@ -91,6 +120,9 @@ For a third independent model, the `gemini-cli-review` skill is also available �
 using on high-risk PRs (security, consensus, wire format, migrations).
 
 ## Step 4: Freenet Bug-Pattern Check
+
+Do this for **Full** reviews, and for **Light** reviews whose change has non-trivial
+logic.
 
 When reviewing **freenet-core**, the canonical and continuously-updated bug-pattern
 list lives at `.claude/rules/bug-prevention-patterns.md` in that repo. Read it and
@@ -144,7 +176,8 @@ Produce a consolidated review report:
 - **Type:** <feat/fix/refactor/etc>
 - **CI Status:** <passing/failing/pending>
 - **Linked Issues:** <issue numbers or "none">
-- **Reviewers run:** code-first, testing, skeptical, big-picture, Codex<, Gemini>
+- **Review tier:** <Light / Full>
+- **Reviewers run:** <which reviewers and external models actually ran>
 
 ---
 
@@ -250,9 +283,9 @@ In that case, do a focused diff-of-the-diff check (just the new commits since th
    ```bash
    gh pr view <NUMBER> --json statusCheckRollup,headRefOid
    ```
-2. Re-run all of Steps 1–6 against the new HEAD — re-checkout the branch, re-spawn the
-   four parallel subagents, and re-run Codex. Read the *full* diff again, not just the
-   fix commits — context shifts when code moves.
+2. Re-run all of Steps 1–6 against the new HEAD — re-checkout the branch, re-triage,
+   re-spawn the tier's reviewers, and re-run the external model pass. Read the *full*
+   diff again, not just the fix commits — context shifts when code moves.
 3. Produce a fresh review report. In the **Verdict** section, explicitly note this is a re-review and reference the prior review's findings: "Re-review after fixes for findings #1, #3, #5 from prior pass — all resolved; one new concern at X."
 4. If the new review surfaces its own significant findings, repeat the cycle. There is no cap on rounds; merge only when a review pass on the current HEAD comes back clean (or with only trivial findings the user accepts).
 

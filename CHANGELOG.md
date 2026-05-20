@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## 1.1.0 (2026-05-20)
 - Reworked `pr-review` to match current Claude Code capabilities and PR-review
   best practices:
+  - **Risk-tiered review.** The skill triages each PR to Skip / Light / Full and
+    scales the reviewer set to match — trivial changes are not put through the full
+    multi-model treatment; high-risk surfaces (concurrency, crypto, migrations, wire
+    format, transport, contract/delegate WASM) always get the full review.
   - **Parallel subagents are now the default path**, not an optional addendum.
     The skill orchestrates the four reviewers concurrently rather than walking
     one agent through six perspectives by hand.
