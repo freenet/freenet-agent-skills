@@ -26,9 +26,11 @@ is large.
 
 Two things compound this:
 
-1. **Signing and encryption need separate keys.** You cannot reuse a signature
-   key for key encapsulation. A post-quantum identity therefore carries *at
-   least two* large public keys (one ML-DSA, one ML-KEM).
+1. **Signing and key encapsulation use different algorithms.** ML-DSA
+   (signatures) and ML-KEM (key encapsulation) have incompatible key formats, so
+   a post-quantum identity carries *at least two* large public keys — one of
+   each. (Reusing a single key for both signing and encryption is poor practice
+   even where the math allows it, e.g. an ed25519 key converted to x25519.)
 2. **Naive encodings balloon further.** A JSON array-of-bytes (`[226,108,229,…]`)
    spends ~4 characters per byte, and base64 adds another 33%. ~3 KB of raw
    post-quantum keys became a **~15 KB `contact://` blob** in freenet-email
@@ -45,10 +47,14 @@ Make the identifier a **short hash of the public key**. Keep the full key in
 contract *state*, not in parameters, and have the contract verify the binding.
 
 ```
-address  = base58( BLAKE3(public_key)[..N] )      // short, shareable
-params   = { address }                            // small — this is the identity
-state    = { public_key, ... }                    // full key lives here
+addr_bytes = BLAKE3(public_key)[..N]              // raw truncated hash
+address    = base58(addr_bytes)                   // human-facing display form
+params     = { addr_bytes }                       // small — this is the identity
+state      = { public_key, ... }                  // full key lives here
 ```
+
+base58 is only the *display* encoding for humans; parameters and state store the
+raw `addr_bytes`. Don't put a base58 string in parameters.
 
 The contract's `validate_state` rejects any state whose key does not hash to the
 address. The identifier is then **self-certifying**: given an address you can
@@ -57,13 +63,19 @@ no directory, no trusted lookup.
 
 ### Contract side
 
+`VerifyingKey` below stands in for whatever long-term identity key the app uses
+— `ed25519_dalek::VerifyingKey` is only 32 bytes, but for a post-quantum
+identity it is the (kilobyte-scale) ML-DSA key, which is exactly the case this
+pattern exists for.
+
 ```rust
 /// Truncation length of the address, in bytes. See "Choosing N" below —
 /// this is a security parameter, not just a UX one.
 pub const ADDRESS_BYTES: usize = 16; // 128-bit second-preimage resistance
 
 pub fn address_of(pubkey: &VerifyingKey) -> [u8; ADDRESS_BYTES] {
-    blake3::hash(pubkey.as_bytes()).as_bytes()[..ADDRESS_BYTES]
+    let digest = blake3::hash(pubkey.as_bytes());
+    digest.as_bytes()[..ADDRESS_BYTES]
         .try_into()
         .expect("slice length matches ADDRESS_BYTES")
 }
@@ -71,13 +83,14 @@ pub fn address_of(pubkey: &VerifyingKey) -> [u8; ADDRESS_BYTES] {
 #[derive(Serialize, Deserialize)]
 pub struct InboxParameters {
     /// The whole identity of this contract instance — small and stable.
+    /// Raw bytes, not the base58 display form.
     pub address: [u8; ADDRESS_BYTES],
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct InboxState {
-    /// Full public key — possibly large (post-quantum). Lives in state,
-    /// never in parameters.
+    /// The long-term identity (signing) key the address is derived from.
+    /// Possibly large (post-quantum). Lives in state, never in parameters.
     pub owner_pubkey: VerifyingKey,
     pub messages: Vec<InboxMessage>,
     // ...
@@ -88,6 +101,8 @@ fn validate_state(
     state: State<'static>,
     _related: RelatedContracts<'static>,
 ) -> Result<ValidateResult, ContractError> {
+    // `decode` here is whatever deserializer the contract uses (e.g. ciborium —
+    // see state-authorization-patterns.md on canonical encoding).
     let params: InboxParameters = decode(&parameters)?;
     let st: InboxState = decode(&state)?;
 
@@ -110,19 +125,31 @@ every client must carry** to GET/PUT/subscribe the instance. The full key still
 has to exist somewhere for signature verification — that somewhere is state, and
 the `address_of` check is what keeps it trustless.
 
+**Which key does the address commit to?** Derive the address from the
+**long-term identity (signing) key only**, even when the identity has several
+keys — a post-quantum identity has at least an ML-DSA signing key and an ML-KEM
+encapsulation key. Store the other keys as ordinary state fields signed by the
+identity key (see `state-authorization-patterns.md`). They are then bound to the
+identity transitively, and — because they are not baked into the address — the
+user can rotate an encryption key without their address changing.
+
 ### Choosing N (this is a security parameter)
 
 Truncating a hash trades collision resistance for length. The relevant property
 for an address is **second-preimage resistance**: can an attacker grind a
 *different* keypair whose hash truncates to the same address? If they can, they
 can stand up a state for *your* address carrying *their* key — `validate_state`'s
-hash check passes for both keys, and a commutative merge has no principled way to
-declare the original owner the winner. **Address length is the defense; do not
-rely on a contract-side tie-break to rescue a too-short address.**
+hash check passes for both keys. A contract-side tie-break cannot rescue this:
+"first writer wins" is unenforceable in a permissionless, eventually-consistent
+store (there is no global clock, and an attacker can claim an earlier
+timestamp), and any deterministic ordering on the key bytes is itself grindable —
+the attacker keeps grinding until their colliding key also wins the tie-break.
+**Address length is the only real defense; size it so grinding a second preimage
+is infeasible.**
 
 | Bytes (N) | base58 chars | Grind cost | Use for |
 |---|---|---|---|
-| 8 (~64 bits) | ~11 | Feasible for a resourced attacker | Throwaway / low-value identities only |
+| 8 (~64 bits) | ~11 | Feasible for a determined attacker | Throwaway / low-value identities only |
 | 10 (~80 bits) | ~14 | Expensive but not impossible | Reasonable floor for real identities |
 | 16 (128 bits) | ~22 | Infeasible | **Default for anything someone could profit from impersonating** |
 
@@ -136,8 +163,8 @@ codes are ~10 base58 characters — fine for low-value identifiers, short of the
 A user's identity has to survive contract upgrades. The address does; a contract
 key does not:
 
-- `address = BLAKE3(public_key)[..N]` depends **only on the user's keypair**. It
-  never changes.
+- `address = base58(BLAKE3(public_key)[..N])` depends **only on the user's
+  keypair**. It never changes.
 - `contract_key = BLAKE3(BLAKE3(wasm) || params)` changes **every time the
   contract WASM changes** (code edits, dependency bumps — see
   `contract-patterns.md`).
@@ -197,5 +224,8 @@ revisit it before shipping.
 - `contract-patterns.md` — "Contract Parameters" and "Contract WASM Upgrade &
   State Migration".
 - `state-authorization-patterns.md` — verifying signed state against the key,
-  cross-context binding, per-context identity considerations.
+  cross-context binding, and per-context identity (River's pattern of
+  context-scoped keys, where a user deliberately has *no* global address — the
+  opposite design choice to this doc, valid when unlinkability matters more than
+  a stable handle).
 - `delegate-patterns.md` — where the user's private keys are actually stored.
