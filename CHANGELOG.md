@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.2.0 (2026-05-21)
+- Added `dapp-builder` reference `identity-and-addressing.md`: how to give users a
+  short, stable, shareable identifier without leaking raw key material or coupling
+  identity to a contract's WASM version.
+  - **Self-certifying short identifiers.** Make the user-facing "address" a short
+    hash of the public key; keep the full key in contract state (not parameters)
+    and have `validate_state` verify the key hashes to the address.
+  - **Crypto key sizing.** Elliptic-curve keys are 32 bytes; post-quantum public
+    keys (ML-DSA, ML-KEM) run to kilobytes and need a separate key per operation —
+    keep large key material out of identifiers and parameters.
+  - **Address truncation is a security parameter.** Guidance on choosing the hash
+    truncation length for second-preimage resistance (16 bytes / 128-bit default).
+  - **Identity must not be a contract key.** A user's stable handle has to be
+    key-derived so it survives WASM upgrades; migration moves state across
+    contract keys while the address stays fixed.
+- `contract-patterns.md`: "Contract Parameters" now warns against embedding large
+  keys in parameters; the migration section notes identity must be key-derived.
+  Cross-references added from `SKILL.md` Phase 1 and the skill README.
+
 ## 1.1.0 (2026-05-20)
 - Reworked `pr-review` to match current Claude Code capabilities and PR-review
   best practices:
