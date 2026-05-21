@@ -47,6 +47,8 @@ Once installed, Claude will automatically use this skill when you ask about buil
 - `SKILL.md` - Main skill instructions
 - `references/` - Detailed documentation:
   - `contract-patterns.md` - Contract implementation patterns
+  - `state-authorization-patterns.md` - Authorization, replay protection, wire-format stability
+  - `identity-and-addressing.md` - Short self-certifying user-facing addresses
   - `delegate-patterns.md` - Delegate implementation patterns
   - `ui-patterns.md` - UI implementation patterns
   - `build-system.md` - Build and deployment

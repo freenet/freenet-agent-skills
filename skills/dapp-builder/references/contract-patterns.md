@@ -377,6 +377,15 @@ pub struct RoomParameters {
 // Different parameters = different contract instance
 ```
 
+**Keep parameters small.** Every client must carry the exact parameter bytes to
+GET/PUT/subscribe an instance, and the parameters often become the basis of a
+user-facing identifier. Embedding a full `VerifyingKey` is fine for 32-byte
+elliptic-curve keys (River does this), but bad for large keys — post-quantum
+public keys run to kilobytes. When the key is large, or when users need a short
+shareable "address", store only a short hash of the key in parameters and put
+the full key in state, with `validate_state` checking that the key hashes to the
+parameter. See `identity-and-addressing.md` for the full pattern.
+
 ## WASM Environment Utilities
 
 ```rust
@@ -401,6 +410,13 @@ existing clients keep subscribing to a contract no one else is publishing to.
 Contract upgrade is a design concern you must address *before* the first release,
 just like delegate migration (see `delegate-patterns.md`). The rest of this
 section is the playbook River uses. Adapt it to your app.
+
+**A user's stable identity must never be a contract key.** Because the contract
+key moves on every WASM change, anything you hand users as a permanent handle —
+an address, a room reference, a profile link — has to be derived from a key, not
+from a contract key. The migration below moves *state* from the old contract key
+to the new one; the user-facing identifier stays fixed across that move. See
+`identity-and-addressing.md`.
 
 ### Preconditions: authorized state + backwards-compatible format
 

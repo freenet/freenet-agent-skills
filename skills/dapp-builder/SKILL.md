@@ -93,6 +93,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 - What cryptographic verification is needed?
 - What are the state components and their relationships?
 - What parameters distinguish one instance from another (e.g. room owner key, profile owner key)?
+- If users reference each other (messaging, contacts, profiles), what is the user-facing identifier? It should be short, self-certifying, and stable across WASM upgrades — derived from a key, never a contract key. See `identity-and-addressing.md`.
 
 **Implementation steps:**
 1. Define state structure using `#[composable]` macro from freenet-scaffold
@@ -106,6 +107,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 References:
 - `references/contract-patterns.md` — `ContractInterface`, commutative monoid, composable state, basic signatures.
 - `references/state-authorization-patterns.md` — authentication, replay protection, signed-payload hygiene, time, related-contracts, wire-format stability, common pitfalls.
+- `references/identity-and-addressing.md` — short self-certifying user-facing addresses, keeping large (post-quantum) keys out of identifiers, identity that survives WASM upgrades.
 
 ### Phase 2: Delegate Design (Private State)
 
