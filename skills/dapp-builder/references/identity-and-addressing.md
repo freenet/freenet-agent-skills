@@ -129,9 +129,10 @@ the `address_of` check is what keeps it trustless.
 **long-term identity (signing) key only**, even when the identity has several
 keys — a post-quantum identity has at least an ML-DSA signing key and an ML-KEM
 encapsulation key. Store the other keys as ordinary state fields signed by the
-identity key (see `state-authorization-patterns.md`). They are then bound to the
-identity transitively, and — because they are not baked into the address — the
-user can rotate an encryption key without their address changing.
+identity key, and have `validate_state` reject any state where that signature is
+missing or invalid (see `state-authorization-patterns.md`). They are then bound
+to the identity transitively, and — because they are not baked into the address
+— the user can rotate an encryption key without their address changing.
 
 ### Choosing N (this is a security parameter)
 
