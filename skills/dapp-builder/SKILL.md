@@ -129,12 +129,11 @@ Reference: `references/delegate-patterns.md`
 
 ### Phase 3: UI Design
 
-Build the user interface connecting to contracts and delegates.
+Build the user interface connecting to contracts and delegates. Two approaches:
 
-**Key questions:**
-- What components/views does the app need?
-- How should state synchronization work?
-- What's the user flow for key operations?
+#### Option A: Dioxus (Rust → WASM)
+
+Best for: teams already in Rust, complex state logic shared with contracts.
 
 **Implementation steps:**
 1. Set up Dioxus project with WASM target
@@ -149,6 +148,18 @@ Build the user interface connecting to contracts and delegates.
    `vite dev`. See `references/ui-patterns.md` "Gateway CSP: Vendor Your
    Assets".
 
+#### Option B: TypeScript + Vite
+
+Best for: web developers, faster iteration, familiar tooling (npm, SCSS, etc.).
+
+**Implementation steps:**
+1. Set up Vite project with `@freenetorg/freenet-stdlib` (TypeScript package)
+2. Use `FreenetWsApi` class for WebSocket connection (handles FlatBuffers serialization)
+3. Pass empty string auth token to `FreenetWsApi` constructor (sandbox blocks cookie reading)
+4. Use Vite `define` to inject contract hashes and delegate key bytes at build time
+5. For delegate communication, dynamically import internal FlatBuffers types (`ClientRequestT`, `ApplicationMessagesT`, etc.)
+6. Build reactive UI with vanilla TS, or any framework (React, Vue, Svelte)
+
 Reference: `references/ui-patterns.md`
 
 ### Phase 4: Build, Test, and Deploy
@@ -156,8 +167,8 @@ Reference: `references/ui-patterns.md`
 Set up the build system, CI, and deployment pipeline.
 
 **Implementation steps:**
-1. Set up `Makefile.toml` with build tasks for contract, delegate, and UI
-2. Add a `preflight` task that runs fmt, clippy, tests, and migration checks before publish
+1. Set up build orchestration — either `Makefile.toml` (cargo-make) or plain `Makefile`
+2. Add a preflight task that runs fmt, clippy, tests, and migration checks before publish
 3. Add GitHub Actions CI workflow (runs on push and PRs)
 4. Back up contract state to the delegate for network resilience
 5. **Add a production-liveness smoke test.** A ~50-line Playwright spec
@@ -192,7 +203,9 @@ References:
 - `references/facade-pattern.md` — stable-URL facade contract
   architecture for projects that ship more than one release.
 
-## Project Structure Template
+## Project Structure Templates
+
+### Dioxus (Rust) UI
 
 ```
 my-dapp/
@@ -222,6 +235,34 @@ my-dapp/
 └── Makefile.toml             # cargo-make build tasks
 ```
 
+### TypeScript + Vite UI
+
+```
+my-dapp/
+├── contracts/
+│   └── my-contract/
+│       ├── Cargo.toml
+│       └── src/lib.rs        # ContractInterface implementation
+├── delegates/
+│   └── my-delegate/
+│       ├── Cargo.toml
+│       └── src/lib.rs        # DelegateInterface implementation
+├── web/
+│   ├── package.json
+│   ├── vite.config.ts         # Injects contract/delegate keys at build time
+│   ├── tsconfig.json
+│   ├── index.html
+│   └── src/
+│       ├── index.ts           # Entry point, connection flow
+│       ├── freenet-api.ts     # FreenetWsApi wrapper
+│       ├── delegate-api.ts    # Delegate FlatBuffers message building
+│       ├── identity.ts        # Identity management (delegate + fallback)
+│       ├── types.ts           # Shared TypeScript types
+│       └── components/        # UI components
+├── Cargo.toml                 # Workspace root (contracts + delegates)
+└── Makefile                   # Build orchestration
+```
+
 ## Reference Project
 
 [River](https://github.com/freenet/river) demonstrates all patterns:
@@ -237,11 +278,18 @@ deserialization failures, missing features, and "variant index out of range"
 errors. Check [River's workspace Cargo.toml](https://github.com/freenet/river/blob/main/Cargo.toml)
 before pinning.
 
-As of April 2026 (River `main`):
+As of May 2026 — River pins `freenet-stdlib = "0.6.0"` but the upstream
+crate is now `0.8` (0.6 → 0.7 added Base58-stringified `contract_states`
+keys in `NodeDiagnosticsResponse`; 0.7 → 0.8 hardened wire-boundary enums
+with `#[non_exhaustive]` and removed the world-known `DEFAULT_CIPHER` /
+`DEFAULT_NONCE` constants). If you build only against River, mirror its
+pin; if your code links into stdlib 0.8 directly, you need the bumped
+version *and* the wildcard match arms / random cipher generation
+documented in `references/delegate-patterns.md`.
 
 ```toml
-# Workspace-wide (Cargo.toml)
-freenet-stdlib = { version = "0.6.0", features = ["contract"] }
+# Workspace-wide (Cargo.toml) — track this against stdlib 0.8 once River bumps.
+freenet-stdlib = { version = "0.8", features = ["contract"] }
 freenet-scaffold = "0.2.2"
 freenet-scaffold-macro = "0.2.2"
 
@@ -252,8 +300,48 @@ freenet-stdlib = { workspace = true, features = ["net"] }
 dioxus = { version = "0.7.3", features = ["web"] }
 ```
 
-The `contract` feature is required for contract and delegate crates targeting
-`wasm32-unknown-unknown`. The `net` feature pulls in `WebApi` for the UI.
+The `contract` feature is required for contract crates targeting
+`wasm32-unknown-unknown`; use the `delegate` feature for delegate crates.
+The `net` feature pulls in `WebApi` for the UI.
+
+### TypeScript UI
+
+For UIs built with TypeScript + Vite (Option B in Phase 3), depend on the
+matching `@freenetorg/freenet-stdlib` release:
+
+```json
+{
+  "dependencies": {
+    "@freenetorg/freenet-stdlib": "^0.2.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0",
+    "typescript": "^5.0",
+    "sass": "^1.0"
+  }
+}
+```
+
+The TS package v0.2.0 brought the API to parity with the Rust client:
+`FreenetWsApi` with **promise-based** `get`/`put`/`update`/`subscribe`/
+`disconnect` (`await api.X(...)`), full `ResponseHandler` including
+`onContractNotFound`/`onSubscribeResponse`/`onClose`, inbound
+`ReassemblyBuffer`, and transparent outbound chunking for payloads
+>512 KB. Callbacks still fire alongside promises for backward
+compatibility; the default request timeout is 30 s. See
+`references/ui-patterns.md` for the full pattern and a warning about the
+private `sendRequest` cast used for delegate messages until a public
+builder lands.
+
+### Security: removed encryption defaults
+
+stdlib v0.6.0 (PR #75) **removed** the public constants `DEFAULT_CIPHER`
+and `DEFAULT_NONCE` to close a CVE-class issue (world-known keys leaked
+into any binary that imported them). Delegates that previously used these
+must now generate random values per session — e.g.
+`let key: [u8; 32] = rand::random(); let nonce: [u8; 24] = rand::random();`.
+Code still referencing the old constants will fail to compile against
+stdlib 0.6 or newer.
 
 ---
 

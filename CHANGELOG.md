@@ -126,6 +126,39 @@ matrices, upstream-bug quarantine) deliberately left out of this version
   River smoke test → post-release health check. Net effect: skill shrunk
   from 312 to ~145 lines and now matches what the pipeline actually does.
 
+## 1.4.0 (2026-05-28)
+
+Stacked on top of 1.3.0 (mail-practices sync). Aligns `dapp-builder` +
+`local-dev` with freenet-stdlib v0.8.0 (Rust) and
+`@freenetorg/freenet-stdlib` v0.2.0 (TypeScript). Pre-existing 0.6.0
+pins were two releases behind; this catches up and documents the deltas
+in between. Bumped the inbox-contract lockfile-isolation example added
+in 1.3.0 from `=0.6.0` to `=0.8.0` to match.
+- `dapp-builder/SKILL.md`:
+  - Added **TypeScript + Vite** as a first-class UI option (Phase 3 / Option B) alongside Dioxus, including a parallel project structure template and an npm/Vite dependency table.
+  - Bumped Rust `freenet-stdlib` pins from `"0.6.0"` to `"0.8"` (workspace + UI crate); added TypeScript pin `"@freenetorg/freenet-stdlib": "^0.2.0"`.
+  - Added security note about stdlib v0.6.0 removal of public `DEFAULT_CIPHER`/`DEFAULT_NONCE` constants (PR #75) — delegates must now generate random cipher/nonce per session.
+- `dapp-builder/references/ui-patterns.md`:
+  - New TypeScript + Vite section covering the FlatBuffers serialization model, contract/delegate hash injection at build time, and the dynamic-import pattern for internal `-T` types.
+  - Bumped Cargo.toml stdlib pin to `"0.8"`.
+  - Completed the `ResponseHandler` example with v0.2.0 callbacks `onContractNotFound`, `onSubscribeResponse`, `onClose`.
+  - Converted `api.get/put/update/subscribe` examples to the **promise-based API** (`await api.X(...)` + try/catch). Noted that callbacks still fire alongside promises for backward compatibility and that the default request timeout is 30 s.
+  - New section "Large state handling (streaming)" covers `CHUNK_THRESHOLD = 512 KB`, `CHUNK_SIZE = 256 KB`, `ReassemblyBuffer`, and the v0.2.0 concurrency limits.
+  - Added warning above the `(api as any).sendRequest(...)` cast — internal SDK method, may break on any minor SDK bump; track stdlib for a public delegate-message builder.
+- `dapp-builder/references/delegate-patterns.md`:
+  - Renamed `attested: Option<&'static [u8]>` parameter to `origin: Option<MessageOrigin>` in `DelegateInterface::process()` examples (stdlib v0.5 breaking change).
+  - New section "Inter-delegate messaging" covering `MessageOrigin::WebApp(ContractInstanceId)` vs `MessageOrigin::Delegate(DelegateKey)` (PR #65), with a whitelist-based authorization pattern and the note that an inter-delegate message replaces (not composes with) any inherited `WebApp` origin.
+  - Added wildcard `_ => {}` arms to all `InboundDelegateMsg` matches with comments noting the `#[non_exhaustive]` requirement from stdlib v0.6.0 (PR #66).
+  - Added API drift note flagging that the pre-v0.5 secrets-by-message pattern is now `DelegateCtx::get_secret/set_secret` synchronously.
+- `dapp-builder/references/build-system.md`:
+  - Added TypeScript + Vite plain-`Makefile` block alongside the Rust + cargo-make flow; documented that River uses cargo-make and freenet-microblogging uses plain Make + Vite.
+  - **`fdev publish` differs for contracts vs delegates.** Contracts take raw `target/wasm32-unknown-unknown/release/*.wasm`; delegates take the packaged file from `build/freenet/` produced by `fdev build --package-type delegate`. Wrong file type → silent failure or cryptic errors.
+  - Documented the ANSI-strip pattern when piping `fdev` output (`sed 's/\x1b\[[0-9;]*m//g'`) and the `clean-node` pattern for republishing under the same key during dev.
+  - Bumped Rust workspace stdlib pin from `"0.6.0"` to `"0.8"`; bumped the inbox-contract lockfile-isolation example added in 1.3.0 to `=0.8.0` to match.
+- `local-dev/SKILL.md`:
+  - Renamed "seeding contracts" → "hosting contracts" in `NodeDiagnosticsConfig` comment to match the stdlib terminology rename (PR #64).
+  - Added wire-format note: `NodeDiagnosticsResponse.contract_states` is now `HashMap<String, ContractState>` with Base58-encoded keys (PR #70, v0.7.0 bidirectional bincode break).
+
 ## 1.2.0 (2026-05-21)
 - Added `dapp-builder` reference `identity-and-addressing.md`: how to give users a
   short, stable, shareable identifier without leaking raw key material or coupling
@@ -233,7 +266,6 @@ matrices, upstream-bug quarantine) deliberately left out of this version
   (CLI / dev-server / direct node access, manual `Authenticate` required)
 - Includes prior unreleased commit 265a7de: release skill Step 6 now enumerates
   the 12 required platform binaries explicitly (freenet/freenet-core#3825)
-
 ## 1.0.14 (2026-04-10)
 - Fixed dapp-builder: WebSocket connection documentation was incorrect
   - WebSocket URL must be derived from `window.location`, not hardcoded to `ws://127.0.0.1:7509`

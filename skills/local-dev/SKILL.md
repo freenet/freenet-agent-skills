@@ -346,9 +346,17 @@ NodeDiagnosticsConfig {
     include_network_info: bool,        // Active connections, peer list
     include_subscriptions: bool,       // Active subscriptions
     contract_keys: Vec<ContractKey>,   // Specific contracts (empty = all)
-    include_system_metrics: bool,      // Connection count, seeding contracts
+    include_system_metrics: bool,      // Connection count, hosting contracts
     include_detailed_peer_info: bool,  // Full peer details
     include_subscriber_peer_ids: bool, // Peer IDs of subscribers per contract
+}
+```
+
+**Wire-format change (stdlib v0.7.0):** `NodeDiagnosticsResponse.contract_states` is now `HashMap<String, ContractState>` where the key is the Base58-encoded `ContractKey::Display` form (the `instance` field, not the full struct). Previously it was `HashMap<ContractKey, ContractState>` but that serialization broke JSON because the key was a struct. To map back to a typed `ContractKey`, decode the Base58 string and reconstruct. This is a bidirectional bincode break — match node and tooling versions.
+
+```rust
+for (key_str, state) in diag.contract_states.iter() {
+    // key_str is the Base58 ContractKey instance id
 }
 ```
 
