@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.2.1 (2026-05-25)
+- `release` skill rewritten to use `gh workflow run release.yml --field
+  version=X.Y.Z` instead of the legacy `./scripts/release.sh` invocation.
+  AGENTS.md in freenet-core already documented the workflow as the canonical
+  path; the skill had drifted out of date and was telling agents to run the
+  script locally (which bails on the "must be on main" branch check from any
+  worktree). New flow: trigger workflow → `gh run watch` → verify cascade
+  (gateway-update.yml + release-announce.yml fire on `release.published`) →
+  River smoke test → post-release health check. Net effect: skill shrunk
+  from 312 to ~145 lines and now matches what the pipeline actually does.
+
 ## 1.2.0 (2026-05-21)
 - Added `dapp-builder` reference `identity-and-addressing.md`: how to give users a
   short, stable, shareable identifier without leaking raw key material or coupling
