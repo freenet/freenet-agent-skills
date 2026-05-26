@@ -142,6 +142,12 @@ Build the user interface connecting to contracts and delegates.
 3. Create synchronizer for contract state subscriptions
 4. Implement delegate communication for private storage
 5. Build reactive UI components
+6. **Vendor your stylesheets, fonts, and scripts.** The gateway serves every
+   webapp under a same-origin CSP — CDN `<link>` / `<script>` tags from
+   `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`, `fonts.googleapis.com`, etc.
+   are blocked in production even though they work in `dx serve` /
+   `vite dev`. See `references/ui-patterns.md` "Gateway CSP: Vendor Your
+   Assets".
 
 Reference: `references/ui-patterns.md`
 
@@ -154,8 +160,21 @@ Set up the build system, CI, and deployment pipeline.
 2. Add a `preflight` task that runs fmt, clippy, tests, and migration checks before publish
 3. Add GitHub Actions CI workflow (runs on push and PRs)
 4. Back up contract state to the delegate for network resilience
+5. **Add a production-liveness smoke test.** A ~50-line Playwright spec
+   asserting the gateway-hosted webapp mounts, vendored CSS loaded, and the
+   browser console is clean catches CSP blocks, iframe-shell mistakes, and
+   broken archives that no unit test reaches. See
+   `references/production-smoke-testing.md`.
+6. **Check the gateway port and (optionally) tar reproducibility.** The
+   gateway runs on `7509` — older docs and scripts still reference `50509`.
+   For byte-reproducible webapp archives across build hosts, invoke `tar`
+   with the GNU flags listed under "Tooling Preflight" in
+   `references/build-system.md`.
 
-Reference: `references/build-system.md`
+References:
+- `references/build-system.md` — build, CI, packaging, tooling preflight.
+- `references/production-smoke-testing.md` — iframe shell architecture,
+  Playwright recipe for post-publish liveness checks.
 
 ## Project Structure Template
 

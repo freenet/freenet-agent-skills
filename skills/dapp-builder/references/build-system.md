@@ -22,6 +22,25 @@ cargo install --path crates/fdev   # fdev development tool
 npm install  # in ui/ directory
 ```
 
+### Tooling Preflight
+
+Two release-time gotchas to know about:
+
+- **The Freenet HTTP/WebSocket gateway port is `7509`.** Earlier builds
+  listened on `50509`; older docs and example scripts you find online may
+  still hard-code that. If a probe or smoke test silently false-negatives,
+  check the port first. (Note: `fdev publish` itself uses the Rust `tar`
+  crate, not the system `tar` binary, so the build host's tar version
+  doesn't affect `fdev` directly.)
+- **For byte-reproducible webapp archives across build hosts**, invoke
+  `tar` with `--sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner`
+  in your `Makefile.toml`. This keeps diffs between releases meaningful
+  (the diff reflects content changes, not file-order or timestamp churn)
+  and lets two machines produce the same archive bytes from the same
+  source tree. macOS BSD `tar` doesn't accept those flags, so on macOS
+  install GNU tar (`brew install gnu-tar`) and use `gtar`. Optional but
+  recommended; River currently uses plain `tar -cJf`.
+
 ## Project Cargo.toml (Workspace Root)
 
 ```toml

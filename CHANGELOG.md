@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.2.3 (2026-05-26)
+- `dapp-builder`: documented the gateway CSP, iframe shell, and post-publish
+  smoke testing — three "only show up in production" pitfalls every Freenet
+  webapp hits (issue #22, distilled from freenet/mail v0.1.0).
+  - **Vendor your assets.** New "Gateway CSP: Vendor Your Assets" section in
+    `ui-patterns.md` explains the same-origin CSP (both `default-src` and
+    `connect-src`), why CDN `<link>` / `<script>` tags and cross-origin
+    `fetch` calls work in `dx serve` / `vite dev` but fail under
+    `fdev publish`, and the right way to bundle stylesheets / fonts under
+    `ui/assets/vendor/` (Dioxus `asset_dir` convention, matching River).
+    Cross-linked from SKILL.md Phase 3.
+  - **Iframe shell + Playwright recipe.** New
+    `references/production-smoke-testing.md` documents the
+    `<iframe id="app">` shell architecture (with a "source of truth"
+    pointer to `freenet-core/crates/core/src/server/{client_api,path_handlers}.rs`)
+    and the two Playwright idioms it breaks (`page.locator(...)` finds
+    only the shell; `page.goto("/")` lands on the dashboard). Includes a
+    `production-liveness.spec.ts` template that:
+    - waits for the shell bridge to assign `iframe#app[src]`,
+    - asserts the bundled `<h1>` mounts inside the iframe,
+    - asserts vendored CSS loaded via `getComputedStyle(...).fontWeight`
+      (more stable than `fontSize`, matching the proven
+      freenet/mail#28 assertion),
+    - filters console errors via `FATAL_CONSOLE_PATTERNS` (CSP /
+      `Refused to ...` / `net::ERR_`) so benign warnings don't flake.
+    Also includes a `playwright.config.ts` snippet and a CI bash sketch
+    that boots a local node, publishes, and exports `FREENET_BASE_URL`.
+    Cross-linked from SKILL.md Phase 4 and from `ui-patterns.md`'s "Two
+    Connection Models" section.
+  - **Tooling preflight.** New section in `build-system.md` noting that
+    the gateway port is `7509` (older docs reference the legacy `50509`)
+    and offering optional `gnu-tar --sort=name --mtime=@0 --owner=0
+    --group=0 --numeric-owner` flags for byte-reproducible webapp archives
+    across macOS/Linux build hosts (recommended, not required —
+    `fdev publish` itself uses the Rust `tar` crate).
+
 ## 1.2.2 (2026-05-26)
 - `local-dev` skill: document two silent isolation gotchas that bit users
   during freenet-email E2E debugging (issue #24).
