@@ -26,8 +26,7 @@ The UI is the interaction layer that connects to the Freenet Kernel via WebSocke
 
 ## Gateway CSP: Vendor Your Assets
 
-Every webapp served by the Freenet HTTP gateway runs under a same-origin
-Content-Security-Policy. The gateway sandbox iframe is loaded with:
+The gateway sandbox iframe runs under a same-origin CSP:
 
 ```
 default-src http://<gateway-host>:<port> 'unsafe-inline' 'unsafe-eval' blob: data:
@@ -35,22 +34,19 @@ default-src http://<gateway-host>:<port> 'unsafe-inline' 'unsafe-eval' blob: dat
 
 Any remote `<link rel="stylesheet">` or `<script src>` from a CDN
 (`cdn.jsdelivr.net`, `cdnjs.cloudflare.com`, `fonts.googleapis.com`, etc.)
-is blocked. In development you usually won't notice — `dx serve` runs the UI
-on its own origin where the CSP doesn't apply — but after `fdev publish` your
-production webapp will render unstyled / scriptless with a `Content Security
+is blocked. `dx serve` / `vite dev` run on their own origin where the CSP
+doesn't apply, so the failure only surfaces after `fdev publish`: the
+production webapp renders unstyled / scriptless with a `Content Security
 Policy directive` violation in the browser console.
 
-**Always vendor your assets into the webapp's asset directory** and reference
-them with relative paths:
+**Always vendor your assets into the webapp's asset directory** and
+reference them with relative paths:
 
 - Dioxus: drop CSS / fonts / scripts into `ui/public/vendor/` (or wherever
-  your `Dioxus.toml` `dev_assets_path` points). The release build copies that
-  tree verbatim into `dist/`, which is what gets bundled into the webapp
-  archive.
+  `Dioxus.toml`'s `dev_assets_path` points). The release build copies that
+  tree verbatim into `dist/`, which is what gets bundled into the archive.
 - Vite / Webpack: import the stylesheet from `node_modules`, or copy the
   vendored files into `public/`. Don't keep a CDN URL "just for dev".
-
-Reference your vendored assets via relative paths in `index.html`:
 
 ```html
 <!-- Wrong: blocked by gateway CSP -->
@@ -61,12 +57,9 @@ Reference your vendored assets via relative paths in `index.html`:
 <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
 ```
 
-The catch is silent: dev mode passes, unit tests pass, the webapp publishes
-successfully, and *then* the gateway-hosted version renders broken. A
-production-liveness smoke test (see `production-smoke-testing.md`) catches
-this class of regression by asserting `getComputedStyle(...)` matches the
-expected value from a vendored class, which fails the moment CSP blocks the
-CSS.
+A production-liveness smoke test (see `production-smoke-testing.md`) catches
+this regression by asserting `getComputedStyle(...)` matches a value from a
+vendored class — it fails the moment CSP blocks the CSS.
 
 ## Dioxus Setup
 

@@ -29,16 +29,14 @@ Two release-time gotchas that don't surface as obvious errors:
 - **GNU tar is required for reproducible contract IDs.** `compress-webapp`
   (and the equivalent `tar` invocation in your `Makefile.toml`) uses
   `--sort`, `--mtime`, `--owner`, and `--group` to produce a byte-identical
-  archive across machines — which keeps the contract ID stable. macOS BSD
+  archive across machines, which keeps the contract ID stable. macOS BSD
   tar silently ignores or rejects those flags and produces a usable but
-  *different* archive, so the contract ID won't match what a Linux CI run
-  produces. On macOS install GNU tar (`brew install gnu-tar`) and use `gtar`
-  (or alias `tar=gtar` in the build task). On Linux distros that ship BSD
-  tar, install `tar` from the GNU package.
-- **The Freenet HTTP/WebSocket gateway port is `7509`.** Older builds
-  (pre-2025) listened on `50509`; some scripts and READMEs in the wild still
-  hard-code that. If a probe or smoke test silently false-negatives, check
-  the port first.
+  *different* archive, so the contract ID won't match Linux CI. On macOS,
+  `brew install gnu-tar` and use `gtar` (or alias `tar=gtar` in the build
+  task).
+- **The Freenet HTTP/WebSocket gateway port is `7509`.** Pre-2025 builds
+  listened on `50509`; some scripts and READMEs still hard-code that. If a
+  probe or smoke test silently false-negatives, check the port first.
 
 ## Project Cargo.toml (Workspace Root)
 

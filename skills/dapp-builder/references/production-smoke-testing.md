@@ -1,8 +1,6 @@
 # Production Smoke Testing
 
-After you `fdev publish` a webapp, you need a way to know it actually works
-end-to-end against the gateway-hosted form — not just in `dx serve` /
-`vite dev`. Two things tend to break only at this stage:
+Two things break only after `fdev publish`, not in `dx serve` / `vite dev`:
 
 1. **CSP blocks remote assets** (see `ui-patterns.md` "Gateway CSP"). Dev
    loads the page from its own origin where the CSP doesn't apply.
@@ -10,9 +8,9 @@ end-to-end against the gateway-hosted form — not just in `dx serve` /
    `page.locator(...)` / `page.goto("/")` Playwright idioms find the wrong
    document and silently pass.
 
-This page covers the iframe shell architecture you have to know to write a
-smoke test, and a complete `production-liveness.spec.ts` recipe that asserts
-the publish + gateway integration actually produced a working app.
+This page covers the iframe shell architecture and a
+`production-liveness.spec.ts` recipe that asserts the publish + gateway
+integration actually produced a working app.
 
 ## The Gateway Iframe Shell
 
@@ -36,15 +34,10 @@ a tiny shell HTML that looks like:
 ```
 
 Your actual webapp loads inside the `<iframe id="app">` at the `?__sandbox=1`
-URL. The shell page exists for two reasons:
-
-- **Origin isolation.** The iframe runs sandboxed with no parent-origin
-  access, so a compromised contract can't read other Freenet origins' state.
-- **Auth token injection.** The shell holds the node's auth token and
-  forwards it to the iframe over `postMessage`, so the webapp itself never
-  sees it in URL / cookie / localStorage. See `ui-patterns.md` "Two
-  Connection Models" — webapp code inside the shell uses the shell-managed
-  WebSocket model.
+URL. The shell exists for origin isolation (sandboxed iframe, no
+parent-origin access) and auth token injection (the shell holds the token
+and forwards it via `postMessage`, so the webapp never sees it directly).
+See `ui-patterns.md` "Two Connection Models".
 
 ### Practical Consequences for E2E Tests
 
@@ -83,9 +76,9 @@ await page.goto(process.env.FREENET_BASE_URL!);
 
 ## The `production-liveness.spec.ts` Recipe
 
-A minimal Playwright spec that catches the entire class of "did publish +
-gateway integration produce a usable webapp" regressions without needing any
-identities or contract state. Roughly 50 lines and runs in a few seconds.
+A ~50-line Playwright spec that catches "did publish + gateway integration
+produce a usable webapp" regressions without needing identities or contract
+state. Runs in a few seconds.
 
 ```ts
 // e2e/production-liveness.spec.ts
@@ -145,17 +138,15 @@ test.describe("production liveness", () => {
 
 ### Wiring It In
 
-- **`playwright.config.ts`**: set `use.baseURL` to the gateway-hosted URL,
-  *with* the trailing `/v1/contract/web/<id>/` path. `page.goto("")` then
-  preserves it.
-- **Locally**: run after `fdev publish` against your local node:
+- **`playwright.config.ts`**: set `use.baseURL` to the full gateway URL
+  including the `/v1/contract/web/<id>/` path so `page.goto("")` preserves it.
+- **Locally**, after `fdev publish`:
   `FREENET_BASE_URL=http://127.0.0.1:7509/v1/contract/web/<id>/ npx playwright test e2e/production-liveness.spec.ts`.
-- **CI**: keep the skip guard so the spec is a no-op when no `FREENET_BASE_URL`
-  is set; gate it behind a separate publish-and-smoke-test job that boots a
-  local node, publishes the webapp, and exports the contract key.
-- **Release pipeline**: run it post-publish against the production gateway as
-  a release-gate. A failure here means the publish succeeded but the
-  user-visible app is broken.
+- **CI**: the skip guard makes the spec a no-op when `FREENET_BASE_URL` is
+  unset; gate it behind a job that boots a local node, publishes the webapp,
+  and exports the contract key.
+- **Release pipeline**: run post-publish against the production gateway. A
+  failure here means publish succeeded but the user-visible app is broken.
 
 ## Reference
 
