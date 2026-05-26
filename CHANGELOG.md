@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.2.2 (2026-05-26)
+- `local-dev` skill: document two silent isolation gotchas that bit users
+  during freenet-email E2E debugging (issue #24).
+  - **`--data-dir` does not isolate the gateway bootstrap list.** `freenet`
+    reads `gateways.toml` from the global config dir (`~/Library/Application
+    Support/The-Freenet-Project-Inc.Freenet/` on macOS, `~/.config/Freenet/`
+    on Linux) regardless of `--data-dir`. On a machine with an existing
+    Freenet install, a "local" test node silently dials public gateways and
+    joins the live network. New subsection documents the `HOME` override
+    workaround and a log-grep verification step.
+  - **`fdev` defaults to port 7509.** Without `--port`, `fdev publish`
+    silently targets whichever node owns 7509 — typically the system
+    service, not the test node. Surface symptom: `"Signature verification
+    failed"` on a fresh publish. New callout warns about this and the
+    common-issues table now lists both new symptoms.
+  - Replaces the misleading "Each node is fully isolated" claim with a
+    pointer to the new pitfalls section.
+
 ## 1.2.1 (2026-05-25)
 - `release` skill rewritten to use `gh workflow run release.yml --field
   version=X.Y.Z` instead of the legacy `./scripts/release.sh` invocation.

@@ -101,11 +101,78 @@ freenet network \
   --log-level debug
 ```
 
-Each node is fully isolated: persistent data in `--data-dir`, logs in `--log-dir`.
+Persistent data lives in `--data-dir` and logs in `--log-dir`, but the
+**gateway bootstrap list is NOT isolated** by `--data-dir` — see
+[Isolation pitfalls](#isolation-pitfalls) below before assuming the node
+is offline-only. Likewise, `fdev` defaults to port 7509 and will silently
+target whichever node owns that port (often the system service, not your
+test node).
 
 **WARNING:** Do NOT use `--id` for local dev. It creates ephemeral temp directories
 that get wiped on restart, destroying delegate secrets (signing keys, app data).
 Use `--data-dir` for persistent isolation instead.
+
+### Isolation pitfalls
+
+#### `--data-dir` does NOT isolate the gateway bootstrap list
+
+`freenet` reads `gateways.toml` from the global config directory regardless
+of `--data-dir`:
+
+- **macOS:** `~/Library/Application Support/The-Freenet-Project-Inc.Freenet/gateways.toml`
+- **Linux:** `~/.config/Freenet/gateways.toml`
+
+On a machine with an existing Freenet install, a "local" test node will
+dial real public gateways (e.g. `nova.locut.us`, `vega.locut.us`) and
+attempt NAT traversal to live peers — silently joining the public network.
+
+To fully isolate, override `HOME` so the node sees an empty gateway list:
+
+```bash
+# macOS
+mkdir -p ~/iso-home/Library/Application\ Support/The-Freenet-Project-Inc.Freenet
+printf 'gateways = []\n' > ~/iso-home/Library/Application\ Support/The-Freenet-Project-Inc.Freenet/gateways.toml
+
+# Linux
+mkdir -p ~/iso-home/.config/Freenet
+printf 'gateways = []\n' > ~/iso-home/.config/Freenet/gateways.toml
+
+# Then launch with HOME overridden
+HOME=~/iso-home freenet network --gateway "127.0.0.1:31338,$PUBKEY" ...
+```
+
+Note: an empty `gateways.toml` will fail with `missing field 'gateways'`.
+The file must contain `gateways = []`.
+
+**Verification:** tail the peer log for the initial-join line and confirm
+the gateway count matches your `--gateway` flag count:
+
+```bash
+grep "Starting initial join procedure" "$LOG_DIR"/freenet.*.log
+# Expect: "...with N gateways" where N == number of --gateway flags
+# If N is higher, isolation is broken.
+```
+
+Upstream tracking: [freenet/freenet-core#3980](https://github.com/freenet/freenet-core/issues/3980).
+
+#### `fdev` defaults to port 7509
+
+`fdev` targets `ws://127.0.0.1:7509` unless `--port` is passed. On a dev
+machine running a system Freenet service (which owns 7509), `fdev publish ...`
+without `--port` silently goes to that node, not your isolated test node.
+
+```bash
+# WRONG: silently targets whichever node owns 7509 (often the system service)
+fdev publish --code ... contract ...
+
+# RIGHT: always pass --port when targeting a non-default test node
+fdev --port 7510 publish --code ... contract ...
+```
+
+Symptom of a misdirected publish: `"Signature verification failed: signature error"`
+on a fresh publish to the test node, because the system node has stale
+contract state from a previous run signed by a different key. If you see
+this on a "fresh" test, check which node `fdev` actually hit.
 
 ### Two-node local network
 
@@ -367,7 +434,9 @@ the WebSocket connection.
 | "delegate not found in store" | Legacy delegate migration | Expected on fresh node, non-blocking |
 | "Connection reset by peer" | Browser killed WebSocket | Check if page is in background tab |
 | "peer connection dropped" on put | Publishing to live node failed | Use isolated test node (`--skip-load-from-network`) |
-| Contract not found | Not published to this node | Publish with `fdev --port {PORT}` |
+| Contract not found | Not published to this node | Publish with `fdev --port {PORT}` (see [Isolation pitfalls](#isolation-pitfalls)) |
+| "Signature verification failed" on a fresh publish | `fdev` defaulted to port 7509 and hit the system node | Pass `fdev --port {TEST_PORT}` explicitly |
+| Test node joins public network despite `--data-dir` | `gateways.toml` is read from global config, not `--data-dir` | Override `HOME` to a sandbox dir with `gateways = []` (see [Isolation pitfalls](#isolation-pitfalls)) |
 | Blank page (cached old WASM) | Mobile browser caches aggressively | Clear cache, force close browser, or use `?_v=timestamp` |
 | `sed -i` fails on macOS | BSD sed requires backup extension | Use build tools directly instead of sed |
 | `cargo make` targets Linux | Cross-compilation for web-container-tool | Build natively: `cargo build --release -p web-container-tool` |
