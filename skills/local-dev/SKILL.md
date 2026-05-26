@@ -120,7 +120,7 @@ Use `--data-dir` for persistent isolation instead.
 of `--data-dir`:
 
 - **macOS:** `~/Library/Application Support/The-Freenet-Project-Inc.Freenet/gateways.toml`
-- **Linux:** `~/.config/Freenet/gateways.toml`
+- **Linux:** `~/.config/freenet/gateways.toml`
 
 On a machine with an existing Freenet install, a "local" test node will
 dial real public gateways (e.g. `nova.locut.us`, `vega.locut.us`) and
@@ -134,23 +134,28 @@ mkdir -p ~/iso-home/Library/Application\ Support/The-Freenet-Project-Inc.Freenet
 printf 'gateways = []\n' > ~/iso-home/Library/Application\ Support/The-Freenet-Project-Inc.Freenet/gateways.toml
 
 # Linux
-mkdir -p ~/iso-home/.config/Freenet
-printf 'gateways = []\n' > ~/iso-home/.config/Freenet/gateways.toml
+mkdir -p ~/iso-home/.config/freenet
+printf 'gateways = []\n' > ~/iso-home/.config/freenet/gateways.toml
 
-# Then launch with HOME overridden
-HOME=~/iso-home freenet network --gateway "127.0.0.1:31338,$PUBKEY" ...
+# Then launch with HOME overridden. For an isolated *gateway* node
+# (--is-gateway, no --gateway flags), expect 0 bootstrap gateways:
+HOME=~/iso-home freenet network --is-gateway --skip-load-from-network ...
+
+# For an isolated *peer* node, pass your local gateway(s) explicitly:
+HOME=~/iso-home freenet network --gateway "127.0.0.1:31337,$GATEWAY_PUBKEY" ...
 ```
 
 Note: an empty `gateways.toml` will fail with `missing field 'gateways'`.
 The file must contain `gateways = []`.
 
-**Verification:** tail the peer log for the initial-join line and confirm
-the gateway count matches your `--gateway` flag count:
+**Verification:** grep the node log for the initial-join line and confirm
+the gateway count matches what you passed:
 
 ```bash
 grep "Starting initial join procedure" "$LOG_DIR"/freenet.*.log
 # Expect: "...with N gateways" where N == number of --gateway flags
-# If N is higher, isolation is broken.
+# For an isolated gateway node (no --gateway flags), N must be 0.
+# If N is higher than expected, isolation is broken.
 ```
 
 Upstream tracking: [freenet/freenet-core#3980](https://github.com/freenet/freenet-core/issues/3980).

@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
   during freenet-email E2E debugging (issue #24).
   - **`--data-dir` does not isolate the gateway bootstrap list.** `freenet`
     reads `gateways.toml` from the global config dir (`~/Library/Application
-    Support/The-Freenet-Project-Inc.Freenet/` on macOS, `~/.config/Freenet/`
+    Support/The-Freenet-Project-Inc.Freenet/` on macOS, `~/.config/freenet/`
     on Linux) regardless of `--data-dir`. On a machine with an existing
     Freenet install, a "local" test node silently dials public gateways and
     joins the live network. New subsection documents the `HOME` override
