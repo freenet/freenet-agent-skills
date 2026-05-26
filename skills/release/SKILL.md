@@ -1,6 +1,6 @@
 ---
 name: release
-description: Orchestrate a new Freenet release. Determines next version, shows changelog, confirms with user, and runs the release pipeline. Use when the user says "do a release", "new release", "release", or "/release".
+description: Orchestrate a new Freenet release. Determines next version, shows changelog, confirms with user, and triggers the release pipeline via GitHub Actions. Use when the user says "do a release", "new release", "release", or "/release".
 user_invocable: true
 license: LGPL-3.0
 ---
@@ -9,304 +9,180 @@ license: LGPL-3.0
 
 ## Overview
 
-This skill orchestrates a complete Freenet release. It determines the next version, shows what's changed since the last release, confirms with the user, and runs the automated release pipeline.
+This skill orchestrates a complete Freenet release. The release pipeline runs entirely in GitHub Actions — your job is to determine the version, confirm with the user, trigger the workflow, watch it complete, then verify the cascade (gateway updates, announcements, network health).
+
+The workflow handles all of: version bump → release PR → CI gate → crates.io publish → GitHub release → cross-compile binaries. The `release.published` event then auto-triggers `gateway-update.yml` (HMAC-POSTs each gateway's release-agent) and `release-announce.yml` (Matrix + River posts via release-agent).
 
 ## Arguments
 
-- If an argument is provided (e.g., `/release 0.1.133`), use that as the target version
-- If no argument is provided, auto-detect the next patch version
+- If an argument is provided (e.g., `/release 0.2.65`), use it as the target version.
+- If no argument is provided, auto-detect: increment the patch of the version currently in `crates/core/Cargo.toml`. If unreleased PRs have already bumped it past the last tag, **use the current Cargo.toml version as-is** rather than incrementing again — that's the version those PRs were intended for.
 
-## Step 0: Set Up Tab Context
-
-Capture the current tmux window ID and rename it. The window ID is stable even if the user switches tabs during the long-running release, so always use `-t` with the saved ID for subsequent renames.
+## Step 1: Determine Version and Show Changelog
 
 ```bash
-RELEASE_WINDOW=$(tmux display-message -p '#{window_id}')
-tmux rename-window -t "$RELEASE_WINDOW" "release X.Y.Z"
+cd ~/code/freenet/freenet-core/main
+git pull origin main                                           # MUST pull first
+LAST_TAG=$(git describe --tags --abbrev=0)
+CARGO_VERSION=$(grep "^version" crates/core/Cargo.toml | cut -d'"' -f2)
+echo "Last release tag: $LAST_TAG"
+echo "Cargo.toml says:  $CARGO_VERSION"
+echo
+echo "Commits since $LAST_TAG:"
+git log --oneline "$LAST_TAG"..HEAD
 ```
 
-Replace `X.Y.Z` with the target version (determine it first if auto-detecting). Keep `$RELEASE_WINDOW` available for Step 8 (success criteria).
+Pick the target version (see Arguments above). Present the user with current version, target version, and a categorized changelog. **Confirm before triggering.**
 
-## Step 1: Determine Current State
-
-**First, pull the latest changes from origin.** Without this, you may see zero commits since the last tag and incorrectly conclude there's nothing to release.
+## Step 2: Trigger the Release Workflow
 
 ```bash
-# Pull latest — MUST do this before anything else
-git pull origin main
-
-# Get current version from Cargo.toml
-grep "^version" crates/core/Cargo.toml | cut -d'"' -f2
-
-# Get the last release tag
-git describe --tags --abbrev=0
-
-# Get commits since last release
-git log --oneline $(git describe --tags --abbrev=0)..HEAD
+gh workflow run release.yml --repo freenet/freenet-core --field version=X.Y.Z
 ```
 
-**Auto-version logic:** If no version argument was provided, increment the patch version of the current version (e.g., `0.1.132` -> `0.1.133`).
+Available inputs (see `gh workflow view release.yml --yaml`):
+- `version` — required for explicit version; leave blank to auto-patch-bump from the latest crates.io release.
+- `skip_tests` — skip pre-release local tests (CI still runs on the PR).
+- `dry_run` — show what would happen without publishing.
 
-## Step 2: Show Changelog and Confirm
-
-Present the user with:
-1. **Current version** and **target version**
-2. **Commits since last release** (categorized by conventional commit type)
-3. **fdev version** that will be auto-incremented
-
-Then ask the user to confirm before proceeding.
-
-## Step 3: Pre-flight Checks
-
-Before running the release script, verify:
+Confirm the run started:
 
 ```bash
-# Must be on main branch (or a release worktree)
-git branch --show-current
-
-# Must have clean working directory
-git status --porcelain  # Should be empty
-
-# Must be up to date with origin
-git fetch origin main
-git rev-parse HEAD  # Compare with:
-git rev-parse origin/main
+sleep 5
+gh run list --workflow release.yml --repo freenet/freenet-core --limit 1 \
+    --json databaseId,status,event,createdAt
 ```
 
-If any check fails, inform the user and stop.
+## Step 3: Watch the Release Run
 
-### Optional: Create a Release Worktree
-
-To avoid disrupting the main worktree:
+The workflow takes ~20–30 minutes (version-bump → release PR → merge_group full-suite CI → crates.io → GitHub release → cross-compile binaries). Use `gh run watch` in a backgrounded `Bash` call so the harness notifies on completion — never manually poll.
 
 ```bash
-cd ~/code/freenet/freenet-core/main  # or wherever main worktree is
-git worktree add -b release-work ../release-X.Y.Z
-cd ../release-X.Y.Z
+RUN_ID=$(gh run list --workflow release.yml --repo freenet/freenet-core --limit 1 --json databaseId -q '.[0].databaseId')
+gh run watch "$RUN_ID" --repo freenet/freenet-core --interval 30 --exit-status
 ```
 
-Clean up after release:
-```bash
-git worktree remove ../release-X.Y.Z
-git branch -d release-work
-```
-
-## Step 4: Run the Release
-
-**CRITICAL: You MUST run `release.sh` as a single command. Do NOT manually execute individual release steps (gh release create, cargo publish, etc.).** The script handles draft releases, binary waits, and publish ordering that prevent users from seeing a version before its binaries exist. Doing steps manually caused a user-facing 404 during v0.1.177.
-
-Execute the release script:
+If the run fails, inspect the failing job:
 
 ```bash
-./scripts/release.sh --version <VERSION> [--skip-tests]
+gh run view "$RUN_ID" --repo freenet/freenet-core --log-failed | tail -100
 ```
 
-The script handles the entire pipeline:
-1. **Version bump** - Updates `crates/core/Cargo.toml` and `crates/fdev/Cargo.toml`
-2. **Release PR** - Creates a branch, commits, pushes, opens PR with auto-merge
-3. **Wait for CI** - Monitors GitHub CI on the release PR (up to 30 min)
-4. **Publish crates** - Publishes `freenet` then `fdev` to crates.io
-5. **GitHub Release** - Creates tag, generates release notes, creates **draft** release
-6. **Cross-compile** - Triggered automatically by the tag push
-7. **Wait for binaries** - Waits for cross-compile to attach binaries to the release
-8. **Publish draft** - Publishes the draft release only after binaries are attached
-9. **Gateway updates** - SSHes into all gateways and triggers immediate update
-10. **Announcements** - Matrix and River notifications (if tools available)
+Common failure modes are below (Step 5).
 
-### Important Options
+## Step 4: Verify the Release Artifacts
 
-- `--skip-tests` - Skip local pre-release tests (CI still runs on the PR)
-- `--dry-run` - Show what would be done without executing
-
-### Resumability
-
-The release script is **resumable**. If it fails partway through, re-running with the same `--version` will auto-detect completed steps and skip them. State is saved to `/tmp/release-<VERSION>.state`.
-
-You can also resume explicitly: `./scripts/release.sh --resume /tmp/release-<VERSION>.state`
-
-### Branch Safety
-
-The script automatically restores the original git branch on exit (success or failure). If the script is interrupted, your working directory won't be left on the `release/v*` branch.
-
-### CI Wait Behavior
-
-- **Main CI check**: If main branch CI is still running when the script starts, it polls every 30s (up to 10 min) instead of exiting immediately
-- **PR merge wait**: Polls every 30s (up to 60 min) for the PR to pass CI and auto-merge
-- **Release merge_group is the pre-publish gate** (#3973): The release PR's merge_group entry runs the FULL suite (Unit & Integration, Simulation, NAT Validation) on the heavy runner — this is the definitive "what ships is green" check. Non-release merge_group entries skip Simulation and NAT Validation (covered by PR-level CI), so the release entry is the only place those run against the rebased commit. Expect ~20-30 min for this gate. The previous "skip on release" assumption was based on a faulty 'main CI already validated' premise — main push doesn't run these jobs at all.
-
-## Step 5: Handle Common Issues
-
-**PR title / Conventional Commits check fails:**
-Release PRs must use "build:" prefix (not "chore:"). The commit-msg hook only allows: feat, fix, docs, style, refactor, perf, test, build, ci.
-```bash
-gh api repos/freenet/freenet-core/pulls/XXXX --method PATCH -f title="build: release X.Y.Z"
-```
-
-**Auto-merge not triggering:**
-- GitHub auto-merge can take 5-10 minutes after checks pass
-- The script waits up to 60 minutes (showing progress every 30s)
-- Release merge_group entries run the full suite as the pre-publish gate (#3973), so allow 20-30 min for the merge queue to complete
-- You can manually merge the PR — the script detects manual merges and continues
-
-**Test failures:**
-Check CI logs. Either fix the issue or inform the user and ask how to proceed.
-
-## Step 6: Verify Release Artifacts
-
-**CRITICAL: Do NOT announce until cross-compile binaries are available.** The `Build and Cross-Compile` workflow triggers on tag push and takes ~15-20 min to build binaries for all platforms. Gateway auto-update depends on these binaries.
+After the release workflow succeeds, the `release.published` event fires and the downstream cascade runs automatically. Verify each piece landed:
 
 ```bash
-# Check crates.io publication
-cargo search freenet --limit 1
+VER=X.Y.Z
 
-# Check GitHub release exists
-gh release view v<VERSION>
+# crates.io
+cargo search freenet --limit 1                                  # should show new version
+cargo search fdev --limit 1                                     # should show bumped fdev
 
-# Verify ALL required platform binaries are attached
-gh release view v<VERSION> --json assets --jq '.assets[].name'
+# GitHub release + binaries
+gh release view "v$VER" --repo freenet/freenet-core
+gh release view "v$VER" --repo freenet/freenet-core --json assets --jq '.assets[].name'
 ```
 
-**Required platform binaries** (all must be present):
+**Required platform binaries** (all must be attached before the cascade is healthy):
+
 - `freenet-x86_64-unknown-linux-musl.tar.gz`
 - `freenet-aarch64-unknown-linux-musl.tar.gz`
-- `freenet-aarch64-apple-darwin.tar.gz`
 - `freenet-x86_64-apple-darwin.tar.gz`
+- `freenet-aarch64-apple-darwin.tar.gz`
 - `freenet-x86_64-pc-windows-msvc.zip`
-- `fdev-x86_64-unknown-linux-musl.tar.gz`
-- `fdev-aarch64-unknown-linux-musl.tar.gz`
-- `fdev-aarch64-apple-darwin.tar.gz`
-- `fdev-x86_64-apple-darwin.tar.gz`
-- `fdev-x86_64-pc-windows-msvc.zip`
 - `freenet.exe`
+- corresponding `fdev-*` archives
 - `SHA256SUMS.txt`
 
-If any binary is missing, **do not proceed to announcements**. Investigate the cross-compile workflow failure first.
+Check the downstream cascade fired (these auto-trigger on `release.published`):
 
 ```bash
-# Monitor cross-compile workflow if binaries not yet available
-gh run list --workflow=cross-compile.yml --limit 3
+gh run list --workflow gateway-update.yml --repo freenet/freenet-core --limit 1
+gh run list --workflow release-announce.yml --repo freenet/freenet-core --limit 1
 ```
 
-## Step 6.5: Smoke Test River Compatibility
+Both should show recent runs initiated after the release. If either is missing, the `RELEASE_PAT` secret may have expired (see freenet-core's AGENTS.md "Release Workflow & RELEASE_PAT" section).
 
-**Before announcing, verify that River clients can still talk to the gateway.** Protocol changes (new message variants, streaming defaults, serialization changes) can silently break River even when all freenet-core tests pass.
+## Step 5: River Compatibility Smoke Test
+
+Before relying on the auto-announcements, verify River clients can still talk to the gateway. Protocol changes (new wire variants, streaming defaults, serialization changes) can silently break River even when all freenet-core tests pass.
+
+The current Freenet Official room owner VK lives in the `river-official-room` skill — do NOT hardcode it here; it rotates when the room is recreated.
 
 ```bash
-cd /home/ian/code/freenet/river/main
-cargo run -p riverctl -- member list 4uNUKFzZQCnzo4K2ecZ16cMsYEEfoaRS35z6exEsbvm4
+ROOM_VK=$(...)  # from river-official-room skill
+cd ~/code/freenet/river/main
+cargo run -p riverctl -- member list "$ROOM_VK"
 ```
 
-This GETs the official room state from the gateway and deserializes it. If it fails:
-- **STOP — do not announce the release**
-- The failure likely means a protocol or serialization change broke River client compatibility
-- Check if River's freenet-stdlib dependency needs updating to match the new release
-- Fix the issue before proceeding to announcements
+If this fails with a bincode deserialization error: **STOP.** A protocol or serialization change broke River compatibility. Roll back the release (see "Rollback" below), file an issue, and rebuild River against the new stdlib before retrying.
 
-**Why this matters:** During v0.2.11, enabling WebSocket streaming by default broke riverctl because it was pinned to an older stdlib that couldn't deserialize the new `StreamHeader`/`StreamChunk` variants. This smoke test would have caught that before users were affected.
+(v0.2.11 incident: enabling WebSocket streaming by default broke riverctl pinned to stdlib 0.1.40 — `StreamHeader`/`StreamChunk` variants weren't deserializable. This smoke test catches that class of regression.)
 
-## Step 7: Announcements
+## Step 6: Post-Release Network Verification
 
-Only after binaries are confirmed available. Use the `matrix-comms` and `river-official-room` skills for detailed instructions on each platform.
+Wait 10–15 min for gateways to auto-update via the release-agent HMAC POST, then verify:
 
-**Announcement content:** Write a 1-3 sentence Markdown summary of the key changes in this release, followed by a link to the GitHub release for full details. Both Matrix and River support Markdown formatting.
+1. **Gateway versions** — each gateway is running the new version. Use the `freenet-gateway-ops` skill for SSH'd version + log checks on nova / vega / technic.
+2. **Gateway logs clean** — no new error patterns, no rapid log growth (normal is ~1 MB/h; faster signals a problem).
+3. **Network health** — telemetry shows peers connecting, contracts propagating, subscriptions working. Use `freenet-telemetry-monitor` for raw event queries or `freenet-telemetry-dashboard` for the live view.
 
-**Example format:**
-```
-**Freenet v0.1.177 released.** Transient WebSocket errors no longer kill the client slot permanently. See [release notes](https://github.com/freenet/freenet-core/releases/tag/v0.1.177) for details.
-```
+Watch for:
 
-**Matrix** (#freenet-locutus channel) — use the `matrix-comms` skill:
-```bash
-# -z flag is REQUIRED for Markdown rendering (bold, links, etc.)
-timeout 30 matrix-commander -z -r "!ygHfYcXtXmivTbOwjX:matrix.org" -m "announcement text"
-```
+- **Log spam** — same message repeating hundreds of times (can fill disks within hours).
+- **New error patterns** — errors not present before the release.
+- **Connection failures** — `connection refused`, `timeout`, `handshake failed`.
+- **Resource issues** — `out of memory`, `no space left`, `too many open files`.
 
-**River** (Freenet Official room) — use the `river-official-room` skill:
-
-**IMPORTANT:** You MUST invoke the `river-official-room` skill first to get the correct Room Owner VK and identity restoration instructions. The Room Owner identity must be restored before sending messages. Do NOT hardcode the VK here — it changes when the room is recreated.
-
-```bash
-# 1. Restore Room Owner identity (see river-official-room skill for current VK and key location)
-# 2. Send message using the VK from the skill
-cd /home/ian/code/freenet/river/main
-cargo run -p riverctl -- message send <ROOM_OWNER_VK> "announcement text"
-```
-
-## Step 8: Post-Release Verification
-
-**A release is NOT complete until the network is verified healthy.**
-
-Wait 10-15 minutes for gateways to auto-update, then verify:
-
-1. **Gateway versions updated** — Check that gateways are running the new version
-2. **Gateway logs clean** — No new errors, warnings, panics, or log spam
-3. **Network health** — Peers connecting, contracts propagating, subscriptions working
-
-If you have access to gateway machines, check logs directly. If you have access to telemetry, monitor network-wide health. The specific verification steps depend on your access level — see your local environment's release skill for machine-specific commands.
-
-**What to look for:**
-- **Log spam** — Same message repeating hundreds of times (can fill disks within hours)
-- **Rapid log growth** — Normal is ~1MB/hour; much faster indicates a problem
-- **New error patterns** — Errors not present before the release
-- **Connection failures** — "connection refused", "timeout", "handshake failed"
-- **Resource issues** — "out of memory", "no space left", "too many open files"
-
-**If critical issues found:** Roll back immediately, create GitHub issue, announce rollback.
+If a critical issue surfaces: **roll back immediately**, create a GitHub issue with the symptom + logs, post a rollback notice via the release-announce path or Matrix manually.
 
 ## Rollback
 
-If a release needs to be rolled back:
+The rollback script is still the right tool for un-doing a release:
 
 ```bash
-# Rollback (keeps crates.io versions)
-./scripts/release-rollback.sh --version <VERSION>
-
-# Rollback and yank from crates.io (irreversible!)
-./scripts/release-rollback.sh --version <VERSION> --yank-crates
-
-# Dry run
+cd ~/code/freenet/freenet-core/main
+./scripts/release-rollback.sh --version <VERSION>             # keeps crates.io
+./scripts/release-rollback.sh --version <VERSION> --yank-crates  # irreversible
 ./scripts/release-rollback.sh --version <VERSION> --dry-run
 ```
 
+## Common Workflow Failures
+
+- **PR title fails Conventional Commits.** The release workflow opens its own PR with title `build: release X.Y.Z`. If the commit-msg hook is enforced differently in CI, patch via `gh api repos/freenet/freenet-core/pulls/<PR> --method PATCH -f title="build: release X.Y.Z"`.
+- **Merge queue stuck on the release PR.** Release `merge_group` entries run the full suite (Unit & Integration, Simulation, NAT Validation) as the pre-publish gate (#3973). Expect 20–30 min. Non-release merge_group entries skip Simulation and NAT Validation, so this is the only place those run against the rebased commit — don't manually merge to skip.
+- **Cascade didn't fire after `release.published`.** Suggests `RELEASE_PAT` is missing or expired. `release.yml` emits a `::warning::` when the secret is absent; check the workflow logs and rotate the PAT per AGENTS.md. As a manual fallback: `gh workflow run gateway-update.yml --field version=X.Y.Z` and `gh workflow run release-announce.yml --field version=X.Y.Z`.
+- **Cross-compile attached partial binaries.** Some platforms can fail independently. `gh run view <cross-compile run-id> --log-failed` shows which target failed. Re-run that single platform via `gh workflow run cross-compile.yml`.
+
 ## Version Scheme
 
-- **freenet:** `0.1.X` - patch incremented each release
-- **fdev:** `0.3.X` - patch auto-incremented by release script (independent versioning)
+- **freenet:** `0.2.X` — patch incremented each release.
+- **fdev:** `0.3.X` — patch auto-incremented by the workflow (independent versioning).
 
 ## Incident Learnings
 
-These are real issues from past releases that the release process has been hardened against:
+Recurring issues the pipeline has been hardened against:
 
-- **"Text file busy" during deployment** — Deploy script now disables systemd auto-restart, waits for binary release, re-enables after
-- **PR title must use "build:" prefix** — Changed from "chore:" to comply with commit-msg hook
-- **Matrix announcements can hang** — matrix-send wrapper has 20s timeout and 3 retries; matrix-commander handles E2E encryption that raw curl cannot
-- **PATH shadowing** — Old `cargo install freenet` may leave stale binary at `~/.cargo/bin/freenet` shadowing `/usr/local/bin/freenet`; always use absolute paths when verifying versions
-- **Binary vs running process mismatch** — Deploying a new binary doesn't mean the service is running it; verify via `systemctl show -p MainPID` + `/proc/PID/exe`, not just binary on disk
-- **Don't announce before binaries exist** — Cross-compile takes 15-20 min; gateway auto-update (especially aarch64) depends on release binaries being attached
-- **Log spam can fill disks** — Always review logs 10-15 min after release; previous releases introduced logging that consumed disk space within hours
-- **Release merge_group now runs the full suite as the pre-publish gate** (#3973) — Inverted the previous "skip on release" model. Release detection still keys on the merge_group head_commit message (`build: release*`), which works because the release PR uses squash-merge auto-merge so the PR title becomes the merge_group commit subject. Non-release merge_group entries skip Simulation and NAT Validation (covered by PR-level CI) but keep Unit & Integration. The previous "main CI already validated" justification for skipping on release was wrong — `test_unit`, `test_simulation`, and `nat_validation` are gated to `pull_request | merge_group` only, so push to main never re-validates.
-- **Script left user on release branch** — Added EXIT trap to restore original branch on any exit
-- **Streaming default broke riverctl** — v0.2.11 enabled WebSocket streaming by default, but riverctl was pinned to stdlib 0.1.40 which couldn't deserialize `StreamHeader`/`StreamChunk` variants. Always smoke-test River CLI against the gateway before announcing.
-
-## Gateway Updates
-
-The release script automatically SSHes into all known gateways and triggers `gateway-auto-update.sh --force` immediately after cross-compile binaries are available. This eliminates the 10-minute polling delay that previously caused version mismatch issues (users installing the new version before gateways updated).
-
-Gateways also have a 10-minute polling timer as a fallback. Peers self-update when they detect a version mismatch with the gateway (exit code 42), which triggers `freenet update` automatically.
+- **Don't manually run individual release steps** (`cargo publish`, `gh release create`, `gh release edit`). The workflow handles draft releases and binary waits so users never see a version before its binaries exist. Doing steps by hand caused a user-facing 404 during v0.1.177.
+- **Don't announce before binaries exist.** Cross-compile takes 15–20 min; gateway auto-update (especially aarch64) depends on the binaries being attached. The `release-announce.yml` and `gateway-update.yml` cascade triggers on `release.published`, which fires only after binaries are attached, so this is automatic — but if you're manually re-triggering announcements, check binary presence first.
+- **Log spam can fill disks within hours.** Always do the post-release health check in Step 6. v0.2.62 shipped with River-saturation log spam that filled gateways at ~10 GB/day (#4251); v0.2.63's release wave addresses both root-cause (#4253) and symptom (#4252).
+- **Streaming default broke riverctl** (v0.2.11). Always run the Step 5 River smoke test before considering the release fully shipped.
+- **PR title must use `build:` prefix**, not `chore:` — the commit-msg hook only allows feat/fix/docs/style/refactor/perf/test/build/ci.
+- **PATH shadowing.** Old `cargo install freenet` may leave a stale binary at `~/.cargo/bin/freenet` shadowing `/usr/local/bin/freenet`; always use absolute paths when verifying running versions.
+- **Binary on disk ≠ running process.** Verify via `systemctl show -p MainPID` + `/proc/PID/exe`, not just the file on disk.
+- **Release `merge_group` runs the full suite as the pre-publish gate** (#3973). Don't try to skip it.
 
 ## Success Criteria
 
 Release is complete when:
-- ✓ PR merged to main
-- ✓ Published to crates.io
-- ✓ GitHub release created with tag and binaries attached
-- ✓ Gateways updated to new version
-- ✓ Matrix announcement sent
-- ✓ River announcement sent
-- ✓ Network verified healthy post-release (logs clean, telemetry normal)
 
-Once ALL criteria are met (including post-release monitoring), mark the release as complete using the window ID captured in Step 0:
-
-```bash
-tmux rename-window -t "$RELEASE_WINDOW" "✓ release X.Y.Z"
-```
+- ✓ `release.yml` workflow succeeded
+- ✓ crates.io shows the new version for both `freenet` and `fdev`
+- ✓ GitHub release tagged with all required binaries attached
+- ✓ `gateway-update.yml` and `release-announce.yml` cascade runs succeeded
+- ✓ River smoke test passes
+- ✓ Gateways running the new version, logs clean
+- ✓ Network telemetry healthy
