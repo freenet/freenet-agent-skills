@@ -24,19 +24,22 @@ npm install  # in ui/ directory
 
 ### Tooling Preflight
 
-Two release-time gotchas that don't surface as obvious errors:
+Two release-time gotchas to know about:
 
-- **GNU tar is required for reproducible contract IDs.** `compress-webapp`
-  (and the equivalent `tar` invocation in your `Makefile.toml`) uses
-  `--sort`, `--mtime`, `--owner`, and `--group` to produce a byte-identical
-  archive across machines, which keeps the contract ID stable. macOS BSD
-  tar silently ignores or rejects those flags and produces a usable but
-  *different* archive, so the contract ID won't match Linux CI. On macOS,
-  `brew install gnu-tar` and use `gtar` (or alias `tar=gtar` in the build
-  task).
-- **The Freenet HTTP/WebSocket gateway port is `7509`.** Pre-2025 builds
-  listened on `50509`; some scripts and READMEs still hard-code that. If a
-  probe or smoke test silently false-negatives, check the port first.
+- **The Freenet HTTP/WebSocket gateway port is `7509`.** Earlier builds
+  listened on `50509`; older docs and example scripts you find online may
+  still hard-code that. If a probe or smoke test silently false-negatives,
+  check the port first. (Note: `fdev publish` itself uses the Rust `tar`
+  crate, not the system `tar` binary, so the build host's tar version
+  doesn't affect `fdev` directly.)
+- **For byte-reproducible webapp archives across build hosts**, invoke
+  `tar` with `--sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner`
+  in your `Makefile.toml`. This keeps diffs between releases meaningful
+  (the diff reflects content changes, not file-order or timestamp churn)
+  and lets two machines produce the same archive bytes from the same
+  source tree. macOS BSD `tar` doesn't accept those flags, so on macOS
+  install GNU tar (`brew install gnu-tar`) and use `gtar`. Optional but
+  recommended; River currently uses plain `tar -cJf`.
 
 ## Project Cargo.toml (Workspace Root)
 

@@ -26,25 +26,30 @@ The UI is the interaction layer that connects to the Freenet Kernel via WebSocke
 
 ## Gateway CSP: Vendor Your Assets
 
-The gateway sandbox iframe runs under a same-origin CSP:
+The gateway sandbox iframe runs under a same-origin CSP, currently (see
+`freenet-core/crates/core/src/server/client_api.rs` for the source of
+truth):
 
 ```
-default-src http://<gateway-host>:<port> 'unsafe-inline' 'unsafe-eval' blob: data:
+default-src <iframe-origin> 'unsafe-inline' 'unsafe-eval' blob: data:;
+connect-src <iframe-origin> blob: data:
 ```
 
 Any remote `<link rel="stylesheet">` or `<script src>` from a CDN
 (`cdn.jsdelivr.net`, `cdnjs.cloudflare.com`, `fonts.googleapis.com`, etc.)
-is blocked. `dx serve` / `vite dev` run on their own origin where the CSP
-doesn't apply, so the failure only surfaces after `fdev publish`: the
-production webapp renders unstyled / scriptless with a `Content Security
-Policy directive` violation in the browser console.
+is blocked by `default-src`. `fetch()` / `XMLHttpRequest` to a non-same-origin
+backend is blocked by `connect-src`. `dx serve` / `vite dev` run on their
+own origin where the CSP doesn't apply, so the failure only surfaces after
+`fdev publish`: the production webapp renders unstyled / scriptless with a
+`Content Security Policy directive` violation in the browser console.
 
 **Always vendor your assets into the webapp's asset directory** and
 reference them with relative paths:
 
-- Dioxus: drop CSS / fonts / scripts into `ui/public/vendor/` (or wherever
-  `Dioxus.toml`'s `dev_assets_path` points). The release build copies that
-  tree verbatim into `dist/`, which is what gets bundled into the archive.
+- Dioxus: drop CSS / fonts / scripts into `ui/assets/vendor/` (or wherever
+  `Dioxus.toml`'s `asset_dir` points — River bundles its vendored CSS
+  directly into `ui/assets/`). The release build copies that tree into the
+  webapp archive.
 - Vite / Webpack: import the stylesheet from `node_modules`, or copy the
   vendored files into `public/`. Don't keep a CDN URL "just for dev".
 
@@ -58,8 +63,9 @@ reference them with relative paths:
 ```
 
 A production-liveness smoke test (see `production-smoke-testing.md`) catches
-this regression by asserting `getComputedStyle(...)` matches a value from a
-vendored class — it fails the moment CSP blocks the CSS.
+this regression by asserting `getComputedStyle(...).fontWeight` matches the
+value set by your vendored stylesheet — it flips back to the user-agent
+default the moment the stylesheet fails to load.
 
 ## Dioxus Setup
 
@@ -165,6 +171,10 @@ The correct choice depends on **how the client loads**, not on what it wants to 
 | Loaded **outside the gateway** (native CLI, Playwright page served from a dev port like `python3 -m http.server`, a Node script, or any page that did not come from `/v1/contract/web/...`) | **Raw WebSocket.** There is no shell; you talk directly to the node's WS API. | Hardcode or configure `ws://127.0.0.1:7509/v1/contract/command?encodingProtocol=native`. After the socket opens, **send `ClientRequest::Authenticate { token }` yourself** with a token from the node's config or `~/.config/freenet/`. See the `local-dev` skill for details. |
 
 In short: **if your code is running inside an iframe served by `/v1/contract/web/...`, the shell does auth for you.** Everywhere else, you do it yourself. Getting this wrong produces confusing symptoms: the shell model fails with "Auth token not found" if you try to authenticate manually, and the raw model hangs forever if you forget.
+
+See also `production-smoke-testing.md` for the shell HTML structure and the
+Playwright idioms (`frameLocator` / absolute-URL `goto`) needed to reach
+into the iframe from E2E tests.
 
 ### CRITICAL: How WebSocket Works in the Gateway (Shell-Managed Model)
 

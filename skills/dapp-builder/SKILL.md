@@ -165,9 +165,11 @@ Set up the build system, CI, and deployment pipeline.
    browser console is clean catches CSP blocks, iframe-shell mistakes, and
    broken archives that no unit test reaches. See
    `references/production-smoke-testing.md`.
-6. **Confirm tooling preflight before publishing.** GNU tar is required for
-   reproducible contract IDs, and the gateway port is `7509` (not the older
-   `50509`). See "Tooling Preflight" in `references/build-system.md`.
+6. **Check the gateway port and (optionally) tar reproducibility.** The
+   gateway runs on `7509` — older docs and scripts still reference `50509`.
+   For byte-reproducible webapp archives across build hosts, invoke `tar`
+   with the GNU flags listed under "Tooling Preflight" in
+   `references/build-system.md`.
 
 References:
 - `references/build-system.md` — build, CI, packaging, tooling preflight.

@@ -12,32 +12,43 @@ This page covers the iframe shell architecture and a
 `production-liveness.spec.ts` recipe that asserts the publish + gateway
 integration actually produced a working app.
 
+> **Source of truth.** The CSP and shell HTML described below are emitted
+> by `freenet-core/crates/core/src/server/{client_api.rs,path_handlers.rs}`.
+> If a smoke-test recipe stops working, verify the wire shape against
+> those files first — they're the canonical reference.
+
 ## The Gateway Iframe Shell
 
 `GET /v1/contract/web/<id>/` does NOT return your webapp directly. It returns
-a tiny shell HTML that looks like:
+a tiny shell HTML, roughly (simplified — see `path_handlers.rs` for the
+exact attribute set):
 
 ```html
 <!DOCTYPE html>
 <html>
 <body>
   <iframe id="app"
-          sandbox="allow-scripts allow-forms allow-popups"
+          sandbox="allow-scripts allow-forms allow-popups allow-downloads allow-modals"
+          allow="clipboard-read; clipboard-write"
           data-src="/v1/contract/web/<id>/?__sandbox=1"></iframe>
   <script>
-    // freenetBridge(authToken) — shell page owns the real WebSocket,
-    // injects the auth token, and proxies postMessage from the iframe.
+    // Shell page owns the real WebSocket, holds the auth token, and
+    // proxies postMessage from the iframe.
     function freenetBridge(authToken) { ... }
   </script>
+  <script>freenetBridge("<auth_token>");</script>
 </body>
 </html>
 ```
 
-Your actual webapp loads inside the `<iframe id="app">` at the `?__sandbox=1`
-URL. The shell exists for origin isolation (sandboxed iframe, no
-parent-origin access) and auth token injection (the shell holds the token
-and forwards it via `postMessage`, so the webapp never sees it directly).
-See `ui-patterns.md` "Two Connection Models".
+The second `<script>` tag invokes `freenetBridge` with the auth token; that
+call is what assigns `iframe.src` from `data-src` and actually starts your
+webapp loading. Your webapp then runs inside `<iframe id="app">` at the
+`?__sandbox=1` URL. The shell exists for origin isolation (sandboxed
+iframe, no parent-origin access) and auth token injection (the shell holds
+the token and forwards it via `postMessage`, so the webapp never sees it
+directly). See `ui-patterns.md` "Two Connection Models" for the WebSocket
+implications.
 
 ### Practical Consequences for E2E Tests
 
@@ -56,27 +67,28 @@ await expect(app.locator("h1")).toHaveText("My App");
 
 **2. `page.goto("/")` lands on the node dashboard.**
 
-`page.goto(url)` resolves `url` against the *origin* of `playwright.config.ts`'s
-`baseURL`, ignoring its path. So if `baseURL` is
-`http://127.0.0.1:7509/v1/contract/web/<id>/`, then `page.goto("/")` resolves
-to `http://127.0.0.1:7509/` — the node's dashboard, not your webapp.
-
-Pass an empty path so the full baseURL is preserved, or pass an absolute URL:
+`page.goto(url)` resolves `url` against `playwright.config.ts`'s `baseURL`
+using `new URL(url, baseURL)`. If `url` starts with `/`, only the *origin*
+of `baseURL` is kept — the `/v1/contract/web/<id>/` path is dropped, so
+`page.goto("/")` lands on the node dashboard, not your webapp. The safest
+fix is to navigate to the absolute URL directly:
 
 ```ts
 // ❌ Wrong — drops the /v1/contract/web/<id>/ prefix, hits the dashboard
 await page.goto("/");
 
-// ✅ Right — preserves the full baseURL path
-await page.goto("");
-
-// ✅ Also right — absolute URL
+// ✅ Right — absolute URL, no resolution surprises
 await page.goto(process.env.FREENET_BASE_URL!);
+
+// Also works — empty path is resolved against baseURL as-is, preserving
+// its path. Relies on Playwright's baseURL resolution staying consistent
+// (the absolute-URL form above is more robust).
+await page.goto("");
 ```
 
 ## The `production-liveness.spec.ts` Recipe
 
-A ~50-line Playwright spec that catches "did publish + gateway integration
+A short Playwright spec that catches "did publish + gateway integration
 produce a usable webapp" regressions without needing identities or contract
 state. Runs in a few seconds.
 
@@ -92,38 +104,65 @@ const BASE_URL = process.env.FREENET_BASE_URL;
 const SKIP =
   !BASE_URL || !/\/v1\/contract\/web\//.test(BASE_URL);
 
+// Console errors that should fail the test. Add to this if your app has
+// known-benign console errors at startup that you don't want to gate on.
+const FATAL_CONSOLE_PATTERNS = [
+  /Content Security Policy/i,
+  /Refused to (load|apply|execute|connect)/i,
+  /Failed to load resource/i,
+  /net::ERR_/i,
+];
+
 test.describe("production liveness", () => {
   test.skip(SKIP, "FREENET_BASE_URL not set to a /v1/contract/web/... path");
 
-  test("webapp mounts, CSS loads, no console errors", async ({ page }) => {
-    const errors: string[] = [];
+  test("webapp mounts, CSS loads, no fatal console errors", async ({ page }) => {
+    const fatalErrors: string[] = [];
     page.on("console", (msg: ConsoleMessage) => {
-      if (msg.type() === "error") errors.push(msg.text());
+      if (msg.type() !== "error") return;
+      const text = msg.text();
+      if (FATAL_CONSOLE_PATTERNS.some((re) => re.test(text))) {
+        fatalErrors.push(text);
+      }
     });
-    page.on("pageerror", (err) => errors.push(String(err)));
+    page.on("pageerror", (err) => fatalErrors.push(String(err)));
+    page.on("requestfailed", (req) =>
+      fatalErrors.push(`requestfailed: ${req.url()} (${req.failure()?.errorText})`),
+    );
 
-    // page.goto("") preserves the full BASE_URL path through the shell.
-    await page.goto("");
+    // Navigate to the absolute URL so baseURL resolution can't strip the path.
+    await page.goto(BASE_URL!);
 
-    // Reach into the iframe shell. The app mounts at iframe#app.
+    // 1. Shell bridge ran and assigned iframe.src. If this fails, the
+    //    inline freenetBridge() script didn't execute (CSP on the shell,
+    //    auth-token problem, etc.) — separate from "webapp didn't mount".
+    await expect(page.locator("iframe#app")).toHaveAttribute(
+      "src",
+      /__sandbox=1/,
+      { timeout: 10_000 },
+    );
+
+    // 2. WASM ran: the bundled <h1> mounts inside the iframe.
     const app = page.frameLocator("iframe#app");
-
-    // 1. WASM ran: the bundled <h1> is present.
     await expect(app.locator("h1")).toBeVisible({ timeout: 15_000 });
 
-    // 2. Vendored CSS loaded: a known class produces the expected
-    //    computed style. This catches the CSP-blocked-CDN regression.
-    //    Replace ".title.is-1" / "font-size" / "48px" with values that
-    //    match a class from your vendored stylesheet.
-    const fontSize = await app
-      .locator(".title.is-1")
+    // 3. Vendored CSS loaded. fontWeight is a more reliable signal than
+    //    fontSize: user-agent default h1 weight is 700; most CSS
+    //    frameworks set a non-default value (Bulma .title => 600), so the
+    //    value flips if and only if the stylesheet fails to load. Pick a
+    //    class your vendored stylesheet sets to a non-default weight.
+    const fontWeight = await app
+      .locator("h1")
       .first()
-      .evaluate((el) => getComputedStyle(el).fontSize);
-    expect(fontSize).toBe("48px");
+      .evaluate((el) => getComputedStyle(el).fontWeight);
+    expect(fontWeight, "vendored CSS did not load — check CSP / vendor paths")
+      .not.toBe("700"); // user-agent default
 
-    // 3. No console errors. Catches CSP blocks, missing assets, WASM
-    //    panics, and unhandled promise rejections.
-    expect(errors, `console errors:\n${errors.join("\n")}`).toEqual([]);
+    // 4. No fatal console / network errors during page load.
+    expect(
+      fatalErrors,
+      `fatal console/network errors:\n${fatalErrors.join("\n")}`,
+    ).toEqual([]);
   });
 });
 ```
@@ -132,25 +171,53 @@ test.describe("production liveness", () => {
 
 | Assertion | Catches |
 |-----------|---------|
-| `app.locator("h1")` visible | Publish pipeline produced a usable archive; WASM ran; `?__sandbox=1` route works |
-| `getComputedStyle(...)` matches | Vendored CSS reached the iframe (CSP didn't block it) |
-| `errors == []` | CSP violations, missing assets, WASM panics, unhandled promise rejections |
+| `iframe#app[src=...__sandbox=1]` | Shell bridge `<script>` ran and wired the iframe |
+| `app.locator("h1")` visible | Publish pipeline produced a usable archive; WASM ran |
+| `fontWeight !== "700"` | Vendored CSS reached the iframe (CSP didn't block it) |
+| `fatalErrors == []` | CSP violations, `Refused to ...` blocks, `net::ERR_` failures, WASM panics, unhandled rejections |
+
+The `FATAL_CONSOLE_PATTERNS` list deliberately ignores generic
+`console.error` calls so benign warnings don't flake the test. If your app
+has a known-benign error at startup, it stays out of the fatal list by
+default; if a new error category appears that you want to gate on, add a
+regex.
 
 ### Wiring It In
 
-- **`playwright.config.ts`**: set `use.baseURL` to the full gateway URL
-  including the `/v1/contract/web/<id>/` path so `page.goto("")` preserves it.
+- **`playwright.config.ts`** — set `use.baseURL` to the same URL you put in
+  `FREENET_BASE_URL` so both halves of the config agree:
+
+  ```ts
+  // playwright.config.ts
+  import { defineConfig } from "@playwright/test";
+
+  export default defineConfig({
+    use: { baseURL: process.env.FREENET_BASE_URL },
+    testDir: "./e2e",
+  });
+  ```
+
 - **Locally**, after `fdev publish`:
   `FREENET_BASE_URL=http://127.0.0.1:7509/v1/contract/web/<id>/ npx playwright test e2e/production-liveness.spec.ts`.
-- **CI**: the skip guard makes the spec a no-op when `FREENET_BASE_URL` is
-  unset; gate it behind a job that boots a local node, publishes the webapp,
-  and exports the contract key.
-- **Release pipeline**: run post-publish against the production gateway. A
-  failure here means publish succeeded but the user-visible app is broken.
+
+- **CI**, sketched as a bash flow:
+  ```bash
+  freenet local &                                 # boot local node
+  fdev -p 7509 publish ... | tee publish.log      # publish webapp
+  KEY=$(grep -oE '[A-Za-z0-9]{40,}' publish.log)  # extract contract key
+  export FREENET_BASE_URL="http://127.0.0.1:7509/v1/contract/web/$KEY/"
+  npx playwright test e2e/production-liveness.spec.ts
+  ```
+  The skip guard makes the spec a no-op when `FREENET_BASE_URL` is unset,
+  so the same file is safe to keep in offline CI runs.
+
+- **Release pipeline** — run post-publish against the production gateway.
+  A failure here means publish succeeded but the user-visible app is
+  broken; treat it as a release blocker.
 
 ## Reference
 
 The `freenet/mail` v0.1.0 release cycle hit both the CSP and iframe issues
 before adopting this pattern. See:
-- [freenet/mail#27](https://github.com/freenet/mail/pull/27) — `frameLocator` + `page.goto("")` for the iframe shell
-- [freenet/mail#28](https://github.com/freenet/mail/pull/28) — vendor CSS / fonts under `ui/public/vendor/`
+- [freenet/mail#27](https://github.com/freenet/mail/pull/27) — `frameLocator` + `goto` for the iframe shell
+- [freenet/mail#28](https://github.com/freenet/mail/pull/28) — vendor CSS / fonts under the asset directory
