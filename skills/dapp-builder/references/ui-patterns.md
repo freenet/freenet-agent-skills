@@ -24,6 +24,50 @@ The UI is the interaction layer that connects to the Freenet Kernel via WebSocke
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Gateway CSP: Vendor Your Assets
+
+Every webapp served by the Freenet HTTP gateway runs under a same-origin
+Content-Security-Policy. The gateway sandbox iframe is loaded with:
+
+```
+default-src http://<gateway-host>:<port> 'unsafe-inline' 'unsafe-eval' blob: data:
+```
+
+Any remote `<link rel="stylesheet">` or `<script src>` from a CDN
+(`cdn.jsdelivr.net`, `cdnjs.cloudflare.com`, `fonts.googleapis.com`, etc.)
+is blocked. In development you usually won't notice — `dx serve` runs the UI
+on its own origin where the CSP doesn't apply — but after `fdev publish` your
+production webapp will render unstyled / scriptless with a `Content Security
+Policy directive` violation in the browser console.
+
+**Always vendor your assets into the webapp's asset directory** and reference
+them with relative paths:
+
+- Dioxus: drop CSS / fonts / scripts into `ui/public/vendor/` (or wherever
+  your `Dioxus.toml` `dev_assets_path` points). The release build copies that
+  tree verbatim into `dist/`, which is what gets bundled into the webapp
+  archive.
+- Vite / Webpack: import the stylesheet from `node_modules`, or copy the
+  vendored files into `public/`. Don't keep a CDN URL "just for dev".
+
+Reference your vendored assets via relative paths in `index.html`:
+
+```html
+<!-- Wrong: blocked by gateway CSP -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+
+<!-- Right: vendored, loaded same-origin -->
+<link rel="stylesheet" href="vendor/bulma.min.css">
+<link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
+```
+
+The catch is silent: dev mode passes, unit tests pass, the webapp publishes
+successfully, and *then* the gateway-hosted version renders broken. A
+production-liveness smoke test (see `production-smoke-testing.md`) catches
+this class of regression by asserting `getComputedStyle(...)` matches the
+expected value from a vendored class, which fails the moment CSP blocks the
+CSS.
+
 ## Dioxus Setup
 
 ### Project Structure

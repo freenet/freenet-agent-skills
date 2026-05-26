@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.2.3 (2026-05-26)
+- `dapp-builder`: documented the gateway CSP, iframe shell, and post-publish
+  smoke testing — three "only show up in production" pitfalls every Freenet
+  webapp hits (issue #22, distilled from freenet/mail v0.1.0).
+  - **Vendor your assets.** New "Gateway CSP: Vendor Your Assets" section in
+    `ui-patterns.md` explains the same-origin CSP, why CDN `<link>` /
+    `<script>` tags work in `dx serve` / `vite dev` but fail under
+    `fdev publish`, and the right way to bundle stylesheets / fonts into
+    your asset directory (e.g. `ui/assets/vendor/` for Dioxus). Cross-linked
+    from SKILL.md Phase 3.
+  - **Iframe shell + Playwright recipe.** New
+    `references/production-smoke-testing.md` documents the
+    `<iframe id="app">` shell architecture (with a "source of truth"
+    pointer to `freenet-core/.../server/path_handlers.rs`) and the two
+    Playwright idioms it breaks (`page.locator(...)` finds only the shell;
+    `page.goto("/")` lands on the dashboard). Includes a
+    `production-liveness.spec.ts` template that asserts WASM ran, vendored
+    CSS loaded (using `fontWeight` for stable assertion), and the browser
+    console has no CSP / network-failure errors. Cross-linked from SKILL.md
+    Phase 4.
+  - **Tooling preflight.** New section in `build-system.md` noting that the
+    gateway port is `7509` (not the legacy `50509`) and offering optional
+    `gnu-tar` flags for byte-reproducible webapp archives across
+    macOS/Linux build hosts.
+
 ## 1.2.2 (2026-05-26)
 - `local-dev` skill: document two silent isolation gotchas that bit users
   during freenet-email E2E debugging (issue #24).
