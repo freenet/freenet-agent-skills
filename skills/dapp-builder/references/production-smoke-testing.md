@@ -146,17 +146,21 @@ test.describe("production liveness", () => {
     const app = page.frameLocator("iframe#app");
     await expect(app.locator("h1")).toBeVisible({ timeout: 15_000 });
 
-    // 3. Vendored CSS loaded. fontWeight is a more reliable signal than
-    //    fontSize: user-agent default h1 weight is 700; most CSS
-    //    frameworks set a non-default value (Bulma .title => 600), so the
-    //    value flips if and only if the stylesheet fails to load. Pick a
-    //    class your vendored stylesheet sets to a non-default weight.
+    // 3. Vendored CSS loaded. Replace the selector and expected value
+    //    below with ones from YOUR vendored stylesheet — the assertion
+    //    has to flip iff the CSS loads. Concrete example: Bulma's
+    //    `.title.is-1` sets `font-weight: 600` (UA default for h1 is
+    //    700), so:
+    //      app.locator(".title.is-1").first()
+    //        .evaluate(el => getComputedStyle(el).fontWeight)  // → "600"
+    //    A bare `h1` + "not 700" won't work if your stylesheet doesn't
+    //    touch h1 — pick a selector your CSS definitely styles.
     const fontWeight = await app
-      .locator("h1")
+      .locator("REPLACE_WITH_YOUR_VENDORED_CLASS")
       .first()
       .evaluate((el) => getComputedStyle(el).fontWeight);
     expect(fontWeight, "vendored CSS did not load — check CSP / vendor paths")
-      .not.toBe("700"); // user-agent default
+      .toBe("REPLACE_WITH_EXPECTED_VALUE");
 
     // 4. No fatal console / network errors during page load.
     expect(
@@ -173,7 +177,7 @@ test.describe("production liveness", () => {
 |-----------|---------|
 | `iframe#app[src=...__sandbox=1]` | Shell bridge `<script>` ran and wired the iframe |
 | `app.locator("h1")` visible | Publish pipeline produced a usable archive; WASM ran |
-| `fontWeight !== "700"` | Vendored CSS reached the iframe (CSP didn't block it) |
+| `fontWeight` matches your vendored value | Vendored CSS reached the iframe (CSP didn't block it) |
 | `fatalErrors == []` | CSP violations, `Refused to ...` blocks, `net::ERR_` failures, WASM panics, unhandled rejections |
 
 The `FATAL_CONSOLE_PATTERNS` list deliberately ignores generic
