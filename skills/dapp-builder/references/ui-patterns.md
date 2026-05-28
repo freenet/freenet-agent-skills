@@ -1,6 +1,6 @@
 # UI Patterns
 
-The UI is the interaction layer that connects to the Freenet Kernel via WebSocket/HTTP. River uses Dioxus (Rust), but you can use any web framework.
+The UI is the interaction layer that connects to the Freenet Kernel via WebSocket/HTTP. River uses Dioxus (Rust), but you can use any web framework. This document covers both Dioxus and TypeScript + Vite approaches.
 
 ## Architecture Overview
 
@@ -96,9 +96,10 @@ edition = "2021"
 
 [dependencies]
 # Mirror River's pinned versions; see https://github.com/freenet/river/blob/main/ui/Cargo.toml
+# stdlib bumped to 0.8 to track current freenet-stdlib release.
 dioxus = { version = "0.7.3", features = ["web"] }
 dioxus-free-icons = { version = "0.10.0", features = ["font-awesome-solid"] }
-freenet-stdlib = { version = "0.6.0", features = ["net"] }
+freenet-stdlib = { version = "0.8", features = ["net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "Window", "Location"] }
@@ -499,6 +500,328 @@ async fn start_sync() {
     log::info!("Running in no-sync mode");
 }
 ```
+
+---
+
+## TypeScript + Vite Approach
+
+For teams more comfortable with TypeScript, Vite provides fast iteration with HMR, SCSS support, and familiar npm tooling. The `@freenetorg/freenet-stdlib` TypeScript package provides the WebSocket API with FlatBuffers serialization.
+
+### Vite Configuration
+
+The key trick: inject contract hashes and delegate key bytes as compile-time constants via Vite `define`. These are computed during `make build` and written to JSON/text files.
+
+```typescript
+// vite.config.ts
+import { defineConfig } from "vite";
+import { readFileSync, existsSync } from "fs";
+import { resolve } from "path";
+
+function readFileOrDefault(filename: string, fallback: string): string {
+  const filePath = resolve(__dirname, filename);
+  return existsSync(filePath) ? readFileSync(filePath, "utf-8").trim() : fallback;
+}
+
+export default defineConfig({
+  // If using a local freenet-stdlib checkout (common during development):
+  resolve: {
+    alias: {
+      "@freenetorg/freenet-stdlib/client-request": resolve(
+        __dirname, "../../freenet-stdlib/typescript/src/client-request.ts"
+      ),
+      "@freenetorg/freenet-stdlib/common": resolve(
+        __dirname, "../../freenet-stdlib/typescript/src/common.ts"
+      ),
+      "@freenetorg/freenet-stdlib": resolve(
+        __dirname, "../../freenet-stdlib/typescript/src/index.ts"
+      ),
+    },
+  },
+  define: {
+    // Contract key (base58 string) — written by `fdev inspect ... key`
+    __MODEL_CONTRACT__: JSON.stringify(
+      readFileOrDefault("model_code_hash.txt", "DEV_MODE_NO_CONTRACT_HASH")
+    ),
+    // Delegate key bytes (pre-decoded from base58 to number[])
+    __DELEGATE_KEY_BYTES__: readFileOrDefault("delegate_key_bytes.json", "[]"),
+    // Delegate code_hash bytes (BLAKE3 of raw WASM, as number[])
+    __DELEGATE_CODE_HASH_BYTES__: readFileOrDefault("delegate_code_hash_bytes.json", "[]"),
+  },
+  // CRITICAL: relative base path for sandboxed iframe serving
+  base: "./",
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+  },
+});
+```
+
+**Why `base: "./"` is critical:** Freenet serves webapp files inside a sandboxed iframe at a path like `/v1/contract/web/{CONTRACT_ID}/`. Absolute paths (`/assets/...`) would resolve against the node root and 404. Relative paths (`./assets/...`) resolve correctly within the iframe.
+
+### TypeScript Type Declarations
+
+Declare the compile-time constants so TypeScript doesn't complain:
+
+```typescript
+// src/vite-env.d.ts
+declare const __MODEL_CONTRACT__: string;
+declare const __DELEGATE_KEY_BYTES__: number[];
+declare const __DELEGATE_CODE_HASH_BYTES__: number[];
+```
+
+### WebSocket Connection (TypeScript)
+
+Use `FreenetWsApi` from the stdlib TypeScript package. It handles FlatBuffers serialization/deserialization automatically.
+
+```typescript
+import {
+  FreenetWsApi,
+  ContractKey,
+  GetRequest,
+  GetResponse,
+  UpdateRequest,
+  UpdateResponse,
+  UpdateNotification,
+  UpdateData,
+  UpdateDataType,
+  DeltaUpdate,
+  SubscribeRequest,
+  PutResponse,
+  DelegateResponse,
+  HostError,
+  ResponseHandler,
+} from "@freenetorg/freenet-stdlib";
+
+// Build WebSocket URL from current location (works in sandbox iframe)
+const wsUrl = new URL(`ws://${location.host}/v1/contract/command`);
+
+const handler: ResponseHandler = {
+  onContractPut: (response: PutResponse) => { /* fired on put completion */ },
+  onContractGet: (response: GetResponse) => {
+    // Decode state bytes → JSON → your app types
+    const decoder = new TextDecoder("utf8");
+    const json = decoder.decode(Uint8Array.from(response.state));
+    const state = JSON.parse(json);
+    // Update your UI...
+  },
+  onContractUpdate: (response: UpdateResponse) => { /* fired on update completion */ },
+  onContractUpdateNotification: (notification: UpdateNotification) => {
+    // Handle delta updates from subscriptions
+    const updateData = notification.update as UpdateData;
+    if (updateData?.updateDataType === UpdateDataType.DeltaUpdate) {
+      const delta = updateData.updateData as { delta: number[] };
+      const json = new TextDecoder().decode(Uint8Array.from(delta.delta));
+      // Parse and apply delta...
+    }
+  },
+  // Added in stdlib v0.2.0: fired when a GET targets a missing contract instance
+  onContractNotFound: (instanceId) => {
+    console.warn("[freenet] Contract not found:", instanceId);
+  },
+  // Added in stdlib v0.2.0: fired on SUBSCRIBE confirmation (subscribed flag = success)
+  onSubscribeResponse: (key, subscribed) => {
+    console.log("[freenet] Subscribe:", key.encode(), "ok=", subscribed);
+  },
+  onDelegateResponse: (response: DelegateResponse) => { /* delegate result */ },
+  onErr: (err: HostError) => {
+    console.error("[freenet] Error:", err.cause);
+  },
+  onOpen: () => {
+    console.log("[freenet] Connected");
+    // Now safe to send GET, SUBSCRIBE, etc.
+  },
+  // Added in stdlib v0.2.0: WebSocket close. All pending promises will already have rejected.
+  onClose: (code, reason) => {
+    console.warn("[freenet] Disconnected:", code, reason);
+    // App layer decides reconnect strategy — SDK does NOT auto-reconnect.
+  },
+};
+
+// CRITICAL: Pass empty string as auth token.
+// In the sandbox iframe, cookie reading is blocked. The shell page handles auth
+// via the postMessage bridge. Passing "" tells FreenetWsApi to skip cookie reading.
+const api = new FreenetWsApi(wsUrl, handler, "");
+```
+
+### Building ContractKey from Hash
+
+The contract hash (base58 string) from `fdev inspect` needs to be converted to a `ContractKey`:
+
+```typescript
+const contractHash = __MODEL_CONTRACT__; // injected by Vite
+const keyFromId = ContractKey.fromInstanceId(contractHash);
+const instanceBytes = keyFromId.bytes();
+// ContractKey needs both instance bytes and code hash bytes.
+// When no parameters are used, they're the same.
+const contractKey = new ContractKey(instanceBytes, instanceBytes);
+```
+
+### Contract Operations
+
+stdlib TS v0.2.0 made `get`, `put`, `update`, `subscribe`, and `disconnect` **promise-based**. They resolve with the typed response, reject on timeout (default 30s), connection close, or host error. The legacy callbacks in `ResponseHandler` still fire for the same response — both APIs coexist for backward compatibility.
+
+```typescript
+// GET — fetch current state (await + try/catch)
+try {
+  const getReq = new GetRequest(contractKey, true);
+  const response = await api.get(getReq);
+  const json = new TextDecoder().decode(Uint8Array.from(response.state));
+  const state = JSON.parse(json);
+  // ...use state
+} catch (err) {
+  console.error("[freenet] GET failed:", err); // timeout / not-found / closed
+}
+
+// SUBSCRIBE — receive real-time updates (promise resolves on SubscribeResponse)
+try {
+  await api.subscribe(new SubscribeRequest(contractKey, []));
+} catch (err) {
+  console.error("[freenet] SUBSCRIBE failed:", err);
+}
+
+// UPDATE — send a delta
+const encoder = new TextEncoder();
+const deltaBytes = encoder.encode(JSON.stringify(myDelta));
+const delta = new DeltaUpdate(Array.from(deltaBytes));
+const update = new UpdateData(UpdateDataType.DeltaUpdate, delta);
+try {
+  await api.update(new UpdateRequest(contractKey, update));
+} catch (err) {
+  console.error("[freenet] UPDATE failed:", err);
+}
+```
+
+### Large state handling (streaming)
+
+stdlib TS v0.2.0 ports the Rust streaming protocol. You don't need to call any special API — chunking and reassembly are transparent — but you should know the limits.
+
+**Outbound (request side):**
+- Any serialized request larger than `CHUNK_THRESHOLD = 512 KB` is automatically split into sequential `StreamChunk` messages of `CHUNK_SIZE = 256 KB` by `sendRequest()`.
+- A 600 KB `PutRequest` goes over the wire as multiple chunks; the receiver reassembles it. Your code just does `await api.put(req)` — no opt-in flag.
+
+**Inbound (response side):**
+- The SDK reassembles incoming chunked responses inside `ReassemblyBuffer`. If you ever need raw control (e.g., a custom transport), import the buffer directly:
+  ```typescript
+  import { ReassemblyBuffer } from "@freenetorg/freenet-stdlib"; // or "@freenetorg/freenet-stdlib/streaming"
+  ```
+- Limits hard-coded in v0.2.0: per-stream TTL **60 s**, max **8 concurrent streams**, max **256 chunks/stream**. Out-of-order chunks are tolerated; duplicates and overflows are rejected with `StreamError`.
+
+**When this matters:** large media uploads, snapshot-style state initialization, multi-MB contract codes. Below 512 KB the protocol is invisible.
+
+### Delegate Communication (TypeScript)
+
+Sending messages to delegates from TypeScript requires building FlatBuffers objects manually. The public API only exposes high-level types; you need internal `-T` types (the mutable FlatBuffers table classes) that have `pack()` methods.
+
+**Dynamic imports are required** because these internal types aren't part of the main export:
+
+```typescript
+import { FreenetWsApi, DelegateRequest } from "@freenetorg/freenet-stdlib";
+
+export async function sendDelegateMessage(
+  api: FreenetWsApi,
+  delegateKeyBytes: number[],
+  delegateCodeHash: number[],
+  message: object
+): Promise<void> {
+  const payload = Array.from(new TextEncoder().encode(JSON.stringify(message)));
+
+  // Import internal FlatBuffers table types (resolved by Vite aliases)
+  // @ts-ignore — resolved by Vite alias at build time
+  const { ApplicationMessageT } = await import("@freenetorg/freenet-stdlib/common");
+  // @ts-ignore — resolved by Vite alias at build time
+  const {
+    ClientRequestT,
+    ClientRequestType,
+    ApplicationMessagesT,
+    DelegateKeyT,
+    DelegateRequestType,
+    InboundDelegateMsgT,
+    InboundDelegateMsgType,
+  } = await import("@freenetorg/freenet-stdlib/client-request");
+
+  // Build the message chain
+  const appMsg = new ApplicationMessageT(payload, [], false);
+  const inbound = new InboundDelegateMsgT(
+    InboundDelegateMsgType.common_ApplicationMessage,
+    appMsg
+  );
+
+  // DelegateKey has TWO fields: key bytes AND code_hash bytes
+  const delegateKey = new DelegateKeyT(delegateKeyBytes, delegateCodeHash);
+
+  const appMessages = new ApplicationMessagesT(delegateKey, [], [inbound]);
+  const delegateReq = new DelegateRequest(
+    DelegateRequestType.ApplicationMessages,
+    appMessages
+  );
+  const clientReq = new ClientRequestT(
+    ClientRequestType.DelegateRequest,
+    delegateReq
+  );
+
+  // sendRequest is a private method — access via cast
+  (api as any).sendRequest(clientReq);
+}
+```
+
+> **Warning — unstable API:** `(api as any).sendRequest(...)` reaches into a private SDK method because the public delegate-request builder is not yet stable in stdlib v0.2.0. This cast may break on any minor SDK bump. Track [freenet-stdlib](https://github.com/freenet/freenet-stdlib) for a public `api.sendDelegateMessage()` (or equivalent) before relying on this in production.
+
+### Parsing Delegate Responses
+
+```typescript
+import { DelegateResponse } from "@freenetorg/freenet-stdlib";
+
+export function parseDelegateResponse(response: DelegateResponse): object[] {
+  const results: object[] = [];
+  if (!response.values) return results;
+
+  for (const outbound of response.values) {
+    // OutboundDelegateMsgType.common_ApplicationMessage = 1
+    if (outbound.inboundType !== 1) continue;
+
+    const msg = outbound.inbound as { payload?: number[] } | null;
+    if (!msg?.payload?.length) continue;
+
+    try {
+      const bytes = new Uint8Array(msg.payload);
+      const json = new TextDecoder().decode(bytes);
+      results.push(JSON.parse(json));
+    } catch (e) {
+      console.warn("Failed to parse delegate payload:", e);
+    }
+  }
+
+  return results;
+}
+```
+
+### Pre-Decoded Key Bytes Pattern
+
+The browser sandbox can't reliably run base58 decoding libraries. Pre-decode keys at build time and inject as JSON arrays:
+
+```bash
+# In your Makefile publish-identity target:
+# 1. Publish delegate, capture base58 key
+key=$(fdev publish --code ... delegate 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'key: [^ ,]*' | head -1 | cut -d' ' -f2)
+
+# 2. Decode base58 → JSON byte array (requires bs58 npm package)
+node -e "const bs58=require('bs58');console.log(JSON.stringify(Array.from(bs58.default.decode('$key'))))" > delegate_key_bytes.json
+
+# 3. Compute code_hash from raw WASM (BLAKE3)
+code_hash_hex=$(b3sum --no-names target/wasm32-unknown-unknown/release/my_delegate.wasm)
+node -e "const h='$code_hash_hex'.trim();console.log(JSON.stringify(Array.from(Buffer.from(h,'hex'))))" > delegate_code_hash_bytes.json
+```
+
+Vite injects these as `__DELEGATE_KEY_BYTES__` and `__DELEGATE_CODE_HASH_BYTES__` compile-time constants.
+
+### Microblogging Reference
+
+See [freenet-microblogging](https://github.com/freenet/freenet-microblogging) for a complete TypeScript + Vite implementation:
+- `web/src/freenet-api.ts` — FreenetWsApi wrapper with GET/UPDATE/SUBSCRIBE
+- `web/src/delegate-api.ts` — Delegate FlatBuffers message building
+- `web/src/identity.ts` — Identity management (delegate + in-memory fallback)
+- `web/vite.config.ts` — Build-time key injection
+- `Makefile` — Full build pipeline
 
 ## River UI Reference
 

@@ -1,6 +1,6 @@
 # Build System
 
-Freenet dApps use `cargo-make` for orchestrating builds across contracts, delegates, and UI.
+Freenet dApps can use `cargo-make` (Makefile.toml) or plain `Makefile` for orchestrating builds across contracts, delegates, and UI. River uses cargo-make; freenet-microblogging uses a plain Makefile with Vite.
 
 ## Prerequisites
 
@@ -120,7 +120,7 @@ publish     = false
 [workspace]
 
 [dependencies]
-freenet-stdlib = { version = "=0.6.0", features = ["contract"] }
+freenet-stdlib = { version = "=0.8.0", features = ["contract"] }
 ml-dsa         = "=0.0.4"
 chrono         = { version = "=0.4.40", default-features = false }
 serde          = { version = "=1.0.219", features = ["derive"] }
@@ -252,7 +252,8 @@ resolver = "2"
 [workspace.dependencies]
 # Mirror River's pinned versions; bump together when upgrading. Check
 # https://github.com/freenet/river/blob/main/Cargo.toml before pinning.
-freenet-stdlib = { version = "0.6.0", features = ["contract"] }
+# stdlib bumped to 0.8 to track current freenet-stdlib release (0.6→0.7→0.8).
+freenet-stdlib = { version = "0.8", features = ["contract"] }
 freenet-scaffold = "0.2.2"
 freenet-scaffold-macro = "0.2.2"
 serde = { version = "1", features = ["derive"] }
@@ -518,6 +519,126 @@ cargo make sign-webapp            # Sign for deployment
 cargo make publish                # Publish to Freenet
 ```
 
+## Plain Makefile (TypeScript + Vite)
+
+For TypeScript UIs, a plain `Makefile` is simpler than cargo-make:
+
+```makefile
+PROJECT_DIR := $(abspath .)
+WEB_DIR := $(PROJECT_DIR)/web
+CONTRACT_DIR := $(PROJECT_DIR)/contracts/my-contract
+DELEGATE_DIR := $(PROJECT_DIR)/delegates/my-delegate
+
+# Require CARGO_TARGET_DIR to avoid path assumptions
+ifeq ($(CARGO_TARGET_DIR),)
+$(error CARGO_TARGET_DIR is not set)
+endif
+
+build: contract delegate publish-contract publish-delegate webapp publish-webapp
+
+# --- Contract ---
+contract:
+	cd $(CONTRACT_DIR) && fdev build
+	# Extract contract key hash for the webapp
+	hash=$$(fdev inspect $(CONTRACT_DIR)/build/freenet/my_contract key \
+	    | grep 'code key:' | cut -d' ' -f3) && \
+	    printf '%s' $$hash > $(WEB_DIR)/model_code_hash.txt
+
+publish-contract:
+	fdev publish \
+	    --code $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/my_contract.wasm \
+	    contract \
+	    --state $(CONTRACT_DIR)/initial_state.json
+
+# --- Delegate ---
+delegate:
+	cd $(DELEGATE_DIR) && fdev build --package-type delegate
+
+publish-delegate:
+	# 1. Publish and capture key (strip ANSI escape codes from fdev output)
+	key=$$(fdev publish \
+	    --code $(DELEGATE_DIR)/build/freenet/my_delegate \
+	    delegate 2>&1 \
+	    | sed 's/\x1b\[[0-9;]*m//g' \
+	    | grep -o 'key: [^ ,]*' | head -1 | cut -d' ' -f2) && \
+	    printf '%s' $$key > $(WEB_DIR)/delegate_key.txt && \
+	    node -e "const bs58=require('bs58'); \
+	        console.log(JSON.stringify(Array.from(bs58.default.decode('$$key'))))" \
+	        > $(WEB_DIR)/delegate_key_bytes.json
+	# 2. Compute code_hash from raw WASM (BLAKE3)
+	code_hash_hex=$$(b3sum --no-names \
+	    $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/my_delegate.wasm) && \
+	    node -e "console.log(JSON.stringify(Array.from( \
+	        Buffer.from('$$code_hash_hex'.trim(),'hex'))))" \
+	        > $(WEB_DIR)/delegate_code_hash_bytes.json
+
+# --- Webapp ---
+webapp:
+	cd $(WEB_DIR) && npm install && npm run build && fdev build
+
+publish-webapp:
+	fdev publish \
+	    --code $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/my_web.wasm \
+	    contract \
+	    --state $(WEB_DIR)/build/freenet/contract-state
+
+# --- Utilities ---
+run-node:
+	RUST_BACKTRACE=1 RUST_LOG=freenet=debug,info \
+	    freenet local --ws-api-address 127.0.0.1
+
+clean-node:
+	rm -rf ~/Library/Application\ Support/The-Freenet-Project-Inc.Freenet
+	rm -rf ~/Library/Caches/The-Freenet-Project-Inc.freenet
+
+clean:
+	cargo clean
+	rm -rf $(WEB_DIR)/dist $(WEB_DIR)/build
+	rm -f $(WEB_DIR)/model_code_hash.txt $(WEB_DIR)/delegate_key*.json
+```
+
+## fdev Publish: Contracts vs Delegates (CRITICAL)
+
+The `fdev publish` command works **differently** for contracts and delegates:
+
+| | Contracts | Delegates |
+|---|---|---|
+| `--code` input | **Raw WASM** from `target/wasm32-unknown-unknown/release/` | **Packaged file** from `build/freenet/` (created by `fdev build --package-type delegate`) |
+| Subcommand | `contract` | `delegate` |
+| State | `--state initial_state.json` | None |
+
+```bash
+# Contract: raw WASM file
+fdev publish --code target/wasm32-unknown-unknown/release/my_contract.wasm \
+    contract --state initial_state.json
+
+# Delegate: packaged file (NOT raw WASM)
+fdev publish --code delegates/my-delegate/build/freenet/my_delegate \
+    delegate
+```
+
+Using the wrong file type causes silent failures or cryptic errors.
+
+### ANSI Escape Code Stripping
+
+`fdev` output contains ANSI color codes. When piping to `grep` or capturing keys, strip them:
+
+```bash
+fdev publish ... 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'key: [^ ,]*'
+```
+
+### clean-node Pattern
+
+When republishing contracts/delegates with the same key (common during development), the node may reject the update. Delete node data between iterations:
+
+```bash
+# macOS
+rm -rf ~/Library/Application\ Support/The-Freenet-Project-Inc.Freenet
+
+# Linux
+rm -rf ~/.local/share/freenet/
+```
+
 ## Contract WASM Optimization
 
 For smaller WASM files, add to contract's Cargo.toml:
@@ -760,6 +881,7 @@ if error_msg.contains("GET operation timed out") {
 }
 ```
 
-## River Build Reference
+## Reference Projects
 
-See [River's Makefile.toml](https://github.com/freenet/river/blob/main/Makefile.toml) for a complete build configuration.
+- [River's Makefile.toml](https://github.com/freenet/river/blob/main/Makefile.toml) — cargo-make with Dioxus UI
+- [freenet-microblogging's Makefile](https://github.com/freenet/freenet-microblogging/blob/main/Makefile) — plain Make with TypeScript + Vite UI

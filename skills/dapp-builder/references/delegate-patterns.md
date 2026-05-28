@@ -18,7 +18,9 @@ impl DelegateInterface for MyDelegate {
     /// Process inbound messages, return outbound messages
     fn process(
         parameters: Parameters<'static>,
-        attested: Option<&'static [u8]>,
+        // Identifies the caller (web app or peer delegate). Replaced the old
+        // `attested: Option<&[u8]>` in stdlib v0.5. See "Inter-delegate messaging".
+        origin: Option<MessageOrigin>,
         message: InboundDelegateMsg,
     ) -> Result<Vec<OutboundDelegateMsg>, DelegateError>;
 }
@@ -80,12 +82,14 @@ pub enum OutboundDelegateMsg {
 
 ## Secret Storage Pattern
 
+> **API drift note (stdlib v0.5+):** The snippets below illustrate the *pre-v0.5* secrets-by-message API (`SetSecretRequest` / `GetSecretRequest` / `GetSecretResponse` as `InboundDelegateMsg` / `OutboundDelegateMsg` variants), plus the old `attested: Option<&[u8]>` context blob. In v0.5+ secrets are accessed **synchronously** via `DelegateCtx::get_secret` / `set_secret` / `has_secret` / `remove_secret`, and context attestation is the `Option<MessageOrigin>` discussed in [Inter-delegate messaging](#inter-delegate-messaging). The conceptual pattern (origin-namespaced keys, async context with pending ops) still applies — only the call shape changed. Update against `freenet-stdlib/rust/src/delegate_interface.rs` when porting to current stdlib.
+
 Delegates use secret storage for private, persistent data:
 
 ```rust
 fn process(
     parameters: Parameters<'static>,
-    attested: Option<&'static [u8]>,
+    origin: Option<MessageOrigin>,
     message: InboundDelegateMsg,
 ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
     match message {
@@ -107,6 +111,7 @@ fn process(
             Ok(vec![OutboundDelegateMsg::ApplicationMessage(...)])
         }
 
+        // Wildcard arm required since stdlib v0.6 marked this enum #[non_exhaustive]
         _ => Ok(vec![])
     }
 }
@@ -132,6 +137,27 @@ impl ChatDelegateKey {
 // Keys are stored as: "abc123:user_data"
 // Each app (origin) has isolated storage
 ```
+
+## Inter-delegate messaging
+
+Starting in stdlib v0.5, `DelegateInterface::process()` receives an `Option<MessageOrigin>` (which replaced the older `attested: Option<&[u8]>` parameter). When one delegate sends an `ApplicationMessage` to another delegate via `OutboundDelegateMsg::SendDelegateMessage`, the runtime attests the caller's identity so the receiver can make authorization decisions.
+
+The `MessageOrigin` enum has two variants today:
+
+- `MessageOrigin::WebApp(ContractInstanceId)` — the message was sent by a web application backed by the given contract.
+- `MessageOrigin::Delegate(DelegateKey)` — the message was sent by another delegate. The carried key is the runtime-attested identity of the calling delegate.
+
+```rust
+match origin {
+    Some(MessageOrigin::WebApp(id)) => { /* called from contract UI */ }
+    Some(MessageOrigin::Delegate(id)) => { /* called from another delegate, verify id whitelist */ }
+    None => { /* unattested — treat as untrusted */ }
+    // Wildcard arm required since stdlib v0.6 marked this enum #[non_exhaustive]
+    _ => { /* future variants */ }
+}
+```
+
+**Security note:** Do not trust `MessageOrigin::Delegate` for sensitive operations unless you whitelist the caller's `DelegateKey`. Per the stdlib docs, an inter-delegate message *replaces* rather than composes with any inherited `WebApp` origin the calling delegate may itself hold — the receiver sees only `Delegate(caller_key)` for the duration of the call and does not gain contract access on behalf of any web app the caller was acting for. Authorize on the calling delegate's identity alone.
 
 ## Async Operation Pattern
 
@@ -177,6 +203,7 @@ fn process(..., message: InboundDelegateMsg) -> Result<Vec<OutboundDelegateMsg>,
                 // Process and send result to UI
             }
         }
+        // Wildcard arm required since stdlib v0.6 marked this enum #[non_exhaustive]
         _ => {}
     }
 
@@ -224,6 +251,7 @@ fn process(...) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
                 )])
             }
         }
+        // Wildcard arm required since stdlib v0.6 marked this enum #[non_exhaustive]
         _ => Ok(vec![])
     }
 }
@@ -277,6 +305,49 @@ fn encrypt_for_recipient(
      │ StoreConfirm │                   │
      │◀─────────────│                   │
 ```
+
+## DelegateKey Anatomy (CRITICAL)
+
+A `DelegateKey` has **two separate fields**, not one. Confusing them causes silent failures where the node can't find the delegat
+```
+DelegateKey {
+    key:       BLAKE3(code_hash || params)   // the lookup key used by the node
+    code_hash: BLAKE3(raw_wasm_bytes)        // hash of the raw WASM file
+}
+```
+
+### How to Compute Each Field
+
+- **`code_hash`**: `BLAKE3` of the raw `.wasm` file bytes. Compute with `b3sum`:
+  ```bash
+  b3sum --no-names target/wasm32-unknown-unknown/release/my_delegate.wasm
+  ```
+
+- **`key`**: `BLAKE3(code_hash_bytes || params_bytes)`. When params are empty, this is `BLAKE3(code_hash_bytes)` — NOT the same as `code_hash` (which is `BLAKE3(wasm_bytes)`).
+
+### The Double-Hashing Bug
+
+**Bug pattern:** Using `CodeHash::from_code(bytes)` on bytes that are already a hash. `from_code()` runs BLAKE3 on its input. If the input is already a BLAKE3 hash, you get `BLAKE3(BLAKE3(wasm))` instead of `BLAKE3(wasm)`.
+
+This happened in `freenet-stdlib/rust/src/delegate_interface.rs` during FlatBuffers deserialization — the `code_hash` field was already hashed bytes, but the deserialization code re-hashed them.
+
+**Fix:** Use `CodeHash::new(bytes)` (wraps raw bytes) instead of `CodeHash::from_code(bytes)` (hashes then wraps) when working with bytes that are already a hash.
+
+**When building delegate messages from TypeScript**, you must pass BOTH fields correctly:
+
+```typescript
+// DelegateKeyT takes (key_bytes, code_hash_bytes) — they are DIFFERENT
+const delegateKey = new DelegateKeyT(delegateKeyBytes, delegateCodeHashBytes);
+```
+
+If you pass `keyBytes` for both fields (or `codeHashBytes` for both), the node won't find the delegate.
+
+### Pre-Publishing Checklist
+
+1. Compute `code_hash` with `b3sum` on the raw WASM
+2. Capture the full `key` from `fdev publish` output (strip ANSI: `sed 's/\x1b\[[0-9;]*m//g'`)
+3. Pre-decode both to byte arrays for the UI (base58 → JSON for key, hex → JSON for code_hash)
+4. Verify both are injected separately in your build config
 
 ## Delegate WASM Upgrade & Secret Migration
 
