@@ -22,6 +22,44 @@ cargo install --path crates/fdev   # fdev development tool
 npm install  # in ui/ directory
 ```
 
+### Installing `fdev` / `freenet`
+
+Two ways. Pick deliberately.
+
+**From the freenet-core release tag (recommended for CI and reproducible
+local setups).** Download the prebuilt `.tar.gz` for your target from
+the freenet-core GitHub releases, extract `fdev` / `freenet` into
+`~/.cargo/bin/`, mark executable. This is the same artifact CI uses and
+takes ~5s instead of 10–15 min, and — importantly — it pins you to a
+known fdev API surface. The facade pointer-flip flow (`fdev execute
+update --as-state`) requires a recent enough fdev; older builds silently
+wrap the file as `UpdateData::Delta` and the on-chain contract rejects
+it. The release tag is the most reliable way to know which flags exist.
+
+```bash
+VERSION="0.2.65"   # match the gateway you publish to
+TARGET="$(uname -m)-$(uname | tr '[:upper:]' '[:lower:]')"
+case "$TARGET" in
+  arm64-darwin)  TRIPLE="aarch64-apple-darwin" ;;
+  x86_64-darwin) TRIPLE="x86_64-apple-darwin" ;;
+  *-linux)       TRIPLE="$(uname -m)-unknown-linux-musl" ;;
+esac
+
+cd /tmp
+curl -sSL "https://github.com/freenet/freenet-core/releases/download/v${VERSION}/fdev-${TRIPLE}.tar.gz"     | tar xz
+curl -sSL "https://github.com/freenet/freenet-core/releases/download/v${VERSION}/freenet-${TRIPLE}.tar.gz" | tar xz
+install -m 0755 fdev freenet ~/.cargo/bin/
+fdev --version && freenet --version
+```
+
+**From source (`cargo install --path …`).** Right when you're developing
+on freenet-core itself or you need an unreleased fix. Slower; gives you
+whatever's on the current branch, which may or may not match the
+gateway you're publishing to. **Version drift between your CLI and the
+gateway breaks publishes silently** (wire format / protocol enums change
+across stdlib minor releases) — see "Version drift is a real hazard"
+below.
+
 ### Tooling Preflight
 
 Two release-time gotchas to know about:
@@ -40,6 +78,164 @@ Two release-time gotchas to know about:
   source tree. macOS BSD `tar` doesn't accept those flags, so on macOS
   install GNU tar (`brew install gnu-tar`) and use `gtar`. Optional but
   recommended; River currently uses plain `tar -cJf`.
+
+## Per-contract lockfile isolation
+
+**The problem.** A Freenet contract ID is `hash(wasm, parameters)`. The
+WASM bytes depend on every transitive dependency. If your contract
+shares the workspace `Cargo.lock` with the UI crate, a routine bump to
+`dioxus`, `chrono`, `serde`, etc. resolves a different patch version
+deep in the contract's dependency tree → WASM bytes shift → contract ID
+rotates → every user's stored state under the old ID is orphaned.
+
+This happens silently. There is no warning. The first sign is users
+saying "my inbox is empty after the update."
+
+**The fix.** Exclude every committable-state contract / delegate from
+the workspace, give it its own `Cargo.lock`, and pin every dependency
+that affects WASM output with `=x.y.z`.
+
+```toml
+# Cargo.toml (workspace root)
+[workspace]
+members = ["common", "ui", "tools/*"]
+exclude = [
+    "contracts/inbox",
+    "contracts/facade",
+    "contracts/facade-types",      # shared types used by facade contract
+    "delegates/token-record",
+]
+```
+
+```toml
+# contracts/inbox/Cargo.toml — NOT a workspace member
+[package]
+name        = "my-inbox-contract"
+version     = "0.1.0"
+edition     = "2021"
+publish     = false
+
+# One-line stanza so fdev's get_workspace_target_dir() walk doesn't
+# panic when run from inside this crate.
+[workspace]
+
+[dependencies]
+freenet-stdlib = { version = "=0.6.0", features = ["contract"] }
+ml-dsa         = "=0.0.4"
+chrono         = { version = "=0.4.40", default-features = false }
+serde          = { version = "=1.0.219", features = ["derive"] }
+ciborium       = "=0.2.2"
+```
+
+Commit `contracts/inbox/Cargo.lock`. `cargo update` at the workspace
+root cannot touch it. The contract WASM stays byte-stable until you
+edit a `=x.y.z` pin in this manifest yourself.
+
+**`CARGO_TARGET_DIR` per crate.** `fdev build` walks up to find
+`Cargo.toml`, then uses cargo's default `target/` (which is the
+workspace's). Two problems: (1) it shares a `target/` with workspace
+builds whose dependency tree is different, so cargo wastes work, and
+(2) on machines that have the workspace `Cargo.lock`-locked target dir
+already populated, fdev's resolver disagrees with cargo and panics.
+Pin the target dir to the crate-local one in every build task:
+
+```toml
+# Makefile.toml
+[tasks.build-inbox-contract]
+description = "Build the inbox contract WASM (lockfile-isolated)"
+script = '''
+CRATE_DIR="${CARGO_MAKE_WORKING_DIRECTORY}/contracts/inbox"
+cd "$CRATE_DIR"
+CARGO_TARGET_DIR="$CRATE_DIR/target" fdev build --features contract
+'''
+```
+
+**Deliberate rotation.** When you DO want to rotate the contract ID
+(e.g. a contract upgrade), it's now a one-line diff: bump a `=x.y.z`
+pin in the contract's manifest, rebuild, and pair the change with the
+migration recipe in `contract-patterns.md` (append the prior
+`CODE_HASH` to your `LEGACY_*_CODE_HASHES` list). The rotation is now
+explicit, reviewable, and recoverable.
+
+## Contract ID reproducibility caveat
+
+Contract IDs are **not reproducible from source** under the
+signed-and-committed publishing pattern.
+
+The web-container / facade signed-payload format includes a `version`
+field, and the standard signer (`web-container-tool`) writes
+`SystemTime::now().as_secs()` into that field at signing time. Two
+developers signing the same source tree at different moments produce
+different payload bytes → different IDs.
+
+Why timestamp and not commit hash? The on-chain `web-container`
+contract's `update_state` requires strictly monotonic `version` across
+updates. A commit-hash scheme is not monotonic (any hash can compare
+either way against any other). A previous attempt at commit-hash
+versioning broke the v0.1.1 release of freenet/mail when the on-chain
+update was rejected for non-monotonic version.
+
+**Practical consequences.**
+
+- `published-contract/contract-id.txt` (and `facade-id.txt`) are
+  **authoritative artifacts**, not derivable. Commit them.
+- CI cannot verify "the source still produces this ID" — only "the
+  source still produces these WASM **bytes**". Use byte-equality on
+  `published-contract/<contract>.wasm`, not on the ID.
+- A second developer cannot "redo" a release from a clean checkout and
+  get the same ID; they must pull the committed snapshot.
+- `rust-toolchain.toml` must be committed and mirrored in any CI
+  workflow that rebuilds the contract — rustc version affects WASM
+  bytes, and the byte-equality check will fail if CI's rustc differs
+  from the one that produced the committed snapshot.
+
+## Publishing hygiene: pre-commit hook
+
+The signed-and-committed model means `published-contract/` is the only
+place a `.wasm` should ever live in the tree. Any other staged `.wasm`
+is either (a) a forgotten build artifact, or (b) a snapshot drift the
+author didn't notice. Both lose users access to old state when they
+land.
+
+Enforce it locally with a repo-managed git hook:
+
+```bash
+# .githooks/pre-commit
+#!/bin/bash
+set -euo pipefail
+
+stray=$(git diff --cached --name-only --diff-filter=A \
+        | grep -E '\.wasm$' \
+        | grep -v '^published-contract/' || true)
+if [ -n "$stray" ]; then
+    echo "error: .wasm files staged outside published-contract/:" >&2
+    echo "$stray" >&2
+    echo "Either move them to published-contract/ (with a matching" >&2
+    echo "contract-id.txt update) or add them to .gitignore." >&2
+    exit 1
+fi
+
+# If published-contract/*.wasm changed, contract-id.txt must change too.
+wasm_changed=$(git diff --cached --name-only \
+               | grep -E '^published-contract/.*\.wasm$' || true)
+if [ -n "$wasm_changed" ]; then
+    id_staged=$(git diff --cached --name-only \
+                | grep -E '^published-contract/(contract|facade)-id\.txt$' || true)
+    if [ -z "$id_staged" ]; then
+        echo "error: published-contract/*.wasm changed but no *-id.txt is staged." >&2
+        echo "Run \`cargo make update-published-contract\` (or the equivalent" >&2
+        echo "snapshot task) and stage the resulting *.wasm, *.parameters," >&2
+        echo "and *-id.txt together." >&2
+        exit 1
+    fi
+fi
+```
+
+Activate per-clone:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 ## Project Cargo.toml (Workspace Root)
 

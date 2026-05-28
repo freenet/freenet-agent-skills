@@ -492,6 +492,90 @@ contract WASM at build time must be rebuilt and republished together. A stale
 CLI with old WASM produces a different key and can't see the new contract's
 state. See River's `cargo make publish-all` for how to orchestrate this.
 
+### Alternative: chained migration without on-chain pointer (freenet/mail)
+
+Some apps can't (or don't want to) write an `OptionalUpgrade` pointer
+into the old contract's state. The mail app is the canonical case:
+inbox state is per-identity and the user is the only one who can sign
+an update to their inbox. There's no shared "owner" who could push an
+upgrade pointer on everyone's behalf.
+
+The pattern mail uses instead:
+
+1. **Embed the current contract's WASM hash** in the UI at build time
+   (`INBOX_CODE_HASH = include!("…hash.txt")`).
+2. **Record per-identity which contract hash that user's state lives
+   under**, on the *delegate* (not on-chain) — e.g. an
+   `AliasInfo { inbox_wasm_hash: Option<String>, … }` on the identity
+   delegate, persisted client-side.
+3. **Maintain an append-only `LEGACY_*_CODE_HASHES` slice**, ordered
+   oldest → newest, listing every prior `INBOX_CODE_HASH` the project
+   has shipped.
+4. **On UI startup**, compare the recorded hash against current. If
+   they match, no-op. If they differ, walk forward through the legacy
+   slice starting from the recorded hash, dispatching a GET per
+   candidate. The first `GetResponse` to resolve wins — decode the
+   state, re-sign with the identity key, PUT under the current
+   contract's key. Update the recorded hash on the delegate.
+5. **Suppress duplicate migrations** by keying a `MIGRATED_IDENTITIES`
+   set on the cryptographic identity (the ML-DSA verifying-key bytes),
+   not on the mutable alias.
+6. **Persist a retry marker.** Stamp `pending_migration_from = Some(old_hash)`
+   on the delegate BEFORE dispatching GETs; clear it only when the PUT
+   under the current key succeeds. If the session ends before any GET
+   resolves (offline, browser crash, gateway hiccup), the next session
+   sees the marker and re-attempts.
+7. **Backwards-compat the delegate state** so old UI versions can read
+   the new fields: every new field on `AliasInfo` is
+   `#[serde(default)]`.
+
+```rust
+// ui/src/inbox.rs (or wherever the contract is bundled)
+pub const INBOX_CODE_HASH: &str = include_str!("../../published-contract/inbox-hash.txt");
+
+/// Append-only list, oldest → newest. Add the prior INBOX_CODE_HASH here
+/// every time you deliberately rotate the inbox contract.
+pub const LEGACY_INBOX_CODE_HASHES: &[&str] = &[
+    "9F2c…oldest",
+    "Bk7L…middle",
+    // current INBOX_CODE_HASH is NEVER in this slice
+];
+
+#[cfg(test)]
+#[test]
+fn current_hash_not_in_legacy() {
+    assert!(
+        !LEGACY_INBOX_CODE_HASHES.contains(&INBOX_CODE_HASH),
+        "current INBOX_CODE_HASH must not appear in LEGACY_INBOX_CODE_HASHES"
+    );
+}
+```
+
+**Cross-user sends with mixed versions.** If users on different
+contract versions need to address each other (e.g. mail), the *sender*
+must derive the recipient's contract key using the recipient's
+advertised WASM hash, not the sender's. Capture it at contact-import
+time from the import-fetch `GetResponse`'s `key.code_hash()` (requires
+`return_contract_code: true` on the GET request), store it on the
+contact record (`StoredContactKeys.inbox_wasm_hash:
+Option<String>` with `#[serde(default)]` for backwards-compat),
+and pass it explicitly when building the recipient's key in the send
+path. Own-identity derivations (e.g. updating your own inbox) keep
+using the sender's embedded `INBOX_CODE_HASH` and are correct by
+construction.
+
+Compared to the `OptionalUpgrade`-pointer model above:
+
+| Aspect | OptionalUpgrade pointer (River) | Chained migration (mail) |
+|---|---|---|
+| Who triggers the migration | Any updated client; owner writes pointer | The state's signer, in their own UI |
+| Where the legacy list lives | Embedded in WASM (read via build.rs from `legacy_contracts.toml`) | A Rust `const &[&str]` slice in the UI |
+| Recovery if a hop fails mid-flight | Pointer is permanent on-chain | `pending_migration_from` marker on delegate |
+| Works for per-user state with no shared owner | No | Yes |
+| Works for shared-room / single-owner state | Yes | Awkward (no one to sign migration for the room) |
+
+Pick the model that matches your contract's authorization shape.
+
 ## River Contract Reference
 
 See [River's room-contract](https://github.com/freenet/river/tree/main/contracts/room-contract/src/lib.rs) for a complete implementation, and River's `AGENTS.md` under "Contract Upgrade" for the full upgrade runbook.
