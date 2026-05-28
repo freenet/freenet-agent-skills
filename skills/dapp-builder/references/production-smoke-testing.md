@@ -1,6 +1,34 @@
 # Production Smoke Testing
 
-Two things break only after `fdev publish`, not in `dx serve` / `vite dev`:
+## The four test tiers of a Freenet dApp
+
+Don't conflate them. Each catches a different failure mode; none of them
+catches what the others catch.
+
+| Tier | What it runs | What it catches | What it misses |
+|---|---|---|---|
+| **rust** | `cargo test --workspace` (incl. `cargo test -p <contract> --features contract` for host-side contract tests) | State logic, commutative-monoid invariants, serialization round-trips, signature verification, validation rules. | Anything involving a live node or the gateway. |
+| **offline** | UI build with `--features example-data,no-sync --no-default-features`, served via `dx serve`, driven by Playwright. | UI flows that don't depend on a node: identity creation against mock data, render correctness, navigation, form validation. | Real WebSocket bridge, real contract PUT/GET/UPDATE, real delegate calls, real AFT, gateway behavior. |
+| **iso** (isolated multi-node E2E) | `cargo make test-e2e-real-node` style: spin up a 2-node Freenet network on `127.0.0.1` via the iso-nodes harness (see `local-dev` SKILL → "isolated multi-node"), publish the webapp, drive the UI via Playwright. | Real round-trip behavior: identity creation persisted to the delegate, contract PUTs landing, AFT burns, cross-node propagation, decrypt-on-receive. Catches the bugs that only appear with a real node. | Production gateway specifics (production has different deployments, NAT, real peer counts). Cost: 5–10 min per run; gate to tags / nightly. |
+| **liveness** | `production-liveness.spec.ts` against the **deployed gateway URL** post-release. | Publish-pipeline bugs: corrupted tar.xz, wrong signature, stale `contract-id.txt`, routing misconfig, gateway CSP regression, iframe-shell regression, vendored asset 404s. **Intentionally minimal** — gateway serves webapp, WASM loads, Dioxus mounts, "create new identity" link renders. | Real round-trip. The deployed gateway has no test fixtures and the test runs as a real user with no identity — it can't verify message delivery, AFT, contract migration, or anything past first render. |
+
+**The shape of a healthy release:**
+
+1. `rust` + `offline` gate every PR.
+2. `iso` gates release tags (or runs nightly if you have <1 release/week).
+3. `liveness` runs immediately post-publish and tells you whether
+   anything reached the live gateway at all.
+4. To verify real round-trip in production after a release, either run
+   `iso` against a fresh `freenet local` node pointed at the published
+   contract ID, or follow a manual 7-step checklist (compose → send →
+   switch identity → verify delivery → AFT burn check → reload-persist
+   → cross-identity send via address book). There is no shortcut here;
+   `liveness` does not cover it.
+
+## The two production-only pitfalls
+
+Two things break only after `fdev publish`, not in `dx serve` /
+`vite dev`:
 
 1. **CSP blocks remote assets** (see `ui-patterns.md` "Gateway CSP"). Dev
    loads the page from its own origin where the CSP doesn't apply.

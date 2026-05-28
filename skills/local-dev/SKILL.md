@@ -179,6 +179,34 @@ on a fresh publish to the test node, because the system node has stale
 contract state from a previous run signed by a different key. If you see
 this on a "fresh" test, check which node `fdev` actually hit.
 
+#### `--data-dir` does NOT isolate `config.toml` either — use `--config-dir` per node
+
+Two `freenet` processes on the same host that pass the same (or default)
+config directory share `config.toml` AND `secrets/transport-keypair.pem`.
+Symptoms: second node fails to bind its UDP port, or both nodes use
+identical peer IDs and the network refuses the duplicate connection.
+
+For a deterministic multi-node harness on one host (gateway + peer + …),
+pass `--config-dir` explicitly to each node, NOT just `--data-dir`:
+
+```bash
+freenet network --config-dir /tmp/iso-net/gw/config   --data-dir /tmp/iso-net/gw/data   ...
+freenet network --config-dir /tmp/iso-net/peer/config --data-dir /tmp/iso-net/peer/data ...
+```
+
+**CI gotcha:** on Linux runners that set `XDG_CONFIG_HOME` (e.g. ubicloud,
+sometimes GitHub Actions images), `dirs::config_dir()` returns
+`$XDG_CONFIG_HOME` regardless of `HOME` — so the `HOME=~/iso-home …`
+trick from the previous section is bypassed. `--config-dir` is the only
+flag that wins against `XDG_CONFIG_HOME`. Use it any time the harness
+must run identically on dev laptops and CI.
+
+A working reference harness lives at
+`scripts/run-isolated-nodes.sh` in the freenet/mail repo — covers up /
+down / wipe / status, full state wipe between test runs (avoids day-1
+AFT cap carryover in repeated E2E runs), and `FREENET_E2E_KEEP=1` to
+leave nodes up for post-mortem.
+
 ### Two-node local network
 
 ```bash

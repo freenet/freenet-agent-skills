@@ -152,6 +152,41 @@ See [Module-Specific Debugging Guide](references/module-debugging.md) for detail
 
 **Note on telemetry:** If a `telemetry-monitor` skill is available in the project, use it to query network telemetry for constraining the problem (see Phase 1b). But remember: telemetry constrains, simulation reproduces. Don't spend cycles iterating on telemetry queries when you have enough information to write a simulation test.
 
+**Asserting on freenet-core logs from E2E tests: use structured fields,
+not wire-level markers.** Modern freenet-core (0.2.6x and later) emits
+tracing output as structured fields — `phase="update_complete"`,
+`phase="relay_started"`, `op="GET"`, `tx="01KK70…"`. Legacy
+wire-level grep markers (`UPDATE_PROPAGATION`, `OP_FORWARDED`, etc.)
+that older tests and tutorials reference have been removed. An E2E test
+that greps for them will pass forever — the line will never appear, so
+the negative assertion is vacuously true, and the test gives a false
+green.
+
+When writing or fixing an E2E log assertion against a freenet node:
+
+- Tail the log directly with the same `RUST_LOG` you'll use in CI and
+  read what's actually emitted around the event you care about. Don't
+  copy a grep pattern from an old test.
+- Match on the structured field shape — `phase="<value>"` is the most
+  stable; transaction IDs (`tx=`) are good for following a single
+  op across nodes.
+- Treat log assertions as supplementary. The authoritative check that
+  the system reached a state is the UI assertion (Playwright sees the
+  message in the recipient's inbox) or a contract GET via fdev (state
+  on the network matches expectations). Logs tell you *how* you got
+  there, not *whether* you got there.
+
+When a test fails because of a conclusively-traced upstream bug
+(e.g. a freenet-core relay timeout that has an open issue and a
+recognizable signature in the logs), **quarantine the path, do not
+remove the test.** Detect the exact upstream signature, emit a Playwright
+`test.skip()` (or equivalent) with the issue link, and let the assertion
+that would have caught the upstream bug stay in place. Genuine app-side
+regressions (contract errors, deserialization, panics, wrong state
+contents) still fail the gate. Removing the test, or weakening the
+assertion to make it always pass, loses the regression coverage you'd
+otherwise get for free the day upstream is fixed.
+
 For module-specific data gathering techniques, see [Module-Specific Debugging Guide](references/module-debugging.md) — it covers observation APIs, `#[freenet_test]` event capture, `RUST_LOG` targets, and fault injection per module.
 
 **Parallel investigation with subagents:**

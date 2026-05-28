@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.3.0 (2026-05-28)
+
+Sync Freenet-specific dApp practices proven out in freenet/mail through
+May 2026 (issues #198, #199, #200, #206, #213, #251). Generic engineering
+practices (CI runner sizing, version-drift guards, pre-commit hooks, QA
+matrices, upstream-bug quarantine) deliberately left out of this version
+— they belong in a separate non-Freenet skill set.
+
+- `local-dev`: documented the **isolated multi-node harness pattern** —
+  `--config-dir` per node (NOT `--data-dir`) is what isolates
+  `config.toml` and transport keypairs across two `freenet` instances on
+  one host. On CI runners with `XDG_CONFIG_HOME` set, a `HOME=…`
+  override is bypassed and only `--config-dir` works.
+- `dapp-builder/build-system.md`: documented **per-contract lockfile
+  isolation** (`[workspace.exclude]` + own `Cargo.lock` + `=x.y.z` pins
+  + `CARGO_TARGET_DIR=<crate>/target` on every `fdev build`). Without
+  this pattern, a workspace dep bump silently rotates contract WASM
+  bytes and IDs, orphaning every user's stored state. Also documents
+  the **contract-ID reproducibility caveat**: signed-payload version is
+  a unix timestamp at signing time → contract IDs are NOT reproducible
+  from source, the committed `contract-id.txt` / `facade-id.txt` are
+  authoritative.
+- `dapp-builder/references/contract-patterns.md`: documented the
+  **chained-migration recipe** — append-only `LEGACY_*_CODE_HASHES`
+  walked oldest→newest on UI startup when an identity's recorded WASM
+  hash drifts from current; `pending_migration_from` on the delegate
+  for cross-session retry; recipient WASM hash captured at contact
+  import so upgraded senders can deliver to non-upgraded recipients;
+  the `current_hash_not_in_legacy` test invariant.
+- `local-dev`: documented installing `fdev` / `freenet` from the
+  freenet-core release tag's prebuilt `.tar.gz` rather than
+  `cargo install` — same binary CI uses, ~5s vs 10–15 min, and pins
+  you to a known fdev API surface (matters for the `--as-state` flag
+  used by facade pointer flips).
+- `dapp-builder/build-system.md`: documented the **pre-commit hook for
+  signed-and-committed publishing** — block stray `.wasm` outside
+  `published-contract/`, require `contract-id.txt` co-staged alongside
+  any WASM change. Without it, build artifacts leak into commits and
+  snapshot drift goes unnoticed.
+- `dapp-builder/references/production-smoke-testing.md`: documented the
+  **four Freenet dApp test tiers** (offline / iso / liveness / rust),
+  what each catches and what each misses, so a project doesn't ship
+  thinking a liveness smoke covers real round-trip behavior.
+- `systematic-debugging`: documented **structured-field log assertions**
+  in E2E — modern freenet-core (0.2.6x) emits tracing fields like
+  `phase="update_complete"` and `phase="relay_started"`. Asserting on
+  legacy wire-level markers (`UPDATE_PROPAGATION`) gives silent false
+  positives. Also: quarantine upstream bugs with `skip-with-reason`,
+  do not remove the test.
+- **NEW** `dapp-builder/references/facade-pattern.md`: full **stable-URL
+  facade contract architecture** — facade WASM (never rebuilt per
+  release) + facade-types crate + `FacadePointer { version,
+  current_app_id, prev_app_ids }` state + `fdev execute update
+  --as-state` (default `UpdateData::Delta` is silently rejected) +
+  `postMessage`-to-parent loader (gateway's `X-Frame-Options: DENY`
+  blocks same-window redirects from inside the sandbox iframe) +
+  webapp-cache busting after pointer flips + CI byte-equality check
+  with non-linux/amd64 bootstrap flow.
+
 ## 1.2.3 (2026-05-26)
 - `dapp-builder`: documented the gateway CSP, iframe shell, and post-publish
   smoke testing — three "only show up in production" pitfalls every Freenet

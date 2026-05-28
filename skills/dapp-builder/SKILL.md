@@ -101,7 +101,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 3. Implement `ContractInterface` trait for the contract
 4. Ensure all state updates satisfy the commutative monoid requirement
 5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
-6. **Plan contract upgrade from v1.** Contract keys change with every WASM hash change, so include an `OptionalUpgrade` pointer in state, keep serialization backwards-compatible, and maintain a `legacy_contracts.toml` migration registry. See contract-patterns.md "Contract WASM Upgrade & State Migration".
+6. **Plan contract upgrade from v1.** Contract keys change with every WASM hash change. Pick a migration model based on who can sign updates on behalf of state: a shared-owner model uses an `OptionalUpgrade` pointer + `legacy_contracts.toml`; a per-user (no shared owner) model uses an append-only `LEGACY_*_CODE_HASHES` slice in the UI with a `pending_migration_from` retry marker on the delegate. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration" and "Alternative: chained migration without on-chain pointer".
 7. **Read `state-authorization-patterns.md` before designing the second iteration.** It captures cross-cutting patterns (per-item vs bundled signatures, replay protection via monotonic counter / tombstones / cross-context binding, signed-payload hygiene, `time::now()` gotchas, related-contracts limits, wire-format stability) that bite on every contract beyond the trivial.
 
 References:
@@ -171,10 +171,26 @@ Set up the build system, CI, and deployment pipeline.
    with the GNU flags listed under "Tooling Preflight" in
    `references/build-system.md`.
 
+7. **If you'll ship more than one release, plan for a facade contract
+   from day one.** Without it, every release rotates the gateway URL
+   users have bookmarked. The facade is a stable-URL indirection: a
+   never-rebuilt contract whose state holds a signed pointer to the
+   current web-container. See `references/facade-pattern.md`. Cheaper
+   to design in now than retrofit later — retrofitting means asking
+   every existing user to update their bookmark.
+8. **Plan contract-WASM stability before the first release.** A
+   `cargo update` in the workspace root must not silently rotate
+   contract IDs. See `references/build-system.md` →
+   "Per-contract lockfile isolation".
+
 References:
-- `references/build-system.md` — build, CI, packaging, tooling preflight.
+- `references/build-system.md` — build, CI, packaging, tooling
+  preflight, per-contract lockfile isolation, contract-ID
+  reproducibility caveat, pre-commit hook for stray `.wasm`.
 - `references/production-smoke-testing.md` — iframe shell architecture,
   Playwright recipe for post-publish liveness checks.
+- `references/facade-pattern.md` — stable-URL facade contract
+  architecture for projects that ship more than one release.
 
 ## Project Structure Template
 
