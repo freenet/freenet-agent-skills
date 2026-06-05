@@ -101,7 +101,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 3. Implement `ContractInterface` trait for the contract
 4. Ensure all state updates satisfy the commutative monoid requirement
 5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
-6. **Plan contract upgrade from v1.** Contract keys change with every WASM hash change. Pick a migration model based on who can sign updates on behalf of state: a shared-owner model uses an `OptionalUpgrade` pointer + `legacy_contracts.toml`; a per-user (no shared owner) model uses an append-only `LEGACY_*_CODE_HASHES` slice in the UI with a `pending_migration_from` retry marker on the delegate. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration" and "Alternative: chained migration without on-chain pointer".
+6. **Plan contract upgrade from v1.** Contract keys change with every WASM hash change. Pick a migration model based on who can sign updates on behalf of state: a shared-owner model uses an `OptionalUpgrade` pointer + `legacy_contracts.toml`; a per-user (no shared owner) model uses an append-only `LEGACY_*_CODE_HASHES` slice in the UI with a `pending_migration_from` retry marker on the delegate. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration" and "Alternative: chained migration without on-chain pointer". For the cross-cutting operational discipline that keeps the migration itself from losing data (resumable, idempotent, non-destructive, regression-gated, observable), see `upgrade-and-migration.md`.
 7. **Read `state-authorization-patterns.md` before designing the second iteration.** It captures cross-cutting patterns (per-item vs bundled signatures, replay protection via monotonic counter / tombstones / cross-context binding, signed-payload hygiene, `time::now()` gotchas, related-contracts limits, wire-format stability) that bite on every contract beyond the trivial.
 
 References:
@@ -123,7 +123,7 @@ Determine what private data each user needs stored locally and split it across d
 2. Implement `DelegateInterface` trait
 3. Handle secret storage operations (Store, Get, Delete, List)
 4. Implement cryptographic operations (signing, encryption)
-5. **Include an `ExportSecrets` handler from v1** -- when delegate WASM changes, the delegate key changes and all stored secrets become inaccessible. The old delegate must be able to hand over its secrets to the new version. See delegate-patterns.md for the authorized migration pattern.
+5. **Include an `ExportSecrets` handler from v1** -- when delegate WASM changes, the delegate key changes and all stored secrets become inaccessible. The old delegate must be able to hand over its secrets to the new version. See delegate-patterns.md for the authorized migration pattern. See `upgrade-and-migration.md` for the operational discipline (resumable/interrupted-migration recovery, migration telemetry, and the upgrade test harness).
 
 Reference: `references/delegate-patterns.md`
 
@@ -193,6 +193,13 @@ Set up the build system, CI, and deployment pipeline.
    `cargo update` in the workspace root must not silently rotate
    contract IDs. See `references/build-system.md` →
    "Per-contract lockfile isolation".
+9. **Test the upgrade path and make migration resumable.** The dangerous
+   inputs are *old-state -> new-code* and *interrupted migration*, neither
+   exercised by testing the new version on fresh state. Add an old-format-load
+   test and an interrupted-migration-recovery test, and make migration
+   idempotent + resumable (in-progress marker cleared only on full success) +
+   non-destructive + regression-gated + observable. See
+   `references/upgrade-and-migration.md`.
 
 References:
 - `references/build-system.md` — build, CI, packaging, tooling
@@ -202,6 +209,10 @@ References:
   Playwright recipe for post-publish liveness checks.
 - `references/facade-pattern.md` — stable-URL facade contract
   architecture for projects that ship more than one release.
+- `references/upgrade-and-migration.md` — operational discipline for safe
+  contract/delegate upgrades: the five migration properties (idempotent,
+  resumable, non-destructive, regression-gated, observable), enumerating
+  dynamic key families, the upgrade test harness, and staged reversible rollout.
 
 ## Project Structure Templates
 

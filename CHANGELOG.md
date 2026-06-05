@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.0 (2026-06-05)
+
+- `dapp-builder`: added `references/upgrade-and-migration.md` — the operational
+  discipline for upgrading contracts and delegates without losing user data,
+  distilled from River's production incidents (freenet/river#345 per-entity CAS
+  keys, #352 resumable/interrupted-migration recovery, #253 regression-gated
+  legacy probe). Covers the five properties of a safe migration (idempotent,
+  resumable, non-destructive, regression-gated, observable), sharding mutable
+  storage by unit-of-concurrent-change with compare-and-swap instead of blind
+  overwrite, enumerating dynamic key families, coupled-artifact lockstep, the
+  upgrade test harness (old-state -> new-code plus interrupted-migration
+  recovery), and staged reversible rollout. Linked from SKILL.md Phase 1/2
+  migration steps and Phase 4.
+
 ## 1.3.0 (2026-05-28)
 
 Sync Freenet-specific dApp practices proven out in freenet/mail through
