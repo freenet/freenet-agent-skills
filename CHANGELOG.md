@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.1 (2026-06-09)
+
+- `pr-review`: Step 3 now specifies a fallback when external models are
+  unavailable. If `codex` fails, try `gemini`; if both are down (quota /
+  capacity / outage), the review no longer fails — it substitutes a
+  diverse-Claude-lens pass (at least three independent adversarial lenses,
+  per `~/.claude/rules/multi-model-review.md`) and records the substitution
+  in the posted review. Previously the skill described only the external pass
+  with no documented behavior when it could not run.
+
 ## 1.5.0 (2026-06-05)
 
 - `dapp-builder`: added `references/upgrade-and-migration.md` — the operational

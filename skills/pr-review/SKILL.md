@@ -138,6 +138,36 @@ codex review --base "origin/$BASE"
 Full review of a high-risk PR, add a third independent model when one is available —
 e.g. a `gemini-cli-review` skill or the `gemini` CLI.
 
+### When external models are unavailable — fall back, never skip
+
+External reviewers go down (quota exhaustion, capacity limits, API outages). If
+`codex` fails, try `gemini`; if **both** are genuinely unavailable, do **not** skip the
+independent pass and do **not** fail the review. A `codex review` that returns no
+findings summary, errors out, or reports exhausted budget counts as unavailable — retry
+once, then treat it as down.
+
+Substitute a **diverse-Claude-lens** pass (per `~/.claude/rules/multi-model-review.md`).
+A single extra Claude reviewer is not enough — it shares the author model's blind spots,
+which is the whole reason the external pass exists. Instead spawn **at least three**
+independent reviewers, each with a DISTINCT adversarial lens and each blind to the
+others, scaling to 4–5 for a Full-tier high-risk change:
+
+- *skeptical bug-hunt* — assume bugs exist; hunt races, edge cases, failure modes.
+- *code-first* — read the code before the PR description; flag intent/impl mismatches.
+- *the failure mode specific to THIS change* — e.g. for a wire/protocol change:
+  compat + serialization; for auth: authz bypass; for a migration: data-loss / rollback.
+
+These can be the existing reviewer subagents plus extra adversarial lenses, or
+`general-purpose` subagents with explicit lens prompts. Each reads the actual
+checked-out code and is told NOT to rubber-stamp. Synthesize them the same way as
+Step 5.
+
+**Record the substitution in the posted review:** which external models you tried, the
+exact failure (quota / capacity / outage), that you used the Claude-lens fallback, and
+which lenses ran — so a reader can see that independent review happened and why it took
+this form. When the external models come back before merge and the change is high-risk,
+prefer running the real external pass too rather than relying on the fallback alone.
+
 ## Step 4: Freenet Bug-Pattern Check
 
 Do this for **Full** reviews, and for **Light** reviews whose change has non-trivial
