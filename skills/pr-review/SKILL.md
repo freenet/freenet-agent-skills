@@ -146,6 +146,8 @@ independent pass and do **not** fail the review. A `codex review` that returns n
 findings summary, errors out, or reports exhausted budget counts as unavailable — retry
 once, then treat it as down.
 
+**Prefer waiting when you can.** If the change is not time-sensitive and the external quota reset is near (within a few hours, or by the next working session), prefer to **wait** for the external model and note the blockage on the PR — that preserves the strongest signal. Fall back to the Claude-lens pass only when waiting isn't practical (the reset is far off, the change is needed sooner, or the user asked you to proceed).
+
 Substitute a **diverse-Claude-lens** pass (per `~/.claude/rules/multi-model-review.md`).
 A single extra Claude reviewer is not enough — it shares the author model's blind spots,
 which is the whole reason the external pass exists. Instead spawn **at least three**
@@ -161,6 +163,8 @@ These can be the existing reviewer subagents plus extra adversarial lenses, or
 `general-purpose` subagents with explicit lens prompts. Each reads the actual
 checked-out code and is told NOT to rubber-stamp. Synthesize them the same way as
 Step 5.
+
+**If you cannot spawn subagents** (you are yourself a background or dispatched agent without the Agent/Task tool), do not skip and do not fail the review: run the lenses **serially within your own context** instead — one distinct adversarial pass after another (not a single combined read), then synthesize. Serial-within-self is the required fallback whenever spawning subagents is unavailable.
 
 **Record the substitution in the posted review:** which external models you tried, the
 exact failure (quota / capacity / outage), that you used the Claude-lens fallback, and

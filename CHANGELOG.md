@@ -10,7 +10,10 @@ All notable changes to this project will be documented in this file.
   diverse-Claude-lens pass (at least three independent adversarial lenses,
   per `~/.claude/rules/multi-model-review.md`) and records the substitution
   in the posted review. Previously the skill described only the external pass
-  with no documented behavior when it could not run.
+  with no documented behavior when it could not run. Also: prefer waiting for
+  the external model when the change isn't time-sensitive and the quota reset
+  is near, and run the lenses serially within your own context when you can't
+  spawn subagents (background / dispatched agents without the Agent/Task tool).
 
 ## 1.5.0 (2026-06-05)
 
