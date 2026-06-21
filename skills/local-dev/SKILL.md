@@ -179,6 +179,20 @@ on a fresh publish to the test node, because the system node has stale
 contract state from a previous run signed by a different key. If you see
 this on a "fresh" test, check which node `fdev` actually hit.
 
+When a publish runs through `cargo-make` (e.g. a `publish-*` task) rather
+than `fdev` directly, there is no `--port` flag to pass — the task hardcodes
+the default port internally. Override it with the `WS_API_PORT` environment
+variable instead:
+
+```bash
+# Targets the isolated test node on 7510 instead of the default 7509
+WS_API_PORT=7510 cargo make publish-myapp
+```
+
+The failure mode for a misdirected `cargo-make` publish is the unhelpful
+`put failed after 4 attempts`, which gives no hint that the port was wrong —
+so set `WS_API_PORT` whenever the target node isn't on 7509.
+
 #### `--data-dir` does NOT isolate `config.toml` either — use `--config-dir` per node
 
 Two `freenet` processes on the same host that pass the same (or default)

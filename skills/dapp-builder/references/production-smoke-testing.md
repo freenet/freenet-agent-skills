@@ -214,6 +214,47 @@ has a known-benign error at startup, it stays out of the fatal list by
 default; if a new error category appears that you want to gate on, add a
 regex.
 
+### Known-benign noise: the wasm-bindgen `onerror` shim crash
+
+A dApp loaded inside the gateway iframe will emit a recurring console error
+that is **benign** and must not be gated on:
+
+```
+wasm-bindgen: imported JS function that was not marked as 'catch' threw an
+error: expected a string argument, found undefined
+```
+
+Cause: the shell's WebSocket bridge dispatches a bare `new Event('error')`
+(no `filename`/`message` fields). wasm-bindgen's generated `onerror` handler
+reads `event.filename`, gets `undefined`, and the un-`catch`-marked import
+throws. It surfaces during normal operation, not just on a real failure.
+
+This is the reason the smoke test gates on a curated `FATAL_CONSOLE_PATTERNS`
+allowlist rather than asserting `consoleErrors === []` — a blanket
+"no console errors" assertion will fail against this noise on every run. Do
+**not** add a regex for this message to `FATAL_CONSOLE_PATTERNS`.
+
+One caveat about the recipe above: the `FATAL_CONSOLE_PATTERNS` allowlist
+only filters the `page.on("console", ...)` sink. The `page.on("pageerror",
+...)` handler pushes **every** uncaught exception unconditionally. wasm-bindgen
+catches this thrown value internally and reports it via `console.error`, so in
+practice it lands in the `console` sink (where the allowlist applies), not
+`pageerror`. But if you observe it reaching `pageerror` in your environment,
+filter it there too — otherwise the benign crash still fails the test:
+
+```ts
+page.on("pageerror", (err) => {
+  const text = String(err);
+  // wasm-bindgen onerror shim crash from the gateway WS bridge — benign noise.
+  if (/not marked as 'catch'.*expected a string argument, found undefined/.test(text)) return;
+  fatalErrors.push(text);
+});
+```
+
+If you would rather silence it at the source, mark the relevant `web_sys`
+import with `--catch`; otherwise leave it as benign noise until wasm-bindgen
+fixes the handler upstream.
+
 ### Wiring It In
 
 - **`playwright.config.ts`** — set `use.baseURL` to the same URL you put in
