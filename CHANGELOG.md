@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.2 (2026-06-21)
+
+Finish absorbing the freenet-email v0.1.x publish/debug lessons (issue #23).
+Patterns 1, 3, and 4 from that issue landed earlier (PRs #34/#35/#36); this
+fills the two remaining "pattern 2" gaps:
+
+- `local-dev`: documented the `WS_API_PORT` environment variable for
+  targeting a non-default node when publishing through a `cargo-make`
+  `publish-*` task (which has no `--port` flag). Notes the unhelpful
+  `put failed after 4 attempts` failure mode of a misdirected cargo-make
+  publish.
+- `dapp-builder` (`references/production-smoke-testing.md`): documented the
+  wasm-bindgen `onerror` shim crash (`imported JS function that was not
+  marked as 'catch' threw an error: expected a string argument, found
+  undefined`) as known-benign console noise from the gateway WebSocket
+  bridge. Explains why the smoke test gates on a curated
+  `FATAL_CONSOLE_PATTERNS` allowlist instead of asserting
+  `consoleErrors === []`, and to leave this message out of the fatal list.
+
 ## 1.5.1 (2026-06-09)
 
 - `pr-review`: Step 3 now specifies a fallback when external models are

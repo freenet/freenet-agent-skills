@@ -214,6 +214,29 @@ has a known-benign error at startup, it stays out of the fatal list by
 default; if a new error category appears that you want to gate on, add a
 regex.
 
+### Known-benign noise: the wasm-bindgen `onerror` shim crash
+
+A dApp loaded inside the gateway iframe will emit a recurring console error
+that is **benign** and must not be gated on:
+
+```
+wasm-bindgen: imported JS function that was not marked as 'catch' threw an
+error: expected a string argument, found undefined
+```
+
+Cause: the shell's WebSocket bridge dispatches a bare `new Event('error')`
+(no `filename`/`message` fields). wasm-bindgen's generated `onerror` handler
+reads `event.filename`, gets `undefined`, and the un-`catch`-marked import
+throws. It surfaces during normal operation, not just on a real failure.
+
+This is the reason the smoke test gates on a curated `FATAL_CONSOLE_PATTERNS`
+allowlist rather than asserting `consoleErrors === []` — a blanket
+"no console errors" assertion will fail against this noise on every run. Do
+**not** add a regex for this message to `FATAL_CONSOLE_PATTERNS`. If you must
+silence it at the source, mark the relevant `web_sys` import with `--catch`;
+otherwise leave it as benign noise until wasm-bindgen fixes the handler
+upstream.
+
 ### Wiring It In
 
 - **`playwright.config.ts`** — set `use.baseURL` to the same URL you put in
