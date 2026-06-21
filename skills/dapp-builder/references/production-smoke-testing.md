@@ -232,10 +232,28 @@ throws. It surfaces during normal operation, not just on a real failure.
 This is the reason the smoke test gates on a curated `FATAL_CONSOLE_PATTERNS`
 allowlist rather than asserting `consoleErrors === []` — a blanket
 "no console errors" assertion will fail against this noise on every run. Do
-**not** add a regex for this message to `FATAL_CONSOLE_PATTERNS`. If you must
-silence it at the source, mark the relevant `web_sys` import with `--catch`;
-otherwise leave it as benign noise until wasm-bindgen fixes the handler
-upstream.
+**not** add a regex for this message to `FATAL_CONSOLE_PATTERNS`.
+
+One caveat about the recipe above: the `FATAL_CONSOLE_PATTERNS` allowlist
+only filters the `page.on("console", ...)` sink. The `page.on("pageerror",
+...)` handler pushes **every** uncaught exception unconditionally. wasm-bindgen
+catches this thrown value internally and reports it via `console.error`, so in
+practice it lands in the `console` sink (where the allowlist applies), not
+`pageerror`. But if you observe it reaching `pageerror` in your environment,
+filter it there too — otherwise the benign crash still fails the test:
+
+```ts
+page.on("pageerror", (err) => {
+  const text = String(err);
+  // wasm-bindgen onerror shim crash from the gateway WS bridge — benign noise.
+  if (/not marked as 'catch'.*expected a string argument, found undefined/.test(text)) return;
+  fatalErrors.push(text);
+});
+```
+
+If you would rather silence it at the source, mark the relevant `web_sys`
+import with `--catch`; otherwise leave it as benign noise until wasm-bindgen
+fixes the handler upstream.
 
 ### Wiring It In
 
