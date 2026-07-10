@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.6.0 (2026-07-10)
+
+Correct the `dapp-builder` contract/delegate **upgrade & migration** advice to
+match how River and Delta actually work (verified against source), and add
+byte-reproducibility as a first-class best-practice. Corrections, not new
+speculation. Refs freenet-core#2776.
+
+- `delegate-patterns.md`: removed the fictional `ExportSecrets` handler. River's
+  real mechanism is a backward probe that messages each old delegate key via
+  `DelegateRequest::ApplicationMessages`, **re-running the old WASM** to read its
+  secrets; per-room signing keys are carried forward and encryption secrets are
+  re-derived. Documented that this re-run is **fragile** — it breaks after a
+  freenet-stdlib/ABI bump makes the frozen old WASM un-runnable (River V4–V6 lost
+  data this way, freenet/river#204). Kept the `legacy_delegates.toml` + `build.rs`
+  registry; added the key-derived-identity precondition.
+- `contract-patterns.md`: re-framed the **backward-probe from a committed
+  legacy-code-hash registry** (River #292, Delta) as the shipped baseline, and
+  the author-signed `OptionalUpgrade` pointer as an optional straggler layer that
+  no app drives migration off of (re-labeled, not deleted). Stated the
+  preconditions as hard requirements (mergeable/commutative state, strict
+  self-authorizing `validate_state`, backwards-compatible format, key-derived
+  identity, release-signing key for the pointer path).
+- `build-system.md`: added "the lockfile is necessary but NOT sufficient" —
+  commit `Cargo.lock` (River's was gitignored, freenet/river#393) + pin the
+  toolchain + build `--locked`, plus the caveats the lockfile misses
+  (`wasm-opt`/binaryen version, the `dx` UI-toolchain version, absolute
+  build-path embedding → `-Ctrim-paths`) and the build-command footgun (a
+  contract built alone vs co-built unifies features and yields different bytes —
+  always use the canonical build script).
+- `SKILL.md`, `upgrade-and-migration.md`: aligned the phase steps and reference
+  bullets with the above; pointed at the reusable `freenet/freenet-migrate` crate
+  (recommended direction, not yet on crates.io — prefer it over hand-rolling once
+  it lands).
+
 ## 1.5.2 (2026-06-21)
 
 Finish absorbing the freenet-email v0.1.x publish/debug lessons (issue #23).
