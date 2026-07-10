@@ -189,6 +189,55 @@ update was rejected for non-monotonic version.
   bytes, and the byte-equality check will fail if CI's rustc differs
   from the one that produced the committed snapshot.
 
+## Byte-reproducibility: the lockfile is necessary but NOT sufficient
+
+A contract's key is `BLAKE3(BLAKE3(wasm) || params)`, so a rebuild that changes
+the WASM bytes re-keys the contract and orphans every user's stored state — and
+the bytes change from more than source edits. This is the single biggest source
+of silent data loss; treat reproducibility as a first-class requirement.
+
+**The minimum bar (do all three):**
+
+1. **Commit a `Cargo.lock`** (workspace-root, or per-contract per "Per-contract
+   lockfile isolation" above — the latter is more robust because a UI-only
+   `cargo update` then can't touch the contract). River's `Cargo.lock` was
+   *gitignored* until freenet/river#393, so every build re-resolved the
+   dependency graph; a transitive dep drift silently changed the WASM bytes and
+   therefore the contract/delegate keys, orphaning room data with **no code
+   change at all**. Committing the lock is the fix.
+2. **Pin the toolchain** with a committed `rust-toolchain.toml` (rustc version
+   changes the bytes).
+3. **Build `--locked`.** A `--locked` build fails loudly on a stale lock instead
+   of silently re-resolving and re-keying.
+
+**Why that is still not enough** — these also change the bytes and none is
+covered by the lockfile:
+
+- **`wasm-opt` / binaryen version.** If your build runs `wasm-opt` (directly or
+  via `dx`), its version changes the output. Pin it (or build in a pinned
+  container).
+- **The UI toolchain (`dx`) version.** For a UI compiled to WASM, the Dioxus CLI
+  version affects the bytes just like rustc does. Pin it.
+- **Absolute build-path embedding.** rustc bakes absolute paths (e.g.
+  `/home/you/.cargo/registry/...`) into the WASM, so the *same* lock + toolchain
+  on a different machine or username still produces different bytes. Strip them
+  with `-Ctrim-paths` (`trim-paths = "all"` in the release profile) or
+  `--remap-path-prefix`, or build in a pinned container. (River verified this and
+  is adopting `trim-paths` on its next deliberate re-key — freenet/river#393.)
+
+**Build-command footgun — always use the canonical build script.** Building a
+contract crate **alone** (`cargo build -p my-contract`) can produce *different*
+bytes than building it **co-built** with sibling crates, because cargo unifies
+feature flags across the crates in one invocation. River's `-p room-contract`
+alone and `-p room-contract -p chat-delegate` together yield different
+`room_contract.wasm` bytes for exactly this reason (a sibling enables an extra
+feature on a shared crate). Never rebuild a to-be-published contract with an
+ad-hoc `cargo build -p`; always go through the project's canonical build script
+so the feature unification — and therefore the key — is stable.
+
+This whole area is tracked upstream as "graceful upgrades for delegates and
+contracts" (freenet-core#2776).
+
 ## Publishing hygiene: pre-commit hook
 
 The signed-and-committed model means `published-contract/` is the only

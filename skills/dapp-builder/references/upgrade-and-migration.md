@@ -153,12 +153,23 @@ and verify by mutation that removing the fix fails the test.
 
 ## References
 
-- `references/contract-patterns.md` — contract upgrade mechanics: `OptionalUpgrade`
-  pointer, `legacy_contracts.toml`, the upgrade flow, the chained-migration
-  alternative.
-- `references/delegate-patterns.md` — delegate migration mechanics: `ExportSecrets`
-  handler, `legacy_delegates.toml`, the double-hashing bug.
+- `references/contract-patterns.md` — contract upgrade mechanics: the shipped
+  backward-probe baseline (reconstruct old keys from a committed
+  `legacy_contracts.toml` registry, GET old state, re-PUT under the current key),
+  the optional in-state `OptionalUpgrade` straggler pointer, and the preconditions.
+- `references/delegate-patterns.md` — delegate migration mechanics: the backward
+  probe that re-runs the old delegate's WASM via `DelegateRequest::ApplicationMessages`
+  (there is **no `ExportSecrets` handler**), `legacy_delegates.toml`, the fragility
+  when an stdlib/ABI bump strands old WASM, and the double-hashing bug.
+- `references/build-system.md` — byte-reproducibility (commit `Cargo.lock`, pin the
+  toolchain, build `--locked`; and the `wasm-opt`/`dx`/path-embedding and
+  build-command caveats that the lockfile alone doesn't cover).
 - `references/state-authorization-patterns.md` — self-authorizing state, the
   precondition for permissionless migration.
+- The reusable `freenet/freenet-migrate` crate packages the registry, the
+  build-time codegen, the backward probe, and the preconditions (not yet on
+  crates.io — prefer it over hand-rolling once it lands).
 - River as worked reference: freenet/river#345 (per-entity CAS keys), #352
-  (resumable/interrupted-migration recovery), #253 (regression-gated legacy probe).
+  (resumable/interrupted-migration recovery), #253 (regression-gated legacy probe),
+  #204 (old delegate WASM unrunnable after an stdlib bump), #393 (gitignored
+  `Cargo.lock` silently re-keying contracts).

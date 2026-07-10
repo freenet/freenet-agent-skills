@@ -418,25 +418,57 @@ from a contract key. The migration below moves *state* from the old contract key
 to the new one; the user-facing identifier stays fixed across that move. See
 `identity-and-addressing.md`.
 
-### Preconditions: authorized state + backwards-compatible format
+### Preconditions (hard requirements — an app lacking these does NOT get safe carry-forward)
 
-Permissionless contract migration only works if two invariants hold:
+Permissionless contract migration only works if all of these hold:
 
-1. **Every field in state is cryptographically authorized.** See
-   "Cryptographic Verification" above. The new contract must be able to
-   re-validate every byte of state carried over from the old contract without
-   trusting the node that delivered it. If any field can be forged by an
-   untrusted peer, migration becomes an attack vector.
-2. **State serialization is backwards-compatible.** New fields use
+1. **State is mergeable / commutative.** Carrying old state into the new key is a
+   merge; if the merge isn't a commutative monoid (see above), concurrent old and
+   new writes during the rollout window won't converge.
+2. **Every field in state is self-authorizing.** See "Cryptographic Verification"
+   above. The successor's `validate_state` must re-check *every* invariant on the
+   bytes alone, without trusting the node that delivered them — this is what makes
+   any node able to GET old-key state and re-PUT it under the new key. The corollary
+   is a security requirement, not just a correctness one: **a permissive
+   `validate_state` lets a malicious re-PUT win.** If any field can be forged by an
+   untrusted peer, migration becomes an attack vector, so keep the validator strict.
+3. **State serialization is backwards-compatible.** New fields use
    `#[serde(default)]`; fields are never removed or renamed; existing field
    formats never change. If a breaking state change is genuinely required,
    create an explicit `StateV2` type with a written migration. Do not try to
    evolve `StateV1` in place.
+4. **Identity is key-derived, never a contract key.** The user-facing handle must
+   survive the WASM change (see "identity must not be a contract key" above and
+   `identity-and-addressing.md`).
+5. **You have an app release-signing key** if you use the optional signed-pointer
+   path below (the pointer is only trustworthy if the successor's key was signed by
+   a key clients already pin).
 
-Without both, the new contract's `validate_state` will reject state from the
-old contract, and migration silently fails.
+Without 1–4, the new contract's `validate_state` will reject state from the old
+contract, or the merge won't converge, and migration silently fails.
 
-### Embed an upgrade pointer in state from v1
+### The shipped baseline: backward-probe from a committed legacy-hash registry
+
+The mechanism River (freenet/river#292) and Delta actually ship — and the one to
+build by default — is a **backward probe from a committed registry of past code
+hashes**. For each predecessor generation you reconstruct its key from
+`BLAKE3(BLAKE3(old_wasm) || stable_params)`, GET the old state, fold it forward,
+and re-PUT it under the current key (the successor's `validate_state` re-verifies
+every byte, so any client may do it — the owner need not be online). The registry
+is a committed TOML walked newest→oldest; this is written up in full under "the
+backward-probe recipe" below. The in-state upgrade pointer described next is an
+*optional* layer on top, not the mechanism that moves state.
+
+### Optional richer layer: an in-state upgrade pointer
+
+This is an **optional** addition to the backward-probe baseline, not a
+replacement for it. The pointer is real — River defines `OptionalUpgradeV1` and
+the owner writes it — but **no app drives migration off it**; it is only a
+courtesy for stragglers, and the fuller "author-signed pointer +
+`RelatedContracts` auto-follow" model is aspirational (nothing ships it as the
+migration driver). The thing that actually moves state is the backward probe
+above. Add the pointer only if you also want old, un-upgraded clients to be
+*told* where the new contract lives.
 
 Include a field that the room/app owner can set to announce the new key to
 clients still running old code:
@@ -492,15 +524,20 @@ contract WASM at build time must be rebuilt and republished together. A stale
 CLI with old WASM produces a different key and can't see the new contract's
 state. See River's `cargo make publish-all` for how to orchestrate this.
 
-### Alternative: chained migration without on-chain pointer (freenet/mail)
+### The backward-probe recipe (River #292, Delta, freenet/mail)
 
-Some apps can't (or don't want to) write an `OptionalUpgrade` pointer
-into the old contract's state. The mail app is the canonical case:
-inbox state is per-identity and the user is the only one who can sign
-an update to their inbox. There's no shared "owner" who could push an
-upgrade pointer on everyone's behalf.
+This is the shipped baseline referenced above — the registry-walk that actually
+moves state, with **no dependence on an on-chain pointer**. It is the default for
+every app, and it is *mandatory* for per-user state with no shared owner: the mail
+app is the canonical case — inbox state is per-identity and the user is the only
+one who can sign an update to their inbox, so there is no shared "owner" who could
+push an upgrade pointer on everyone's behalf. River recovers rooms across
+room-contract generations the same way (`common/legacy_room_contracts.toml` →
+`common/build.rs` → `LEGACY_ROOM_CONTRACT_CODE_HASHES`, probed by
+`common/src/migration.rs`), and Delta uses an identical `legacy_contracts.toml`
+probe.
 
-The pattern mail uses instead:
+The recipe:
 
 1. **Embed the current contract's WASM hash** in the UI at build time
    (`INBOX_CODE_HASH = include!("…hash.txt")`).
@@ -564,17 +601,29 @@ path. Own-identity derivations (e.g. updating your own inbox) keep
 using the sender's embedded `INBOX_CODE_HASH` and are correct by
 construction.
 
-Compared to the `OptionalUpgrade`-pointer model above:
+Both variants below use the backward probe to move state; they differ mainly in
+whether an in-state straggler pointer is *also* written and who can trigger the
+copy:
 
-| Aspect | OptionalUpgrade pointer (River) | Chained migration (mail) |
+| Aspect | Probe + straggler pointer (River rooms) | Probe only (mail, Delta) |
 |---|---|---|
-| Who triggers the migration | Any updated client; owner writes pointer | The state's signer, in their own UI |
+| Who triggers the migration | Any updated client; owner also writes pointer | The state's signer, in their own UI |
 | Where the legacy list lives | Embedded in WASM (read via build.rs from `legacy_contracts.toml`) | A Rust `const &[&str]` slice in the UI |
 | Recovery if a hop fails mid-flight | Pointer is permanent on-chain | `pending_migration_from` marker on delegate |
-| Works for per-user state with no shared owner | No | Yes |
-| Works for shared-room / single-owner state | Yes | Awkward (no one to sign migration for the room) |
+| Works for per-user state with no shared owner | Pointer half doesn't apply; probe half does | Yes |
+| Works for shared-room / single-owner state | Yes | Yes (probe needs no owner) |
 
-Pick the model that matches your contract's authorization shape.
+Pick based on whether you want to *also* tell un-upgraded clients where the new
+contract lives; either way the probe is what carries the state.
+
+### Reusable tooling: `freenet-migrate`
+
+The registry, the `build.rs` codegen, and the backward probe are the same across
+every app, so a reusable crate — `freenet/freenet-migrate` — packages them (plus
+the delegate carry-forward and the preconditions above as enforced types). As of
+this writing it is **not yet published to crates.io**; treat it as the recommended
+direction and prefer it over hand-rolling once it lands, rather than a drop-in
+dependency today. The hand-rolled recipe above is what it codifies.
 
 ## River Contract Reference
 

@@ -357,37 +357,52 @@ If you pass `keyBytes` for both fields (or `codeHashBytes` for both), the node w
 
 Delegates store secrets (signing keys, user data) keyed by delegate key. A new WASM = new key = old secrets invisible. Users lose all their private data.
 
-### The Solution: Export Handler from Day One
+### How migration actually works: re-run the old delegate
 
-Every delegate MUST include a handler that exports all stored secrets from v1. The UI orchestrates migration between old and new delegates.
+There is **no `ExportSecrets` request handler** — earlier versions of this doc
+described one, but River ships nothing of the kind. The real mechanism (River's,
+and Delta's) is a **backward probe that re-runs the old delegate's own WASM**;
+the old delegate needs no special export handler.
 
-```rust
-// MUST be in the delegate from the very first version
-DelegateRequest::ExportSecrets { authorization } => {
-    // Verify the authorization is signed by the app author
-    let author_pubkey = ed25519_dalek::VerifyingKey::from_bytes(&AUTHOR_PUBKEY)?;
-    let new_delegate_hash = &authorization.new_delegate_hash;
-    author_pubkey.verify_strict(new_delegate_hash, &authorization.signature)
-        .map_err(|_| "unauthorized migration request")?;
+1. On startup the successor (new) delegate's UI walks a committed registry of
+   every previous delegate key (see "Migration Entry Registry" below).
+2. For each predecessor it sends an ordinary read message **addressed to the old
+   delegate key** — in River, `DelegateRequest::ApplicationMessages { key:
+   legacy_delegate_key, .. }` carrying the chat-delegate's own app-level
+   `GetRequest` (fixed keys) and `ListRequest` (to enumerate dynamic per-entity
+   keys). Because the key names the old `code_hash`, the node loads and
+   **re-runs the old WASM**, which reads its own secret namespace and returns the
+   data.
+3. The UI folds that data forward and re-stores it under the **current**
+   delegate. In River the per-room signing keys are carried forward via
+   `migrate_signing_key` (which writes `StoreSigningKey` into the new delegate).
 
-    // Return all secrets
-    let signing_key = ctx.get_secret(b"signing_key");
-    let user_data = ctx.get_secret(b"user_data");
-    DelegateResponse::ExportedSecrets {
-        signing_key,
-        user_data,
-    }
-}
-```
+What is carried are the **per-room signing keys**. **Encryption secrets are
+re-derived**, not copied out of the old delegate — River rebuilds them from
+carried state via `derive_room_secret`. So the migration is: enumerate old keys →
+re-run old WASM to read its secrets → re-store the signing keys forward → re-derive
+everything else.
 
-### Migration Flow
+> **This step is fragile: it depends on the old WASM still running on the current
+> node runtime.** The instant a frozen old delegate WASM can no longer
+> deserialize what the current runtime sends it — typically after a
+> **freenet-stdlib / ABI bump** that changes the bincode layout of
+> `InboundDelegateMsg` — the re-run fails and data under that key is
+> **unrecoverable via automatic migration**. This is not hypothetical: River's
+> V4–V6 delegates (freenet/river#204) failed every migration probe with
+> `de/serialization error: Invalid size …` after an stdlib bump, and those
+> entries were removed as unrecoverable — affected users had to rejoin via
+> invite. Migrate promptly (don't let a generation sit unmigrated across an
+> stdlib bump), and never assume an arbitrarily old WASM will still run.
 
-1. **Build time:** Build new delegate WASM, compute its hash
-2. **Build time:** App author signs the new WASM hash (embedded in UI, not delegate)
-3. **Runtime:** UI sends `ExportSecrets` to old delegate with signed authorization
-4. **Runtime:** Old delegate verifies signature against hardcoded author pubkey
-5. **Runtime:** Old delegate returns secrets
-6. **Runtime:** UI stores secrets in new delegate via `StoreSigningKey` etc.
+### Preconditions
+
+The carry-forward above only works if:
+- **Identity is key-derived, never a delegate or contract key.** The user-facing
+  handle (a room's owner key, an address) must survive the key rotation. See
+  `identity-and-addressing.md`.
+- **You keep an authoritative, append-only registry** of past delegate keys
+  (below), and the old WASM is still registered on the node.
 
 ### Pre-Publish Safety Check
 
@@ -406,17 +421,32 @@ code_hash = "abc123..."    # BLAKE3 of old WASM bytes
 delegate_key = "def456..."  # BLAKE3 of code_hash bytes
 ```
 
-The UI's `build.rs` generates a Rust constant array from this file, which the migration code uses to probe old delegates at startup.
+The UI's `build.rs` generates a Rust constant array from this file, which the
+migration code probes at startup. This is River's exact pattern:
+`legacy_delegates.toml` → `ui/build.rs` → the `LEGACY_DELEGATES` const that
+`fire_legacy_migration_request` walks.
 
 ### What Happens Without This
 
 If you deploy a new delegate WASM without migration:
 - All stored signing keys are lost
-- All user preferences are lost  
+- All user preferences are lost
 - Users see their sites/rooms disappear
-- Recovery requires the old WASM to still be on the node AND to support export
+- Recovery requires the old WASM to still **run** on the node (see the fragility
+  note above — a runtime/ABI bump can make even that impossible)
 
-This happened to Delta in April 2026 and River multiple times. Ship the export handler from v1.
+This happened to Delta in April 2026 and River multiple times. Design the
+registry and the successor-side probe in from v1.
+
+### Reusable tooling: `freenet-migrate`
+
+Rather than hand-roll the registry, the `build.rs` codegen, and the backward
+probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
+legacy-key registry, build-time codegen, the backward probe, the delegate
+carry-forward, and the preconditions as enforced types). As of this writing it
+is **not yet published to crates.io**, so treat it as the recommended direction
+rather than a drop-in dependency today — prefer it over hand-rolling once it
+lands. The pattern above is exactly what it codifies.
 
 ## River Delegate Reference
 
