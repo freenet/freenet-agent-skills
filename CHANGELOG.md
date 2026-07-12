@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.8.0 (2026-07-12)
+
+Make the `dapp-builder` **upgrade** knowledge discoverable and consolidated, so a
+future agent (or dev) prompted "upgrade my Freenet dApp" / "bump stdlib" / "ship
+contract v2" lands on ONE clear, complete playbook and does not fall into the
+"recreate everything / dead invites" trap. The v1.6.0/v1.7.0 corrections fixed the
+*framing*; this release fixes *discoverability + completeness*. Grounded in River's
+live 0.6→0.8 stdlib re-key (verified 2026-07-12): rooms auto-migrated on refresh,
+invites survived, the 78-member Official room stayed intact, no recreation.
+Refs freenet-core#2776.
+
+- `SKILL.md` frontmatter **description**: added upgrade/migration to the routing
+  triggers ("upgrade an existing dApp — bump freenet-stdlib, ship a new
+  contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state
+  across a key change without breaking invites or losing data"). The skill had deep
+  upgrade content but the description advertised only *new*-dApp use cases, so an
+  agent asked to upgrade might not be routed here.
+- `SKILL.md` Development Workflow: added a prominent "Already shipped v1 and here to
+  UPGRADE?" signpost routing straight to the consolidated playbook, so the upgrade
+  path is not buried across Phase 1 / Phase 2 / Phase 4 steps.
+- `upgrade-and-migration.md`: added the consolidated **"Upgrading a Freenet dApp —
+  the painless path"** playbook as the discoverable hub — six numbered steps tying
+  together the v1 design precondition (choose a **stable identity anchor
+  independent of the WASM** — never expose the raw contract key as identity; the
+  anchor options are owner/user key [e.g. River], a fixed namespace/singleton
+  params, a DID, or an index contract — this is general, NOT owner-key-only),
+  reproducible builds (commit lockfile, pin toolchain), register
+  the outgoing code hash BEFORE changing the WASM (`cargo make add-migration` /
+  `add-room-contract-migration`), the `freenet-migrate` crate (crates.io v0.1.0)
+  for the carry-forward, publish + per-client auto-migrate on next load, and the
+  explicit "do NOT recreate instances / rotate keys / warn of dead invites"
+  (recreation is only for a deliberate owner-identity change). Honest caveats kept:
+  self-authorizing + backward-compatible state OR a written carry-forward;
+  per-client on next load; a fresh device has no local state. The existing
+  deep-dives (contract/delegate patterns, five-properties discipline, test harness)
+  remain as references the playbook links to — no duplication.
+
 ## 1.7.0 (2026-07-12)
 
 Reframe the `dapp-builder` contract/delegate **upgrade** guidance so third-party

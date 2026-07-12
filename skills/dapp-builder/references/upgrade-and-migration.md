@@ -1,12 +1,117 @@
 # Upgrading Contracts and Delegates Safely
 
-The *mechanics* of an upgrade — where the new version lives, how to register old
-WASM hashes — are in `contract-patterns.md` ("Contract WASM Upgrade & State
+This is the hub for upgrading a live Freenet dApp. The **painless-path playbook**
+below is the start-to-finish procedure; the rest of the document is the
+operational discipline behind it (the five properties that keep a migration from
+losing data, the test harness, and rollout mechanics). The per-component
+*mechanics* live in `contract-patterns.md` ("Contract WASM Upgrade & State
 Migration") and `delegate-patterns.md` ("Delegate WASM Upgrade & Secret
-Migration"). This document is the **operational discipline** that keeps the
-migration itself from losing user data. Every lesson here was paid for in
-production by River (freenet/river#345, #352, #253). Read it before your *second*
-release, and design for it before your *first*.
+Migration"), which the playbook links to. Every lesson here was paid for in
+production by River (freenet/river#345, #352, #253, #204, #393). Read it before
+your *second* release, and design for it before your *first*.
+
+## Upgrading a Freenet dApp — the painless path
+
+**If you are here to upgrade an existing dApp — bump `freenet-stdlib`, ship a new
+contract or delegate version, or fix a bug that changes the WASM — start here.**
+
+A routine WASM/stdlib bump is **low-risk and mechanical when you designed for it
+at v1.** It is NOT "recreate everything and all invites die." River's live 0.6→0.8
+stdlib re-key (verified 2026-07-12) migrated every room on the next refresh, kept
+every invite and share link working, and left the 78-member Official room intact —
+with no recreation. The property that makes this work: the contract key moves on
+any WASM change, but your app's durable references were anchored to a **stable
+identifier that does not move with the WASM** (River's rooms anchor on the owner's
+verifying key; other designs use a fixed namespace, a DID, or an index contract —
+see step 1), so clients re-derive the new contract key and every reference keeps
+pointing at the right place.
+
+The whole procedure, start to finish:
+
+1. **(Design precondition — done once at v1; verify it still holds.) Choose a
+   stable identity anchor that is independent of the WASM; never expose the raw
+   content-addressed contract key as your app's identity.** A WASM / dependency /
+   compiler change re-derives the contract key, so any durable reference that
+   hard-codes it — invites, share links, bookmarks, membership records,
+   external-service keys, index/registry entries, anything users or other systems
+   hold onto — breaks on upgrade. Anchor those references on something that does
+   **not** change when the WASM re-keys, and keep a way to locate/migrate state
+   from the old key to the new one (steps 3–5). What the stable anchor *is* depends
+   on your app's design — pick one that fits:
+   - a **user/owner public key** — *e.g. River*: invites embed the room owner's
+     verifying key, and the client re-derives the room contract key from it. Fits
+     apps that have a natural owner or per-user identity; not every app does.
+   - a **fixed, well-known parameter / namespace / name** — a "singleton" contract
+     whose params are stable, so its address only moves when the WASM does (and the
+     carry-forward in steps 3–5 handles that move).
+   - a **DID or other external identifier** your app already trusts.
+   - an **index/registry contract** mapping a stable name → the current contract
+     key — a level of indirection. (The index contract itself needs this same
+     treatment: its own address must be reachable via a stable anchor.)
+
+   If v1 exposed a raw contract key as an identifier, fix *that* first — an upgrade
+   cannot rescue an identifier that moves with the WASM. See
+   `identity-and-addressing.md` and "Architecture invariants" below.
+
+2. **Make the build reproducible, so the key moves only when you mean it to.**
+   Commit `Cargo.lock`, pin the toolchain (`rust-toolchain.toml`), build
+   `--locked`. Otherwise a stray `cargo update` or a different rustc silently
+   re-keys the contract and orphans data with no upgrade in sight (River's
+   `Cargo.lock` was gitignored — freenet/river#393). See `build-system.md` →
+   "Byte-reproducibility" and "Hash + artifact hygiene" below.
+
+3. **BEFORE you change the WASM, register the *outgoing* code hash in the legacy
+   registry.** This is the one required operational step and the single most
+   commonly forgotten one. Record the hash the *current* release ships — while it
+   is still the committed WASM — so the new client can find and carry state forward
+   from it. River does this with `cargo make add-migration` (delegate) and
+   `cargo make add-room-contract-migration` (room contract), which append the old
+   `code_hash`/key to `legacy_delegates.toml` / `common/legacy_room_contracts.toml`
+   *before* the new WASM is committed; a pre-commit hook plus the `check-migration`
+   / `check-room-contract-migration` CI tasks block any WASM change that skips it.
+   Your app builds the equivalent registry + guard, or gets both from
+   `freenet-migrate` (next step). Order matters: register first, then rebuild.
+
+4. **Use the `freenet-migrate` crate for the carry-forward instead of hand-rolling
+   it.** The legacy-hash registry, the `build.rs` codegen, the backward probe, and
+   the preconditions-as-types are identical across every app, so `freenet-migrate`
+   packages them. It is **published on crates.io as v0.1.0**: `cargo add
+   freenet-migrate` (runtime carry-forward) and `cargo add --build
+   freenet-migrate-build` (build.rs codegen + CI hash-guard). Honest caveat: v0.1.0
+   targets stdlib 0.8.x and does the *contract*-side carry-forward; the
+   node-mediated transport into a predecessor *delegate* is a documented stub, so
+   delegate secret migration still runs the River/Delta way (the app re-runs the
+   old delegate WASM over `DelegateRequest::ApplicationMessages`). See
+   `contract-patterns.md` and `delegate-patterns.md` for the mechanics it codifies.
+
+5. **Publish the new version, then let clients migrate themselves.** Publish the
+   new WASM to the shared production key **from `main` only**, after review and
+   green CI (every publish hits the same shared address). Each client, on its
+   **next load**, computes old-key vs new-key, GETs the old state, and re-PUTs it
+   under the new key — the successor's `validate_state` re-verifies every byte, so
+   *any* client can carry the state forward and the owner need not be online.
+   Migration is **per-client, lazily, on next load**; old and new clients coexist
+   for an unbounded rollout window. A **fresh device has no local state to
+   migrate** — that is normal, not a failure. Keep the migration itself safe
+   (idempotent, resumable, non-destructive, regression-gated, observable) per "The
+   five properties" below.
+
+6. **Do NOT recreate instances, rotate keys, or warn users their invites are
+   dead.** None of that is part of a routine upgrade, and doing it *causes* the
+   loss you were trying to avoid. Recreation — a genuinely new contract instance and
+   fresh references — is **only** for a deliberate change of the app's *identity
+   anchor* itself (e.g. rotating a compromised owner key, or standing up a genuinely
+   separate instance), never for a contract or stdlib bump.
+
+**What makes it painless is two things holding together:** (1) a stable identity
+anchor independent of the WASM (step 1) so references survive the re-key, and
+(2) state the successor can carry forward on its own. The second means either **self-authorizing + backward-compatible state**
+(so any client can re-PUT it and the new `validate_state` accepts it), OR a
+**written carry-forward** via `freenet-migrate` / the backward probe. With those in
+place the steps above are mechanical. Without them an upgrade is genuinely risky —
+so the fix is to add them, not to recreate everything. The honest caveats stand:
+migration is per-client on next load, and a fresh device has no local state to
+carry forward.
 
 ## The one truth that shapes everything
 
