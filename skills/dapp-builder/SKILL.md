@@ -1,6 +1,6 @@
 ---
 name: dapp-builder
-description: Build decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, or build a Freenet-connected UI.
+description: Build and maintain decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI, and through upgrading a live dApp safely. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, build a Freenet-connected UI, OR upgrade an existing dApp — bump freenet-stdlib, ship a new contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state across a contract/delegate key change without breaking invites or losing data.
 license: LGPL-3.0
 ---
 
@@ -81,7 +81,19 @@ Freenet solves "Eventual Consistency" using a specific mathematical requirement:
 
 ## Development Workflow
 
-Follow these phases in order:
+Follow these phases in order.
+
+> **Already shipped v1 and here to UPGRADE?** (bump `freenet-stdlib`, ship a new
+> contract/delegate version, or fix a bug that re-keys the WASM) — go straight to
+> **`references/upgrade-and-migration.md` → "Upgrading a Freenet dApp — the painless
+> path"**, the single start-to-finish playbook. A routine WASM/stdlib bump is
+> **low-risk and mechanical when you designed for it at v1**, not "recreate
+> everything and all invites die" — River's live 0.6→0.8 stdlib re-key (verified
+> 2026-07-12) auto-migrated every room on refresh, kept every invite and the
+> 78-member Official room intact, and needed no recreation. The phases below build
+> a *new* dApp; the playbook ties the upgrade steps together (v1 design
+> precondition → reproducible builds → register the outgoing hash → `freenet-migrate`
+> → publish → do NOT recreate instances or warn of dead invites).
 
 ### Phase 1: Contract Design (Shared State)
 
@@ -101,7 +113,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 3. Implement `ContractInterface` trait for the contract
 4. Ensure all state updates satisfy the commutative monoid requirement
 5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
-6. **Plan contract upgrade from v1 — it's low-risk and mechanical when you design for it.** A WASM change moves the contract key, but if you anchor identity on a stable owner/user key (never on the contract key) the upgrade is transparent to users: state migrates itself on next load, and every owner-key-derived reference (invites, share links, membership, external services keyed on the owner identity) survives the re-key because the client re-derives the new contract key from the *unchanged owner key*, not from a stored contract key. Invites and links do **not** die on an upgrade — River's 0.6→0.8 re-key on the live network kept every room and invite. Recreation is only for deliberately changing the *owner* identity, never for a routine contract/stdlib bump. The shipped baseline (River #292, Delta) is a **backward probe from a committed legacy-code-hash registry**: reconstruct each predecessor key from `(stable params ‖ old code_hash)`, GET the old state, fold it forward, and re-PUT under the current key — permissionless because the successor's `validate_state` re-verifies every byte. The one required operational step is registering the *outgoing* code hash in the registry before the WASM changes, then republishing. An author-signed `OptionalUpgrade` pointer is an *optional* straggler courtesy on top, not the mechanism that moves state. Prefer the reusable `freenet-migrate` crate (published on crates.io as v0.1.0) over hand-rolling. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration". For the cross-cutting operational discipline that keeps the migration itself from losing data (resumable, idempotent, non-destructive, regression-gated, observable), see `upgrade-and-migration.md`.
+6. **Plan contract upgrade from v1 — it's low-risk and mechanical when you design for it.** A WASM change moves the contract key, but if you anchor your app's durable references on a **stable identity anchor that is independent of the WASM** — never the raw contract key — the upgrade is transparent to users: state migrates itself on next load, and every reference derived from that anchor (invites, share links, membership, external services) survives the re-key because the client re-derives the new contract key from the *unchanged anchor*, not from a stored contract key. What the anchor *is* depends on the app (an owner/user key — e.g. River; a fixed namespace/singleton params; a DID; or an index contract mapping a stable name → current key); the options are in `upgrade-and-migration.md` step 1. Invites and links do **not** die on an upgrade — River's 0.6→0.8 re-key on the live network kept every room and invite. Recreation is only for deliberately changing the app's *identity anchor* (e.g. rotating a compromised owner key), never for a routine contract/stdlib bump. The shipped baseline (River #292, Delta) is a **backward probe from a committed legacy-code-hash registry**: reconstruct each predecessor key from `(stable params ‖ old code_hash)`, GET the old state, fold it forward, and re-PUT under the current key — permissionless because the successor's `validate_state` re-verifies every byte. The one required operational step is registering the *outgoing* code hash in the registry before the WASM changes, then republishing. An author-signed `OptionalUpgrade` pointer is an *optional* straggler courtesy on top, not the mechanism that moves state. Prefer the reusable `freenet-migrate` crate (published on crates.io as v0.1.0) over hand-rolling. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration". For the cross-cutting operational discipline that keeps the migration itself from losing data (resumable, idempotent, non-destructive, regression-gated, observable), see `upgrade-and-migration.md`.
 7. **Read `state-authorization-patterns.md` before designing the second iteration.** It captures cross-cutting patterns (per-item vs bundled signatures, replay protection via monotonic counter / tombstones / cross-context binding, signed-payload hygiene, `time::now()` gotchas, related-contracts limits, wire-format stability) that bite on every contract beyond the trivial.
 
 References:
