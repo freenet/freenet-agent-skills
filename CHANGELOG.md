@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.7.0 (2026-07-12)
+
+Reframe the `dapp-builder` contract/delegate **upgrade** guidance so third-party
+developers learn the correct headline: a routine WASM/stdlib bump is **low-risk
+and mechanical when you design for it**, not "recreate everything and all invites
+die". Grounded in River's real 0.6→0.8 re-key + republish on the live network
+(verified 2026-07-12). Corrections, not new speculation. Refs freenet-core#2776.
+
+- `SKILL.md` (Phase 1, step 6): lead with the low-risk/mechanical outcome and
+  state the key property explicitly — when identity is anchored on a stable
+  owner/user key (not the contract key), **owner-key-derived references survive a
+  re-key** (invites, share links, membership, external services keep working
+  because the client re-derives the new contract key from the unchanged owner
+  key), state auto-migrates on next load, and the one required step is
+  registering the outgoing code hash before republishing. Recreation is only for
+  deliberately changing the *owner* identity.
+- `contract-patterns.md` ("Contract WASM Upgrade & State Migration"): added a
+  "what this buys you" paragraph making the invites/references-survive property
+  prominent, framed honestly as a consequence of designing for it (key-derived
+  identity + legacy registry + self-authorizing, backward-compatible state) with
+  the caveats kept (per-client on next load; fresh device has no local state to
+  migrate). Grounded in River's `Invitation` embedding the room owner's verifying
+  key rather than the room contract key.
+- Corrected the now-stale **`freenet-migrate` publish status** across
+  `contract-patterns.md`, `delegate-patterns.md`, and `upgrade-and-migration.md`:
+  the crate (and `freenet-migrate-build`) is **published on crates.io as v0.1.0**,
+  not "not yet published / once it lands". Kept the honest v0.1.0 caveat (targets
+  stdlib 0.8.x; the node-mediated predecessor-*delegate* transport is a documented
+  stub, so delegate migration still runs the River/Delta re-run-the-old-WASM way).
+
 ## 1.6.0 (2026-07-10)
 
 Correct the `dapp-builder` contract/delegate **upgrade & migration** advice to

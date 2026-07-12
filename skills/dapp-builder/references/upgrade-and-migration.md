@@ -167,8 +167,9 @@ and verify by mutation that removing the fix fails the test.
 - `references/state-authorization-patterns.md` — self-authorizing state, the
   precondition for permissionless migration.
 - The reusable `freenet/freenet-migrate` crate packages the registry, the
-  build-time codegen, the backward probe, and the preconditions (not yet on
-  crates.io — prefer it over hand-rolling once it lands).
+  build-time codegen, the backward probe, and the preconditions (published on
+  crates.io as v0.1.0 — `cargo add freenet-migrate` /
+  `cargo add --build freenet-migrate-build`; prefer it over hand-rolling).
 - River as worked reference: freenet/river#345 (per-entity CAS keys), #352
   (resumable/interrupted-migration recovery), #253 (regression-gated legacy probe),
   #204 (old delegate WASM unrunnable after an stdlib bump), #393 (gitignored
