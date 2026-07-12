@@ -443,10 +443,14 @@ registry and the successor-side probe in from v1.
 Rather than hand-roll the registry, the `build.rs` codegen, and the backward
 probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
 legacy-key registry, build-time codegen, the backward probe, the delegate
-carry-forward, and the preconditions as enforced types). As of this writing it
-is **not yet published to crates.io**, so treat it as the recommended direction
-rather than a drop-in dependency today — prefer it over hand-rolling once it
-lands. The pattern above is exactly what it codifies.
+carry-forward, and the preconditions as enforced types). It is **published on
+crates.io as v0.1.0** (`cargo add freenet-migrate` /
+`cargo add --build freenet-migrate-build`); prefer it over hand-rolling the
+pattern above, which is what it codifies. One caveat for delegates specifically:
+in v0.1.0 the node-mediated transport that reaches into a predecessor *delegate*
+is a documented stub (`TransportUnavailable`), so delegate secret migration still
+runs the River/Delta way — the app carries the export across `DelegateRequest`
+round-trips, re-running the old WASM.
 
 ## River Delegate Reference
 

@@ -418,6 +418,26 @@ from a contract key. The migration below moves *state* from the old contract key
 to the new one; the user-facing identifier stays fixed across that move. See
 `identity-and-addressing.md`.
 
+**What this buys you: a routine upgrade is low-risk and mechanical.** When
+identity is key-derived, a WASM change is transparent to users. State migrates
+itself on next load (the backward probe below), and **every owner-key-derived
+reference survives the re-key** — invites, share links, membership, and external
+services keyed on the owner identity keep working, because the client re-derives
+the new contract key `BLAKE3(BLAKE3(new_wasm) || params)` from the *unchanged
+owner key* rather than from a stored contract key. Invites and links do **not**
+die on an upgrade (River verified this on the live network with its 0.6→0.8
+re-key: rooms kept their state and links minted under 0.6 resolved under 0.8, its
+`Invitation` embedding the room owner's verifying key rather than the room
+contract key). The one required operational step is registering the *outgoing*
+code hash in your legacy-hash registry (below) before the WASM changes, then
+republishing. Recreation is only for deliberately changing the *owner* identity
+(a compromised key, a genuinely new instance) — never for a routine contract or
+stdlib bump. These are consequences of *designing for them* (key-derived
+identity + the legacy registry + self-authorizing, backward-compatible state, or
+a written carry-forward via `freenet-migrate`), not automatic properties of every
+app; migration is per-client on next load, and a fresh device has no local state
+to migrate.
+
 ### Preconditions (hard requirements — an app lacking these does NOT get safe carry-forward)
 
 Permissionless contract migration only works if all of these hold:
@@ -620,10 +640,17 @@ contract lives; either way the probe is what carries the state.
 
 The registry, the `build.rs` codegen, and the backward probe are the same across
 every app, so a reusable crate — `freenet/freenet-migrate` — packages them (plus
-the delegate carry-forward and the preconditions above as enforced types). As of
-this writing it is **not yet published to crates.io**; treat it as the recommended
-direction and prefer it over hand-rolling once it lands, rather than a drop-in
-dependency today. The hand-rolled recipe above is what it codifies.
+the delegate carry-forward and the preconditions above as enforced types). It is
+**published on crates.io as v0.1.0**: `cargo add freenet-migrate` for the runtime
+carry-forward and `cargo add --build freenet-migrate-build` for the `build.rs`
+codegen + CI hash-guard. Prefer it over hand-rolling the recipe above, which is
+what it codifies. Be honest about its status: v0.1.0 targets current stdlib
+(0.8.x), and the contract-side carry-forward plus the enforced preconditions are
+in place, but the node-mediated transport into a predecessor *delegate* is a
+documented stub in this release (it returns `TransportUnavailable`) — delegate
+migration still works the River/Delta way, the app carrying the export across
+`DelegateRequest` round-trips and re-running the old WASM. See
+[freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
 
 ## River Contract Reference
 
