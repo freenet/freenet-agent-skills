@@ -72,6 +72,18 @@ Freenet solves "Eventual Consistency" using a specific mathematical requirement:
 
 **Efficiency:** Peers exchange **Summaries** (compact representations) and **Deltas** (patches/diffs) rather than re-downloading full state.
 
+### Known limitation: a rarely-changing field can lag between peers
+
+In current Freenet core, a state update to a **rarely-changing field can be silently lost between two peers** and stay missing for a while. When a receiving peer is briefly overloaded it can drop an incoming update without signalling the sender, and the sender then treats that peer as up to date, so it computes later updates as "only newer changes" and never re-sends the dropped one. A slow background heal (roughly every 5 minutes) eventually repairs it, and that heal can itself drop again under load.
+
+Fields that change often hide the problem, because their current value re-ships on the next update anyway. A field that changes rarely is where it shows: config, metadata, an authority or permission field, a ban list. Some peers keep serving the stale value until the heal reaches them. This is a current-core limitation, tracked and being fixed in [freenet/freenet-core#4857](https://github.com/freenet/freenet-core/issues/4857).
+
+Design around it until the fix lands:
+
+- **Use deterministic maps in your `Summary` type: `BTreeMap`, never `HashMap`.** A `HashMap` serializes in nondeterministic order (ciborium), so two identical states can summarize to different bytes and core's byte-level convergence check misfires (spurious heals, or missed ones). This is the single cheapest and most important fix. The same caution applies to any map inside whatever `summarize` returns.
+- **Do not assume a one-shot change to a rarely-updated field reaches every peer instantly.** Make sure your state genuinely converges through `summarize` / `delta` / `apply` (and test that it does) instead of relying on a live broadcast reaching everyone. Where practical, let important changes ride alongside a field that ships frequently.
+- **When debugging "some peers do not see my update," suspect this core limitation before your own `apply` logic.**
+
 ## Advanced Capabilities
 
 - **Subscriptions:** Clients can subscribe to contracts and get notified of changes immediately (real-time apps)

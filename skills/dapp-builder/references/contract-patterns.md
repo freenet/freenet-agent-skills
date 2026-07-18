@@ -244,6 +244,16 @@ mod tests {
 3. **Mutation during iteration:** Modifying state while iterating can produce different results
 4. **Missing items in merge:** Only keeping "newer" items without proper conflict resolution
 
+> **Determinism matters in your `Summary` type too, for a separate reason.** A
+> `HashMap` inside a `Summary` (or anything `summarize` returns) serializes in
+> nondeterministic order, so two identical states can produce different summary
+> bytes. Core compares summaries byte-for-byte to decide whether two peers have
+> converged, so nondeterministic bytes make that check misfire (spurious or
+> missed heals). Use `BTreeMap` in Summaries. This interacts with a current-core
+> propagation limitation where an update to a rarely-changing field can lag
+> between peers (freenet/freenet-core#4857); see "Known limitation: a
+> rarely-changing field can lag between peers" in `SKILL.md`.
+
 ## Commutativity Strategies
 
 ### 1. Set-Based Operations

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.8.1 (2026-07-18)
+
+Warn `dapp-builder` users about a current-core state-propagation limitation that
+dApp contract designers must design around, and give them the cheap mitigations.
+In current Freenet core, an UPDATE to a rarely-changing field (config, metadata,
+an authority/permission field, a ban list) can be silently lost between two peers
+and stay missing until the slow (~5 min) anti-entropy heal catches up, which can
+itself drop again under load. Fields that change often self-mask the bug; rarely
+changing ones do not. Tracked and being fixed in core: freenet/freenet-core#4857.
+
+- `SKILL.md` Data Synchronization & Consistency: added a "Known limitation: a
+  rarely-changing field can lag between peers" subsection. Developer-facing
+  description of the symptom plus three mitigations: (1) use `BTreeMap` never
+  `HashMap` in your `Summary` type (a `HashMap` serializes in nondeterministic
+  order, breaking core's byte-level summary comparison, the single cheapest fix);
+  (2) do not assume a one-shot change to a rarely-updated field propagates
+  instantly, make sure state genuinely converges via `summarize`/`delta`/`apply`
+  and test it; (3) when debugging "some peers do not see my update," suspect this
+  core limitation before your own `apply` logic.
+- `references/contract-patterns.md` Common Commutativity Bugs: added a
+  code-adjacent note that `Summary` types must serialize deterministically
+  (`BTreeMap`, not `HashMap`), cross-referencing the SKILL.md limitation.
+
 ## 1.8.0 (2026-07-12)
 
 Make the `dapp-builder` **upgrade** knowledge discoverable and consolidated, so a
