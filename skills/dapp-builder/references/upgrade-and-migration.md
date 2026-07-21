@@ -75,13 +75,18 @@ The whole procedure, start to finish:
 4. **Use the `freenet-migrate` crate for the carry-forward instead of hand-rolling
    it.** The legacy-hash registry, the `build.rs` codegen, the backward probe, and
    the preconditions-as-types are identical across every app, so `freenet-migrate`
-   packages them. It is **published on crates.io as v0.1.0**: `cargo add
-   freenet-migrate` (runtime carry-forward) and `cargo add --build
-   freenet-migrate-build` (build.rs codegen + CI hash-guard). Honest caveat: v0.1.0
-   targets stdlib 0.8.x and does the *contract*-side carry-forward; the
-   node-mediated transport into a predecessor *delegate* is a documented stub, so
-   delegate secret migration still runs the River/Delta way (the app re-runs the
-   old delegate WASM over `DelegateRequest::ApplicationMessages`). See
+   packages them. It is **`freenet-migrate` 0.3.0 on crates.io** (with
+   `freenet-migrate-build` 0.2.0): `cargo add freenet-migrate` (runtime
+   carry-forward) and `cargo add --build freenet-migrate-build` (build.rs codegen +
+   CI hash-guard). This is the mechanism River's contract-migration path runs in
+   production: the browser UI and `riverctl` both drive it live, and River adopted
+   it without a rewrite, its build codegen reading the existing `[[entry]]`
+   registries and emitting view consts that match the hand-rolled shapes
+   (freenet/river#434, #436, #437). Honest caveat: the crate's field-deployed path
+   is the *contract* side; the node-mediated transport into a predecessor
+   *delegate* is still a documented stub, so delegate secret migration still runs
+   the River/Delta way (the app re-runs the old delegate WASM over
+   `DelegateRequest::ApplicationMessages`, tracked under freenet-core#2776). See
    `contract-patterns.md` and `delegate-patterns.md` for the mechanics it codifies.
 
 5. **Publish the new version, then let clients migrate themselves.** Publish the
@@ -272,9 +277,11 @@ and verify by mutation that removing the fix fails the test.
 - `references/state-authorization-patterns.md` — self-authorizing state, the
   precondition for permissionless migration.
 - The reusable `freenet/freenet-migrate` crate packages the registry, the
-  build-time codegen, the backward probe, and the preconditions (published on
-  crates.io as v0.1.0 — `cargo add freenet-migrate` /
-  `cargo add --build freenet-migrate-build`; prefer it over hand-rolling).
+  build-time codegen, the backward probe, and the preconditions (`freenet-migrate`
+  0.3.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
+  `cargo add --build freenet-migrate-build`). River's contract-migration path (UI
+  and `riverctl`) runs it in production, and existing apps adopt it without a
+  rewrite via the `[[entry]]`-registry build codegen (freenet/river#434, #436, #437).
 - River as worked reference: freenet/river#345 (per-entity CAS keys), #352
   (resumable/interrupted-migration recovery), #253 (regression-gated legacy probe),
   #204 (old delegate WASM unrunnable after an stdlib bump), #393 (gitignored

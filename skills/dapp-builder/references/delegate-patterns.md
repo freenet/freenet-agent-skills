@@ -443,14 +443,27 @@ registry and the successor-side probe in from v1.
 Rather than hand-roll the registry, the `build.rs` codegen, and the backward
 probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
 legacy-key registry, build-time codegen, the backward probe, the delegate
-carry-forward, and the preconditions as enforced types). It is **published on
-crates.io as v0.1.0** (`cargo add freenet-migrate` /
-`cargo add --build freenet-migrate-build`); prefer it over hand-rolling the
-pattern above, which is what it codifies. One caveat for delegates specifically:
-in v0.1.0 the node-mediated transport that reaches into a predecessor *delegate*
-is a documented stub (`TransportUnavailable`), so delegate secret migration still
-runs the River/Delta way — the app carries the export across `DelegateRequest`
-round-trips, re-running the old WASM.
+carry-forward, and the preconditions as enforced types). It is
+**`freenet-migrate` 0.3.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+`cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. Adopting
+the build codegen is not a rewrite: `freenet-migrate-build` reads the River-style
+`[[entry]]` registry above (`entry_registry`) and emits byte-array *view* consts
+matching your hand-rolled `LEGACY_DELEGATES` shape (`delegate_pair_view` gives
+`&[([u8; 32], [u8; 32])]` in `(delegate_key, code_hash)` order), with no runtime
+dependency in views-only mode. Every build re-derives
+`delegate_key == blake3(code_hash || params)` and flags a row that predates that
+derivation with `irregular_key = true` (River adopted the build codegen this way
+in freenet/river#434).
+
+One caveat is specific to delegates: the node-mediated transport that reaches into
+a predecessor *delegate* is still a documented stub (`TransportUnavailable`), so
+the delegate secret carry-forward itself still runs the River/Delta way, with the
+app carrying the export across `DelegateRequest::ApplicationMessages` round-trips
+and re-running the old WASM (the mechanism above). Delegate-side entry points and a
+node copy-forward primitive are future work, tracked under
+[freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776). The
+crate's shipped, field-deployed carry-forward today is the *contract* path:
+River's UI and `riverctl` run it live (see `contract-patterns.md`).
 
 ## River Delegate Reference
 
