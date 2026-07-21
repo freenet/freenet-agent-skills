@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.9.0 (2026-07-21)
+
+Update the `dapp-builder` upgrade/migration guidance to match the now-shipped,
+field-deployed reality of `freenet-migrate`. The v1.6.0/v1.7.0 corrections fixed
+the framing and v1.8.0 fixed discoverability while the crate was still v0.1.0 and
+aspirational ("prefer over hand-rolling"); it is now **`freenet-migrate` 0.3.0 /
+`freenet-migrate-build` 0.2.0 on crates.io** and is the mechanism River's
+contract-migration path runs in production. Corrections to match shipped source,
+not new speculation. Ground truth verified 2026-07-21: crate versions on
+crates.io; River's adoption PRs freenet/river#434 (build codegen), #436 (UI
+decision-driver), and #437 (riverctl decision-driver) all merged; riverctl 0.1.80
+/ river-core 0.1.16 on crates.io. Refs freenet-core#2776.
+
+- Crate **version + status** across `SKILL.md`, `contract-patterns.md`,
+  `delegate-patterns.md`, and `upgrade-and-migration.md`: `freenet-migrate` is now
+  **0.3.0** (with `freenet-migrate-build` **0.2.0**), no longer "published as
+  v0.1.0". Reframed from the "prefer over hand-rolling" aspiration to the shipped,
+  reviewed, field-deployed mechanism River's contract-migration path runs live
+  (browser UI + `riverctl`).
+- **Existing apps adopt it without a rewrite** (`contract-patterns.md`,
+  `delegate-patterns.md`, and the SKILL.md / upgrade bullets):
+  `freenet-migrate-build` reads the River-style `[[entry]]` registries
+  (`entry_registry`) and emits byte-array *view* consts matching hand-rolled const
+  shapes (`contract_hash_view`, `delegate_pair_view`); views-only mode
+  (`canonical_consts(false)`) needs no runtime dependency; registries accept hex or
+  base58; every build re-derives `delegate_key == blake3(code_hash || params)`
+  (`irregular_key = true` for grandfathered pre-standard keys). Worked example:
+  freenet/river#434.
+- **Sans-IO decision driver** (`contract-patterns.md`, SKILL.md upgrade bullet):
+  documented the 0.3.0 `ProbeDriver` (newest-first by the generation field,
+  first-real-hit wins, timeout/undecodable advances, single-shot late responses,
+  hop cap, exhaustion seeds the local snapshot) with the app pumping I/O and
+  supplying `ProbeStateOps` (`decode` / `is_real` / merges / `prepare_forward`, the
+  #427 pointer-strip seam), plus `SelectionPolicy::NewestFirstWins` (default) vs
+  `FoldAll` (tombstoned states with a commutative + idempotent merge, ack-gated).
+  Worked examples: freenet/river#436 (UI event-driven pump), #437 (riverctl
+  synchronous recovery).
+- **Delegate path kept honest, not overstated** (`delegate-patterns.md`, SKILL.md
+  delegate bullet, `upgrade-and-migration.md`): the node-mediated transport into a
+  predecessor *delegate* is still a documented stub, so delegate secret migration
+  still runs the River/Delta app-side re-run-old-WASM way; delegate-side entry
+  points and a node copy-forward primitive remain future work (freenet-core#2776).
+  The crate's field-deployed carry-forward today is the *contract* path only.
+
 ## 1.8.1 (2026-07-18)
 
 Warn `dapp-builder` users about a current-core state-propagation limitation that
