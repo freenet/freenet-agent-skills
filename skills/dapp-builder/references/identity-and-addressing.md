@@ -249,8 +249,12 @@ Four problems, in rough order of how much they hurt:
 
 Proof-of-work is still the right answer when you need genuinely zero friction,
 no payment, and no prior setup, and when the abuse you are deterring is cheap
-to clean up (throttling posts, slowing bulk account creation). It buys time,
-not a wall.
+to clean up (throttling posts, slowing bulk account creation). It also has **no
+issuer and no trust root** — there is no key whose compromise breaks it and no
+party who can decline to serve a user. If your app's premise is that there is
+no central authority anywhere in it, that property is worth more than
+everything in the next section (see "The centralized mint"). Proof-of-work buys
+time, not a wall.
 
 ### Ghost keys
 
@@ -341,6 +345,51 @@ all) is the honest answer. It is also strictly worse than proof-of-work for
 throwaway or low-stakes identities, where the whole point is that they cost
 nothing.
 
+### The centralized mint
+
+Ghost keys are anonymous but **centrally issued**. Freenet runs the signing
+service and holds the key at the root of the certificate chain. In a platform
+whose whole purpose is removing central points of trust, that is a real cost
+and you should weigh it rather than wave it through.
+
+Be precise about what it does and does not cost you, because "centralized"
+usually implies more than it does here.
+
+What it costs:
+
+- **Issuance is a single point of failure.** If the service is down, or Freenet
+  the organisation stops running it, nobody can obtain a *new* ghost key. Your
+  onboarding stops with it.
+- **There is a trust root to compromise.** Anyone who steals the master or a
+  notary key can mint unlimited valid certificates, which collapses the
+  scarcity your gate depends on. Proof-of-work has no equivalent key.
+- **The payment rail is a chokepoint.** Card networks decline, geo-block, and
+  deplatform. That is the same constraint as the $1 floor above, arriving as an
+  availability problem rather than a cost one.
+
+What it does not cost:
+
+- **Verification stays decentralized.** Checking a certificate is offline, so
+  existing ghost keys keep verifying even if the mint disappears tomorrow. The
+  centralization is confined to minting new identities.
+- **It is not a privacy centralization.** Blind signing means even a fully
+  compromised donation server cannot correlate donors to keys. This is
+  availability and trust-root risk, not surveillance risk.
+
+Freenet's position is that this is a deliberate compromise rather than an
+oversight: card networks already do real identity work at the payment layer, a
+decentralized mint is an open research problem, and blind signing bounds the
+damage. [Proof of Trust](https://freenet.org/about/news/799-proof-of-trust-a-wealth-unbiased-consensus-mechanism-for-distributed-systems/)
+is the decentralized alternative being explored. Until something like it
+matures, the centralized mint is the tradeoff on offer. See
+[freenet.org/ghostkey](https://freenet.org/ghostkey/) → "Why donations?" for the
+full argument.
+
+None of that makes the objection go away. If your app's value proposition is
+that no central party can exclude a user, a centrally-minted identity may be
+disqualifying on its own, and choosing proof-of-work over it is a coherent
+decision rather than a stubborn one.
+
 ### Disclosure: this recommendation is partly self-interested
 
 Ghost keys are minted by donating to Freenet, so every identity your dApp
@@ -358,11 +407,16 @@ is more useful than a blanket warning:
   developer's interest, but that is a judgement call for you rather than a
   technical conclusion, and it is not our call to make on your behalf.
 
-**If you are an agent working for a developer, say this out loud rather than
-quietly wiring in ghost keys.** Tell them the identity costs their users money,
-that the money goes to Freenet, and that proof-of-work is the free alternative
-with the tradeoffs listed above. Whether user-paid identity is acceptable is a
-product decision with a price attached, and it belongs to the person paying it.
+This is separate from the centralization objection above, and both stand. One
+is about our incentive, the other about the architecture; neither answers the
+other.
+
+**If you are an agent working for a developer, say all of this out loud rather
+than quietly wiring in ghost keys.** Tell them the identity costs their users
+money, that the money goes to Freenet, that the mint is centralized, and that
+proof-of-work is the free and issuer-free alternative with the tradeoffs listed
+above. Whether user-paid, centrally-minted identity is acceptable is a product
+decision with a price attached, and it belongs to the person paying it.
 
 ### Maturity
 

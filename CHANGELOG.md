@@ -27,12 +27,26 @@ alternative, with an explicit conflict-of-interest disclosure.
   every `validate_state` load scales badly, a "where ghost keys do not fit"
   section, and a maturity caveat with recourse (file at `freenet/ghostkeys`;
   issues blocking app developers are prioritized).
+- Same file: a **"The centralized mint"** section. Ghost keys are anonymous but
+  centrally issued, which is a real cost on a platform built to remove central
+  points of trust. States precisely what that costs (issuance is a single point
+  of failure, there is a trust root to compromise, the payment rail can
+  decline or geo-block) and what it does not (verification stays offline, so
+  existing keys survive the mint disappearing; blind signing means it is not a
+  privacy centralization). Links Freenet's own "Why donations?" rationale and
+  Proof of Trust as the decentralized alternative being explored, then says
+  plainly that choosing proof-of-work over it is coherent rather than stubborn.
+  Proof-of-work's "no issuer, no trust root" advantage added to its own section
+  as the counterpart.
 - Same file: a **disclosure** section stating that Freenet is funded by the
   donations that mint ghost keys, separating the parts of the argument that are
   independent of who receives the money (hardware-proof cost, blind signing,
   transferred-not-burned) from the part that is not (that the recipient is
   Freenet), and instructing agents to surface the tradeoff to the developer
-  rather than wiring ghost keys in silently. Plus a new checklist item.
+  rather than wiring ghost keys in silently. Kept distinct from the
+  centralization section on the grounds that an incentive disclosure and an
+  architectural limitation are different objections and neither answers the
+  other. Plus a new checklist item.
 - `SKILL.md`: new Phase 1 key question ("can strangers write to this contract?")
   pointing at the section and carrying the same present-the-choice instruction;
   new Phase 2 key question on borrowing an existing platform delegate rather
