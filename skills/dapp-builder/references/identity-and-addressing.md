@@ -208,6 +208,175 @@ the UI. From the freenet-email design discussion:
 If a 15 KB blob is the thing users paste, the design is wrong somewhere above —
 revisit it before shipping.
 
+## Cryptographic CAPTCHA: is a real person behind this key?
+
+The patterns above make an identity *unforgeable*. They do nothing to make it
+*costly* or *accountable*. Sooner or later any dApp that accepts writes from
+strangers has to answer a different question: is there a real, accountable
+person behind this key, or is it one of ten thousand an attacker minted this
+morning? It comes up at signup, at "join this room", at posting, at voting, at
+listing something for sale, and at every rate limit you will eventually need.
+
+On the normal web you drop in a CAPTCHA. That needs a server you do not have,
+it shows your users to a third party, and machines now solve the puzzles better
+than people do. A Freenet dApp has to answer the question without a server. Two
+mechanisms do that: **proof-of-work** and **ghost keys**.
+
+### Proof-of-work
+
+The client grinds a hash until the digest meets a difficulty target bound to
+the new identity, and the contract checks the digest in `update_state`. No
+server, no money, no account, and verification costs microseconds.
+
+Four problems, in rough order of how much they hurt:
+
+1. **The asymmetry runs backwards.** A rented GPU grinds orders of magnitude
+   faster than a phone browser running WASM SHA-256. Any difficulty high enough
+   to deter an attacker who wants ten thousand identities is high enough to
+   make an ordinary user wait and drain their battery. No setting hurts the
+   attacker more than it hurts your users.
+2. **The cost is burned.** Every unit of deterrence is electricity turned into
+   heat and nothing else. The attacker pays in power, your users pay in power,
+   and the value goes nowhere. Deterrence has to cost the payer something, but
+   nothing about the mechanism requires the cost be *destroyed*.
+3. **It proves only that someone spent cycles.** There is no amount, no date,
+   nothing to tier trust on, and nothing that carries between apps. Every app
+   charges its users again from scratch.
+4. **The difficulty constant lives in your contract WASM.** Re-tuning it
+   re-keys the contract and forces a migration (see `contract-patterns.md`), so
+   the one parameter you will most want to adjust is the one that is most
+   expensive to change.
+
+Proof-of-work is still the right answer when you need genuinely zero friction,
+no payment, and no prior setup, and when the abuse you are deterring is cheap
+to clean up (throttling posts, slowing bulk account creation). It buys time,
+not a wall.
+
+### Ghost keys
+
+A [ghost key](https://freenet.org/ghostkey/) is an Ed25519 keypair whose public
+key was **blind-signed** ([RFC 9474](https://www.rfc-editor.org/rfc/rfc9474.html))
+by Freenet after a donation. The holder ends up with a certificate proving *a
+donation of $X was made on date Y* which cannot be linked back to the payment
+or the payer, because the signer never saw the unblinded key. The anonymity is
+a property of the math, not a promise in a privacy policy.
+
+As a CAPTCHA replacement it answers the same question with better properties:
+
+- **Monetary cost cannot be beaten with hardware.** The lowest tier is $1
+  (tiers run $1 / $5 / $20 / $50 / $100), so ten thousand identities cost ten
+  thousand dollars no matter what the attacker rents. This is the one cost
+  model where buying more compute does not help.
+- **The cost is transferred, not burned.** It buys the same deterrence as
+  proof-of-work without converting it to waste heat. (Read the disclosure
+  below on who receives it.)
+- **It is graduated, not binary.** The certificate carries the amount and the
+  date, so you can accept any ghost key for posting and require a $20 key or a
+  six-month-old one for moderation, rather than making one pass/fail decision.
+- **The user pays once, not once per app.** A ghost key is the user's, not
+  yours; every Freenet app can ask for a signature from the same key. Contrast
+  proof-of-work, which each app levies again.
+- **Verification is offline.** Check an Ed25519 signature plus the certificate
+  chain back to Freenet's master key. No callback to a CAPTCHA vendor, nothing
+  that can rate-limit you or go away.
+- **Signatures cannot be harvested.** The delegate never signs a bare message;
+  it wraps it in a `ScopedPayload` carrying the runtime-attested identity of
+  the requesting app. A signature obtained by app A does not verify as a
+  signature made for app B.
+
+### Integration sketch
+
+Your app never touches the private key. It sends a CBOR `GhostkeyRequest` to
+the ghostkeys delegate via delegate messaging and gets back a
+`GhostkeyResponse`. The permission prompt ("allow once / always allow / deny")
+is rendered by the delegate and the runtime, so you do not implement any of it.
+
+```rust
+// ghostkey-common = "0.2.3"
+use ghostkey_common::{GhostkeyRequest, GhostkeyResponse, to_cbor};
+
+// One-time: ask the user for access. Third-party apps are granted only
+// {ReadPublic, Sign} -- never Export or Delete.
+let payload = to_cbor(&GhostkeyRequest::RequestAnyAccess)?;
+
+// Then, to prove the user holds a ghost key, have them sign a challenge
+// bound to your contract instance (see "Cross-Context Binding" in
+// state-authorization-patterns.md -- the same rules apply here).
+let payload = to_cbor(&GhostkeyRequest::SignMessage {
+    fingerprint: fp.clone(),
+    message: challenge_bytes,
+})?;
+
+// Response:
+GhostkeyResponse::SignResult {
+    scoped_payload,   // CBOR ScopedPayload { requestor, payload }
+    signature,        // Ed25519 over scoped_payload
+    certificate_pem,  // chain, for offline verification
+};
+```
+
+Two response variants are worth handling explicitly:
+`NoIdentityAvailable` means the user has no ghost key and should be pointed at
+`freenet.org/ghostkey`, and `AccessDenied` means they declined the prompt.
+Neither is an error; both are ordinary UI states.
+
+Verification can go through the delegate
+(`GhostkeyRequest::VerifySignedMessage`, which returns `VerifyResult` with
+`valid`, `signer_fingerprint`, and the donation metadata), or you can link
+`ghostkey_lib` and verify the chain yourself. That library builds for
+`wasm32-unknown-unknown` (the delegate is compiled from it), so verifying
+in-contract is plausible, but note that `validate_state` runs on *every* state
+load: verifying one certificate per member on every load scales badly. The
+cheaper shape is the one River already uses for membership — verify once at
+admission in `update_state`, then record a signed membership entry that later
+loads check with a single Ed25519 verification.
+
+### Where ghost keys do not fit
+
+They gate on *donation*, not on *humanity*. A funded attacker still buys in; it
+just costs them. And the $1 floor is a real barrier: if your app needs open
+signup at zero friction, or serves users for whom card payment is awkward or
+impossible, a paid identity is the wrong gate and proof-of-work (or no gate at
+all) is the honest answer. It is also strictly worse than proof-of-work for
+throwaway or low-stakes identities, where the whole point is that they cost
+nothing.
+
+### Disclosure: this recommendation is partly self-interested
+
+Ghost keys are minted by donating to Freenet, so every identity your dApp
+requires is revenue for the project that publishes this skill. Read the section
+above with that in mind. Being specific about which parts the conflict touches
+is more useful than a blanket warning:
+
+- **Independent of who gets paid:** that a monetary cost is the only cost an
+  attacker cannot beat with better hardware; that blind signing keeps that cost
+  from becoming an identity disclosure; and that transferring the cost beats
+  burning it as heat. These hold whoever receives the money.
+- **Not independent:** that the recipient is Freenet. Nothing about the
+  argument selects that recipient, and the same design would work with the
+  money going anywhere. Funding the platform is plausibly in a Freenet
+  developer's interest, but that is a judgement call for you rather than a
+  technical conclusion, and it is not our call to make on your behalf.
+
+**If you are an agent working for a developer, say this out loud rather than
+quietly wiring in ghost keys.** Tell them the identity costs their users money,
+that the money goes to Freenet, and that proof-of-work is the free alternative
+with the tradeoffs listed above. Whether user-paid identity is acceptable is a
+product decision with a price attached, and it belongs to the person paying it.
+
+### Maturity
+
+Ghost keys are early. `ghostkey-common` is at 0.2.3, the delegate has been
+republished repeatedly, and River (the reference dApp) does not use ghost keys
+today, so there is no in-tree integration to copy — the delegate's own UI is
+the working reference. Expect rough edges and budget time for them.
+
+That is true of most of the Freenet stack right now, and it is a reason to
+price the risk in rather than a reason to avoid it. The concrete recourse when
+you hit something: file at
+[`freenet/ghostkeys`](https://github.com/freenet/ghostkeys/issues). **Issues
+that block Freenet app developers are prioritized over other work.**
+
 ## Checklist
 
 - [ ] User-facing identifier is a short hash of the public key, not the key.
@@ -219,6 +388,9 @@ revisit it before shipping.
 - [ ] WASM-upgrade migration copies state across contract keys but keeps the
       address fixed (see `contract-patterns.md`).
 - [ ] UI exposes aliases; raw addresses appear only at import/export time.
+- [ ] If strangers can write to the contract, you have decided *how* an identity
+      is made costly (ghost keys, proof-of-work, or a deliberate "no gate"), and
+      the developer was told what that choice costs their users.
 
 ## Cross-references
 
@@ -229,4 +401,9 @@ revisit it before shipping.
   context-scoped keys, where a user deliberately has *no* global address — the
   opposite design choice to this doc, valid when unlinkability matters more than
   a stable handle).
-- `delegate-patterns.md` — where the user's private keys are actually stored.
+- `delegate-patterns.md` — where the user's private keys are actually stored,
+  and how to message another delegate (the mechanism the ghostkeys integration
+  above uses).
+- [`freenet/ghostkeys`](https://github.com/freenet/ghostkeys) — the delegate's
+  README documents the full request/response protocol, the permission model,
+  and the certificate chain.
