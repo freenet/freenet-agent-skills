@@ -27,6 +27,20 @@ alternative, with an explicit conflict-of-interest disclosure.
   every `validate_state` load scales badly, a "where ghost keys do not fit"
   section, and a maturity caveat with recourse (file at `freenet/ghostkeys`;
   issues blocking app developers are prioritized).
+- Same file: **"Recommended: proof-of-work with a ghost key escape hatch"**, which
+  is the section's actual recommendation. The two mechanisms compose better than
+  they compete: run proof-of-work as the always-sufficient default so nobody is
+  ever excluded, and offer a ghost key as a way to *skip the wait*, surfaced
+  while the grind is running and the user is blocked with nothing to do. That
+  cancels each mechanism's worst property — difficulty can be set by what deters
+  an attacker rather than by what the slowest device tolerates, the attacker
+  faces both a money wall and a compute wall, and payment plus the centralized
+  mint become an accelerator rather than a gate. Includes an `AdmissionProof`
+  enum accepting either proof against the same challenge, and three guardrails:
+  keep the free path genuinely completable, never slow the grind to drive
+  conversions (named as the dark pattern it would be, given the disclosed
+  funding interest), and do not grant ghost keys privileges users actually need
+  or the paywall is rebuilt.
 - Same file: a **"The centralized mint"** section. Ghost keys are anonymous but
   centrally issued, which is a real cost on a platform built to remove central
   points of trust. States precisely what that costs (issuance is a single point

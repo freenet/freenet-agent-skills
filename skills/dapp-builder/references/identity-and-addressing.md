@@ -220,7 +220,10 @@ listing something for sale, and at every rate limit you will eventually need.
 On the normal web you drop in a CAPTCHA. That needs a server you do not have,
 it shows your users to a third party, and machines now solve the puzzles better
 than people do. A Freenet dApp has to answer the question without a server. Two
-mechanisms do that: **proof-of-work** and **ghost keys**.
+mechanisms do that: **proof-of-work** and **ghost keys**. They are usually
+presented as alternatives. They compose better than they compete, and the
+combination below is the actual recommendation — read both first, because the
+combination works by cancelling out the specific weakness of each.
 
 ### Proof-of-work
 
@@ -335,6 +338,68 @@ cheaper shape is the one River already uses for membership — verify once at
 admission in `update_state`, then record a signed membership entry that later
 loads check with a single Ed25519 verification.
 
+### Recommended: proof-of-work with a ghost key escape hatch
+
+Offer **both**. Run proof-of-work as the default path so nobody is ever
+excluded, and offer the ghost key as a way to **skip the wait**.
+
+Surface that offer *while the grind is running*. That is the right moment: the
+user is blocked, has nothing to do, has already decided they want in, and is
+being offered their own time back. Compare a payment prompt shown before they
+have seen anything, which reads as a toll booth. The same offer, moved to the
+progress bar, reads as a courtesy.
+
+What the combination buys:
+
+- **You can raise the difficulty.** Proof-of-work's core problem is that its
+  asymmetry runs backwards, so difficulty is capped by what your slowest user
+  will tolerate. With an escape hatch the user on a phone at 8% battery has an
+  exit costing a dollar instead of twenty minutes, so you can set difficulty by
+  what deters an attacker rather than by what the weakest device tolerates.
+- **The attacker faces both walls at once.** Ten thousand identities cost ten
+  thousand dollars *or* a serious pile of compute, and raising one wall does not
+  lower the other.
+- **Nobody is priced out.** The free path always completes. This is what
+  defuses the $1 floor and the payment-rail objections below: payment and the
+  centralized mint become an accelerator rather than a gate, so neither can
+  exclude a user from your app.
+- **Whoever pays, chose to, and got something for it.** They bought back their
+  own time. That is a much easier thing to justify than charging admission.
+
+Contract side, accept either proof against the same challenge:
+
+```rust
+enum AdmissionProof {
+    /// Nonce whose digest meets the difficulty target.
+    Work { nonce: u64 },
+    /// Ghost key signature over the same challenge (see the sketch above).
+    Ghostkey {
+        scoped_payload: Vec<u8>,
+        signature: Vec<u8>,
+        certificate_pem: String,
+    },
+}
+```
+
+Both bind to the same challenge, so the new identity is committed either way and
+`update_state` verifies whichever turned up.
+
+Three things to get right:
+
+- **Keep the free path genuinely completable.** If the grind takes forty
+  minutes, the free option is decoration and you have built a paywall with extra
+  steps. Calibrate it to a wait an ordinary device and an ordinary person will
+  actually sit through.
+- **Never slow the grind to drive conversions.** The incentive exists, this
+  document has already disclosed that Freenet profits from the alternative, and
+  doing it would be a dark pattern. Set difficulty from the deterrence you need,
+  then leave it alone.
+- **Decide whether the two proofs earn the same thing.** A ghost key carries an
+  amount and a date; proof-of-work carries nothing, so you *can* grant the
+  former more. But if the extra is anything a user actually needs, you have
+  rebuilt the paywall you just avoided. Prefer granting identical access, and
+  use ghost key metadata only for genuinely elevated roles such as moderation.
+
 ### Where ghost keys do not fit
 
 They gate on *donation*, not on *humanity*. A funded attacker still buys in; it
@@ -344,6 +409,10 @@ impossible, a paid identity is the wrong gate and proof-of-work (or no gate at
 all) is the honest answer. It is also strictly worse than proof-of-work for
 throwaway or low-stakes identities, where the whole point is that they cost
 nothing.
+
+Note that every objection here is about using ghost keys as the *only* gate.
+Offering them as the escape hatch above keeps the deterrence and removes the
+barrier, which is why that is the recommended shape.
 
 ### The centralized mint
 
@@ -389,6 +458,11 @@ None of that makes the objection go away. If your app's value proposition is
 that no central party can exclude a user, a centrally-minted identity may be
 disqualifying on its own, and choosing proof-of-work over it is a coherent
 decision rather than a stubborn one.
+
+The escape-hatch shape above is the strongest answer available today: when
+proof-of-work is always sufficient on its own, no central party can exclude
+anyone from your app, because the mint going down or refusing a user costs them
+time rather than access.
 
 ### Disclosure: this recommendation is partly self-interested
 
@@ -443,8 +517,12 @@ that block Freenet app developers are prioritized over other work.**
       address fixed (see `contract-patterns.md`).
 - [ ] UI exposes aliases; raw addresses appear only at import/export time.
 - [ ] If strangers can write to the contract, you have decided *how* an identity
-      is made costly (ghost keys, proof-of-work, or a deliberate "no gate"), and
-      the developer was told what that choice costs their users.
+      is made costly (proof-of-work with a ghost key escape hatch, either alone,
+      or a deliberate "no gate"), and the developer was told what that choice
+      costs their users.
+- [ ] If you offer both, the proof-of-work path alone is always sufficient for
+      full access, and its difficulty was set by the deterrence needed rather
+      than by how many users it converts.
 
 ## Cross-references
 
