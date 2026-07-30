@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.9.1 (2026-07-29)
+
+Recommend browser automation for validating a `dapp-builder` UI *while building
+it*, not only at release time. Playwright was already covered in Phase 4 (the
+post-publish `production-liveness.spec.ts`) and listed as the `offline` tier in
+the test-tier table, but Phase 3 (UI Design), where the UI is actually written,
+said nothing about validating it in a browser and the `offline` tier had no
+recipe anywhere. A Dioxus UI ships as a WASM bundle whose real render path only
+runs in a browser, so without browser automation a UI has no automated coverage
+at all until after publish.
+
+- `SKILL.md` Phase 3: new "Validate the UI in a real browser (both options)"
+  subsection covering Dioxus and TypeScript alike. Drive the UI with Playwright
+  from the first screen onward; gate PRs on the dev-server (`offline`) tier;
+  assert a clean browser console, since WASM panics and CSP blocks surface only
+  as console or network errors; re-run the same flows against the gateway-served
+  webapp (`iso` tier), which needs `frameLocator` and an absolute-URL `goto`.
+  Points at the Playwright MCP browser tools (`local-dev` skill) for interactive
+  debugging, and expands the Phase 3 reference list to include
+  `production-smoke-testing.md`.
+- `references/production-smoke-testing.md`: new "Validating the UI during
+  development (the `offline` tier)" section with a starter `ui-smoke.spec.ts`
+  (mount assertion plus one real interaction plus console-error gate) and the two
+  WASM-specific gotchas: wait on rendered content rather than `page.goto`
+  resolving, and make sure the run is testing the current build rather than a
+  stale `dx serve` bundle.
+
 ## 1.9.0 (2026-07-21)
 
 Update the `dapp-builder` upgrade/migration guidance to match the now-shipped,

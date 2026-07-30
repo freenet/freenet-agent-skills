@@ -25,6 +25,67 @@ catches what the others catch.
    → cross-identity send via address book). There is no shortcut here;
    `liveness` does not cover it.
 
+## Validating the UI during development (the `offline` tier)
+
+The liveness spec further down runs post-publish. Do not wait for it to find UI
+bugs. The UI you actually ship renders in a browser, and for a Dioxus UI there
+is no unit-test path that runs the compiled WASM bundle at all, so browser
+automation is the first tier that sees the real thing. It belongs in the
+development loop, not the release checklist.
+
+Serve the UI from its dev server and point Playwright straight at it. There is
+no gateway and no iframe shell in this tier, so ordinary `page.locator(...)`
+works and no `frameLocator` is needed.
+
+```ts
+// e2e/ui-smoke.spec.ts
+import { test, expect } from "@playwright/test";
+
+// dx serve / vite dev origin, NOT a /v1/contract/web/... URL.
+const DEV_URL = process.env.UI_DEV_URL ?? "http://127.0.0.1:8080/";
+
+test("app mounts and the first screen is interactive", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  page.on("pageerror", (e) => errors.push(String(e)));
+
+  await page.goto(DEV_URL);
+
+  // WASM boot is async: assert on rendered content, never on navigation alone.
+  // `.first()` keeps Playwright's strict mode from failing on a second match.
+  await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // Then exercise one real interaction, so a component that renders but whose
+  // handlers never fire is caught too.
+  await page.getByRole("button", { name: /create new identity/i }).click();
+  await expect(page.getByRole("textbox", { name: /display name/i })).toBeVisible();
+
+  expect(errors, `console errors:\n${errors.join("\n")}`).toEqual([]);
+});
+```
+
+What this tier catches that no Rust test can: a WASM bundle that never boots (a
+panic in `main`, a wrong asset path in `Dioxus.toml`), a component that paints
+but whose event handlers are dead, and console errors from assets that resolve
+in dev but are missing from the bundle. Run it on every PR.
+
+Two gotchas specific to a WASM UI:
+
+- **Wait on rendered content, not on navigation.** `page.goto` resolves once the
+  HTML shell loads, well before the WASM bundle has booted and mounted. Always
+  assert on a visible element with a generous timeout.
+- **Make sure you are testing the current build.** `dx serve` rebuilds on a
+  delay, so a Playwright run started too early exercises the previous bundle. In
+  CI, build first and serve the built output instead of relying on the watcher.
+
+The strict `errors.toEqual([])` assertion is safe in this tier because there is
+no gateway shell to emit the benign wasm-bindgen `onerror` noise described
+below. Once the app is published to a local node, run the same flows against the
+gateway URL, where the iframe-shell rules apply and that strict assertion has to
+become the curated `FATAL_CONSOLE_PATTERNS` allowlist.
+
 ## The two production-only pitfalls
 
 Two things break only after `fdev publish`, not in `dx serve` /

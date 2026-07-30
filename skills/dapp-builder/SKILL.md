@@ -184,7 +184,40 @@ Best for: web developers, faster iteration, familiar tooling (npm, SCSS, etc.).
 5. For delegate communication, dynamically import internal FlatBuffers types (`ClientRequestT`, `ApplicationMessagesT`, etc.)
 6. Build reactive UI with vanilla TS, or any framework (React, Vue, Svelte)
 
-Reference: `references/ui-patterns.md`
+#### Validate the UI in a real browser (both options)
+
+A Freenet UI's real render path only runs in a browser. A Dioxus UI ships as a
+WASM bundle, so rendering a component tree to a string in a Rust test does not
+exercise the compiled bundle, its event handlers, or its asset paths, and both
+options reach the node over a WebSocket that unit tests never touch.
+**Drive the UI with Playwright (or equivalent browser automation) from
+the first screen onward, not only at release time.** Treat "I built the
+component" as unfinished until a browser has loaded it and a script has clicked
+through it.
+
+1. Serve the UI locally (`dx serve` for Dioxus, `vite dev` for TypeScript) and
+   drive it with Playwright against mock or offline data, so render correctness,
+   navigation, and form validation gate every PR. This is the `offline` tier in
+   `references/production-smoke-testing.md`, which has a starter spec.
+2. Assert the browser console is clean in every flow. WASM panics, failed
+   requests, and CSP blocks surface only as console or network errors, so a UI
+   that looks correct in a screenshot can still be panicking on every
+   interaction.
+3. Once a local node is running, re-run the same flows against the
+   gateway-served webapp (the `iso` tier). Reaching your app there needs
+   `frameLocator` and an absolute-URL `goto`, because the gateway wraps every
+   webapp in an iframe shell.
+
+For interactive debugging rather than scripted specs, the Playwright MCP browser
+tools drive a running `dx serve` or local node directly. See the `local-dev`
+skill, "Debugging with Playwright".
+
+References:
+- `references/ui-patterns.md` - WebSocket connection models, gateway CSP,
+  framework-specific patterns.
+- `references/production-smoke-testing.md` - the four test tiers, the
+  development-loop browser-validation recipe, and the iframe-shell Playwright
+  idioms.
 
 ### Phase 4: Build, Test, and Deploy
 
