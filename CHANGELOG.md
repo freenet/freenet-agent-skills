@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.10.4 (2026-08-01)
+
+Publish as an npm package for OpenCode compatibility (originally PR #4). Adds
+`package.json` and an `index.js` programmatic API (`listSkills`, `getSkill`,
+`readSkill`, `listPlugins`, `getPluginSkills`, etc.) so agents/tools can
+consume skills without a Claude Code-specific install path.
+
+The original PR hardcoded the skill list (3 of the then-current 7 skills)
+and invented a two-bundle plugin structure that didn't match
+`.claude-plugin/marketplace.json`'s actual single `freenet` bundle. Both had
+already gone stale by review time. Rewrote `index.js` to discover skills
+from the `skills/` directory and plugin bundles from
+`.claude-plugin/marketplace.json` at require-time instead of hardcoding
+either, so this can't drift out of sync again. Updated README's Available
+Skills, OpenCode install, Repository Structure, and Programmatic API
+sections to match the current 7-skill lineup.
+
+Review also found: `package.json`'s `files` field omitted `.claude-plugin/`
+(so a real npm install would ship without `marketplace.json` and
+`listPlugins()`/`getPluginSkills()` would silently return empty — fixed),
+and `readReference()` had no path-containment check (fixed). Skill/plugin
+maps now use `Object.create(null)` so a `__proto__` lookup returns `null`
+instead of `Object.prototype`.
+
 ## 1.10.3 (2026-08-01)
 
 Add a strong recommendation to keep contract state small. `dapp-builder`
@@ -18,9 +42,9 @@ directly as load latency, and WASM execution cost scales with it too.
 - `references/state-authorization-patterns.md`: new "Design target: stay
   well under 4 MB per instance" paragraph in the State Size Budget
   section, distinguishing the correctness backstop (50 MiB) from the UX
-  design target (4 MB). Notes that the existing inbox example (~32 MiB
-  worst case) is already sharded to the finest reasonable granularity —
-  per recipient — so it's a deliberate ceiling, not a counterexample.
+  design target (4 MB). The existing inbox example (~32 MiB worst case)
+  is reframed as a bound the new target argues for revisiting, not one
+  that's already settled.
 
 ## 1.10.2 (2026-07-30)
 
