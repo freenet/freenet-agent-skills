@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.10.3 (2026-08-01)
+
+Add a strong recommendation to keep contract state small. `dapp-builder`
+covered the 50 MiB hard cap (`state-authorization-patterns.md` → "State
+Size Budget") but never framed state size as a UX concern — a GET
+transfers the entire state before the UI can render, so size is felt
+directly as load latency, and WASM execution cost scales with it too.
+
+- `SKILL.md`: new Phase 1 key question — target well under 4 MB per
+  contract instance, not just under the 50 MiB cap, and shard by the
+  natural unit of write concurrency (per room/user/time-window/shard-key)
+  when a kind of data can grow unbounded, rather than letting one
+  instance absorb it all.
+- `references/state-authorization-patterns.md`: new "Design target: stay
+  well under 4 MB per instance" paragraph in the State Size Budget
+  section, distinguishing the correctness backstop (50 MiB) from the UX
+  design target (4 MB). Notes that the existing inbox example (~32 MiB
+  worst case) is already sharded to the finest reasonable granularity —
+  per recipient — so it's a deliberate ceiling, not a counterexample.
+
 ## 1.10.2 (2026-07-30)
 
 Correct the delta requirement added in 1.10.1. That version stated it as a flat
