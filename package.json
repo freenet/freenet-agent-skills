@@ -26,7 +26,8 @@
   "homepage": "https://github.com/freenet/freenet-agent-skills#readme",
   "files": [
     "index.js",
-    "skills/"
+    "skills/",
+    ".claude-plugin/"
   ],
   "engines": {
     "node": ">=14.0.0"

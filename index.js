@@ -51,7 +51,9 @@ function parseFrontmatter(content) {
  * this is what made the original version of this file wrong within weeks).
  */
 function discoverSkills() {
-  const result = {};
+  // Object.create(null): a plain {} would let a lookup like skills['__proto__']
+  // resolve to Object.prototype instead of undefined.
+  const result = Object.create(null);
   if (!fs.existsSync(SKILLS_DIR)) return result;
 
   const entries = fs
@@ -92,7 +94,7 @@ function discoverSkills() {
  * bundle structure here where it can drift out of sync.
  */
 function discoverPlugins() {
-  const result = {};
+  const result = Object.create(null);
   if (!fs.existsSync(MARKETPLACE_PATH)) return result;
 
   const manifest = JSON.parse(fs.readFileSync(MARKETPLACE_PATH, 'utf8'));
@@ -183,7 +185,13 @@ function readReference(skillName, referenceName) {
   const skill = skills[skillName];
   if (!skill) return null;
 
-  const refPath = path.join(skill.path, 'references', referenceName);
+  const referencesDir = path.join(skill.path, 'references');
+  const refPath = path.join(referencesDir, referenceName);
+
+  // referenceName may come from untrusted/LLM-constructed input; reject any
+  // path that escapes the skill's references/ directory (e.g. '../../../etc/passwd').
+  const relative = path.relative(referencesDir, refPath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
 
   try {
     return fs.readFileSync(refPath, 'utf8');
