@@ -299,18 +299,28 @@ the ghostkeys delegate via delegate messaging and gets back a
 is rendered by the delegate and the runtime, so you do not implement any of it.
 
 ```rust
-// ghostkey-common = "0.2.3"
+// ghostkey-common = "0.2.4"
 use ghostkey_common::{GhostkeyRequest, GhostkeyResponse, to_cbor};
 
-// One-time: ask the user for access. Third-party apps are granted only
-// {ReadPublic, Sign} -- never Export or Delete.
-let payload = to_cbor(&GhostkeyRequest::RequestAnyAccess)?;
+// Does this user have a ghost key at all? Answers WITHOUT prompting, and is
+// deliberately not permission-filtered, so you can decide whether to show a
+// "buy a ghost key" button before asking for anything.
+let payload = to_cbor(&GhostkeyRequest::HasIdentity)?;
+// -> GhostkeyResponse::IdentityPresence { usable, unusable }
+//    `unusable` counts identities whose certificate is present but whose
+//    signing key is gone. They appear in ListGhostKeys and look healthy right
+//    up until they fail to sign, so a non-zero count is worth a different
+//    message: that user needs their backup, not another purchase.
 
-// Then, to prove the user holds a ghost key, have them sign a challenge
-// bound to your contract instance (see "Cross-Context Binding" in
+// To prove the user holds a ghost key, have them sign a challenge bound to
+// your contract instance (see "Cross-Context Binding" in
 // state-authorization-patterns.md -- the same rules apply here).
-let payload = to_cbor(&GhostkeyRequest::SignMessage {
-    fingerprint: fp.clone(),
+//
+// Prefer SignWithDefault: it needs no fingerprint, so you never track one.
+// If you hold no grant yet, the delegate shows the user a key picker and
+// replays this request once they choose -- you do not need a separate
+// RequestAnyAccess step first.
+let payload = to_cbor(&GhostkeyRequest::SignWithDefault {
     message: challenge_bytes,
 })?;
 
@@ -322,10 +332,46 @@ GhostkeyResponse::SignResult {
 };
 ```
 
-Two response variants are worth handling explicitly:
-`NoIdentityAvailable` means the user has no ghost key and should be pointed at
-`freenet.org/ghostkey`, and `AccessDenied` means they declined the prompt.
+`RequestAnyAccess` still exists and is the right call when you want the user's
+fingerprint up front (to display it, or to store it in contract state) rather
+than just a signature. It always prompts, so it cannot be polled -- that is
+what `HasIdentity` is for.
+
+Two response variants are worth handling explicitly, and one of them is easy
+to misread:
+
+- **`NoIdentityAvailable`** means no identity is *available to sign with*:
+  either the vault is empty, or every identity in it has lost its signing key.
+  It is **not** returned merely because your app lacks permission -- if the
+  vault holds keys you have no grant on, the delegate prompts the user
+  instead. So you can treat it as "offer to buy one" without first checking
+  whether it was really a permissions problem. Use `HasIdentity` to tell the
+  empty case from the lost-signing-key case.
+- **`AccessDenied`** means the user declined the prompt.
+
 Neither is an error; both are ordinary UI states.
+
+Note that `GetDefaultKey` returning `DefaultKeyResult { fingerprint: None }`
+does **not** mean the user has no ghost key -- it means *you* have no `Sign`
+grant on any of them. It never prompts, deliberately: an app must not be able
+to put a dialog in front of the user just by asking a question.
+
+### Sending a user off to buy one, and getting them back
+
+If `HasIdentity` reports nothing usable, the user has to leave your app for
+`freenet.org/ghostkey/create/`, pay, and import the key into their vault. That
+round trip is the real cost of choosing ghost keys over proof-of-work, so do
+not make them find their way back by hand:
+
+```
+https://freenet.org/ghostkey/create/?return_to=<your contract instance id>
+```
+
+The id rides through the payment flow into the vault's import link, and once
+the key has actually landed the vault offers the user a one-click way back to
+your app. Pass your contract instance id, not a URL -- the vault only ever
+builds a same-origin `/v1/contract/web/<id>/` path from it, and rejects
+anything that is not a valid id.
 
 Verification can go through the delegate
 (`GhostkeyRequest::VerifySignedMessage`, which returns `VerifyResult` with
@@ -494,10 +540,20 @@ decision with a price attached, and it belongs to the person paying it.
 
 ### Maturity
 
-Ghost keys are early. `ghostkey-common` is at 0.2.3, the delegate has been
+Ghost keys are early. `ghostkey-common` is at 0.2.4, the delegate has been
 republished repeatedly, and River (the reference dApp) does not use ghost keys
 today, so there is no in-tree integration to copy — the delegate's own UI is
 the working reference. Expect rough edges and budget time for them.
+
+One rough edge is worth naming, because it is the failure that costs the most:
+**a delegate republish moves the delegate key, and the vault recovers stored
+ghost keys by sweeping a committed table of previous keys.** That sweep had a
+bug that silently lost keys across a re-key (fixed, freenet/ghostkeys#8), and
+the delegate build was not reproducible, so the key depended on which machine
+built it (fixed, #9). Both are closed, but the shape of the risk is permanent
+for any delegate: if you build one, keep an equivalent registry and treat
+"which bytes does this source produce" as a correctness property. See
+`upgrade-and-migration.md`.
 
 That is true of most of the Freenet stack right now, and it is a reason to
 price the risk in rather than a reason to avoid it. The concrete recourse when

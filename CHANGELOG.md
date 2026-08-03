@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.12.0 (2026-08-03)
+
+Bring the ghost key integration guidance in line with the delegate published
+today (`ghostkey-common` 0.2.4, live on the network). The old text described an
+API that has since changed shape, and developers are reading it now.
+
+**`HasIdentity` is new, and is what most apps want first.** It answers "does
+this user have a ghost key at all" *without prompting*, and is deliberately not
+permission-filtered — so an app can decide whether to show a buy-a-key button
+before asking the user for anything. Nothing could answer that before:
+`RequestAnyAccess` always prompts so it cannot be polled, and `ListGhostKeys`
+is permission-filtered, so an app holding no grant sees an empty list and
+cannot distinguish "the user has none" from "I have not been allowed yet". It
+also reports `unusable` — identities whose certificate is present but whose
+signing key is gone, which appear healthy in a key list right up until they
+fail to sign.
+
+**`SignWithDefault` is now the recommended signing path.** It needs no
+fingerprint, and where the app holds no grant the delegate shows a key picker
+and replays the request on approval — so the separate `RequestAnyAccess` step
+the sketch used to lead with is no longer required. It remains the right call
+when you want the fingerprint itself, to display or to store.
+
+**`NoIdentityAvailable` was described wrongly.** The skill said it "means the
+user has no ghost key". It means no identity is available *to sign with*:
+either the vault is empty, or every identity in it has lost its signing key. It
+is specifically *not* returned because the caller lacks permission — that was
+the old delegate behaviour, and following it sent users who had already paid
+off to buy a second key.
+
+Also documents `GetDefaultKey` returning `None` as "you have no grant" rather
+than "the user has no key" (it never prompts, deliberately — an app must not be
+able to put a dialog in front of someone by asking a question), and the
+`/ghostkey/create/?return_to=<contract id>` round trip so an app can get its
+users back after a purchase instead of stranding them in the vault.
+
+The maturity note gains the rough edge worth naming for anyone building a
+delegate: a republish moves the delegate key, recovery depends on a committed
+registry of previous keys, and both the recovery sweep (freenet/ghostkeys#8)
+and build reproducibility (#9) have had real bugs there. Both are closed; the
+shape of the risk is permanent.
+
 ## 1.11.0 (2026-08-03)
 
 Correct two stale claims that were actively steering readers toward worse
