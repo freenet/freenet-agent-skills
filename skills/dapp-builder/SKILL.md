@@ -76,17 +76,32 @@ Freenet solves "Eventual Consistency" using a specific mathematical requirement:
 
 **Requirement: `get_state_delta` must not ship state to a peer that already has it.** When the requester's summary shows it holds everything you have, the delta carries no information, so it must not contain the state or approach the state's size. It *should* be a literally empty `StateDelta` (`vec![]`), which is the unambiguous "converged" answer and what `freenet-scaffold` produces for you; a few tens of bytes of encoding framing from serializing an all-empty struct is acceptable. What matters is delta size relative to state size: 20 bytes against a 500 KB state is fine, a state-sized delta is a broken delta mechanism that re-ships everything on every reconciliation, forever. Your summary must likewise be far smaller than your state. Core is adding a probe for contracts that get this wrong, and it currently costs the network real bandwidth. Full detail, code shapes, and a test are in `references/contract-patterns.md` → "The Delta to an Up-to-Date Peer".
 
-### Known limitation: a rarely-changing field can lag between peers
+### Summaries must serialize deterministically
 
-In current Freenet core, a state update to a **rarely-changing field can be silently lost between two peers** and stay missing for a while. When a receiving peer is briefly overloaded it can drop an incoming update without signalling the sender, and the sender then treats that peer as up to date, so it computes later updates as "only newer changes" and never re-sends the dropped one. A slow background heal (roughly every 5 minutes) eventually repairs it, and that heal can itself drop again under load.
+**Use deterministic maps in your `Summary` type: `BTreeMap`, never `HashMap`.** A `HashMap` serializes in nondeterministic order (ciborium), so two identical states can summarize to different bytes and core's byte-level convergence check misfires — spurious heals, or missed ones. The same caution applies to any map inside whatever `summarize` returns.
 
-Fields that change often hide the problem, because their current value re-ships on the next update anyway. A field that changes rarely is where it shows: config, metadata, an authority or permission field, a ban list. Some peers keep serving the stale value until the heal reaches them. This is a current-core limitation, tracked and being fixed in [freenet/freenet-core#4857](https://github.com/freenet/freenet-core/issues/4857).
+Beyond that, make sure your state genuinely converges through `summarize` / `delta` / `apply`, and test that it does, rather than assuming a live broadcast reaches every peer.
 
-Design around it until the fix lands:
-
-- **Use deterministic maps in your `Summary` type: `BTreeMap`, never `HashMap`.** A `HashMap` serializes in nondeterministic order (ciborium), so two identical states can summarize to different bytes and core's byte-level convergence check misfires (spurious heals, or missed ones). This is the single cheapest and most important fix. The same caution applies to any map inside whatever `summarize` returns.
-- **Do not assume a one-shot change to a rarely-updated field reaches every peer instantly.** Make sure your state genuinely converges through `summarize` / `delta` / `apply` (and test that it does) instead of relying on a live broadcast reaching everyone. Where practical, let important changes ride alongside a field that ships frequently.
-- **When debugging "some peers do not see my update," suspect this core limitation before your own `apply` logic.**
+> **Previously documented here as a live limitation, now fixed.**
+> [freenet/freenet-core#4857](https://github.com/freenet/freenet-core/issues/4857)
+> ("State updates permanently lost for rarely-changing fields") is **CLOSED**. A
+> `ContractQueueFull` drop was silent, and the sender cached its own summary as
+> the receiver's on send-Ok, so it believed the peer was current and never
+> re-sent — leaving rarely-changing fields (config, permissions, ban lists)
+> diverged until the ~5-minute InterestSync heartbeat happened to correct them.
+>
+> The shipped fix has the queue-full receiver emit a `ResyncRequest`, which makes
+> the sender clear its poisoned summary and re-send full state. It is throttled to
+> one per (contract, peer) per 30s, because
+> [#4251](https://github.com/freenet/freenet-core/issues/4251) showed that one
+> request per dropped delta amplifies into a full-state storm onto the same
+> saturated queue; [#4862](https://github.com/freenet/freenet-core/pull/4862)
+> hardened it against bridge backpressure. See `RESYNC_REQUEST_MIN_INTERVAL` in
+> `crates/core/src/ring/interest.rs`.
+>
+> Do **not** design around multi-minute staleness on rarely-changing fields, and
+> do not treat a ban list or permission field as needing to ride alongside a
+> frequently-changing one. The earlier guidance to do so is retired.
 
 ## Advanced Capabilities
 

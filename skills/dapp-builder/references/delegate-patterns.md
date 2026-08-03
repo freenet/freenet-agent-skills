@@ -28,16 +28,30 @@ impl DelegateInterface for MyDelegate {
 
 ## Delegate Capabilities
 
-**Currently used in River:**
+**Implemented and usable today:**
 - Store private data on behalf of users (secrets, keys, preferences)
-- Send/receive messages from UIs
+- Send/receive messages from UIs, and from *other apps* on the same node
 - Perform cryptographic operations (signing, encryption)
+- **Read, write, and subscribe to contracts** — `OutboundDelegateMsg` carries
+  `GetContractRequest`, `PutContractRequest`, `UpdateContractRequest` and
+  `SubscribeContractRequest`, each with handlers in freenet-core
+- **Request user permission** via `OutboundDelegateMsg::RequestUserInput`; the
+  runtime renders the prompt. The ghostkeys delegate ships this in production
+- **Run as a long-running background service.** A delegate that subscribes to a
+  contract is woken by `InboundDelegateMsg::ContractNotification` whenever that
+  contract's state changes, with no UI open. Core keeps a `DELEGATE_SUBSCRIPTIONS`
+  registry mapping contract → interested delegates
+- Message another delegate on the same node via `SendDelegateMessage`
 
-**Planned but not yet fully implemented:**
-- Create, read, and modify contracts
-- Create other delegates
-- Request user permission for sensitive operations
-- Run background tasks (monitoring, notifications)
+**Still not implemented:**
+- Creating other delegates from within a delegate (no such variant exists on
+  `OutboundDelegateMsg`)
+
+> This list previously described contract access, user permission and background
+> tasks as "planned but not yet fully implemented", which contradicted SKILL.md
+> and steered readers away from the subscription-driven background-service
+> pattern that core actually supports. Verified against freenet-stdlib
+> `delegate_interface.rs` and freenet-core.
 
 ## Message Types
 

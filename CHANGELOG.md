@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.11.0 (2026-08-03)
+
+Correct two stale claims that were actively steering readers toward worse
+designs. Both were found while designing ghost-key-gated room membership; both
+had already been overtaken by shipped freenet-core work.
+
+**`delegate-patterns.md` said delegates cannot run background tasks or touch
+contracts.** It listed "create, read and modify contracts", "request user
+permission" and "run background tasks" as *planned but not yet fully
+implemented* — contradicting this skill's own SKILL.md, which describes
+background tasks as a delegate capability. The implemented reality:
+`OutboundDelegateMsg` carries `GetContractRequest`, `PutContractRequest`,
+`UpdateContractRequest`, `SubscribeContractRequest`, `SendDelegateMessage` and
+`RequestUserInput`, each with handlers in freenet-core, and core keeps a
+`DELEGATE_SUBSCRIPTIONS` registry that delivers `ContractNotification` to a
+subscribed delegate when contract state changes — with no UI open. That is the
+long-running background service the doc said did not exist, and the ghostkeys
+delegate already ships the permission-prompt path in production. Only
+*creating* a delegate from within a delegate remains unimplemented.
+
+Consequence of the error: a reader designing anything that needs verification
+too expensive to sit in a contract's validation path would conclude there was
+nowhere to put it, and either abandon the design or reach for a centralized
+server.
+
+**SKILL.md documented freenet-core#4857 as a live limitation.** That issue —
+"State updates permanently lost for rarely-changing fields: silent
+ContractQueueFull drop + sender-side neighbor-summary poisoning" — is CLOSED.
+The section told readers to expect multi-minute staleness on config, permission
+and ban-list fields, and to let important changes "ride alongside a field that
+ships frequently". The shipped fix has the queue-full receiver emit a
+`ResyncRequest` that clears the sender's poisoned summary, throttled to one per
+(contract, peer) per 30s (#4251 showed one-per-dropped-delta amplifies into a
+full-state storm; #4862 hardened it against bridge backpressure).
+
+The genuinely useful part of that section — `BTreeMap` never `HashMap` in
+summary types, because ciborium serializes `HashMap` nondeterministically and
+breaks core's byte-level convergence check — is kept and promoted to its own
+heading, since it stands independently of the bug.
 ## 1.10.5 (2026-08-01)
 
 Warn against unqualified mobile deployment. `SKILL.md` listed the UI's

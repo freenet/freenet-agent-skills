@@ -1,0 +1,4 @@
+
+# Agent worktrees live here (.claude/worktrees/<name>). Committing one adds it
+# as an embedded git repo rather than files — easy to do with `git add -A`.
+.claude/
