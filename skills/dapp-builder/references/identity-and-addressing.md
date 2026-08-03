@@ -373,6 +373,34 @@ your app. Pass your contract instance id, not a URL -- the vault only ever
 builds a same-origin `/v1/contract/web/<id>/` path from it, and rejects
 anything that is not a valid id.
 
+Add `&return_path=<percent-encoded relative route>` to come back to a specific
+place rather than your app's root -- a sub-path, a `#route`, or both. Encode
+it: it may contain its own `#`, and it is going into a fragment. The vault
+still synthesises the `/v1/contract/web/<id>/` prefix itself, so the route only
+decides what follows, and it is refused if it could climb out of your contract.
+
+### Do not gate the action on a cached identity check
+
+The one thing that reliably goes wrong in this flow: the app checks
+`HasIdentity` once at load, renders "buy a ghost key", the user goes and buys
+one -- and the tab they came back to is still the one that checked. It has no
+idea anything happened. There is no callback from the vault to your app, and
+the vault opens in a **new tab**, so their original tab can sit there
+indefinitely insisting they have no key.
+
+Do not solve this by polling or by listening for focus events. Solve it by not
+depending on the cached answer in the first place:
+
+- Use `HasIdentity` to decide what to **offer** -- whether to surface a
+  buy-a-key path at all.
+- Do **not** use it to decide whether the user may **attempt** the action. Let
+  them try, call `SignWithDefault`, and branch on what comes back.
+
+That works because `SignWithDefault` is authoritative at the moment it matters:
+it prompts if you hold no grant, and returns `NoIdentityAvailable` only when
+there is genuinely nothing to sign with. An app written this way needs to
+detect nothing. A stale tab costs the user one extra click, not a dead end.
+
 Verification can go through the delegate
 (`GhostkeyRequest::VerifySignedMessage`, which returns `VerifyResult` with
 `valid`, `signer_fingerprint`, and the donation metadata), or you can link

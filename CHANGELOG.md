@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.13.0 (2026-08-03)
+
+Two additions to the ghost key purchase round trip, both from watching the flow
+end to end rather than from reading the API.
+
+**`return_path`.** `return_to` only ever landed a donor on the app's *root*, so
+an app that sent them off from a deep-linked view got them back with their
+place lost. It now takes a relative route alongside the contract id — a
+sub-path, a `#route`, or both — while the vault still synthesises the
+`/v1/contract/web/<id>/` prefix itself, so the route only decides what follows
+and is refused if it could climb out of the contract.
+
+**Do not gate the action on a cached identity check.** This is the failure that
+actually bites in this flow, and it is silent: an app checks `HasIdentity` at
+load, renders "buy a ghost key", the user buys one — and the tab they return to
+is the one that already checked. There is no callback from the vault, and the
+vault opens in a *new* tab, so the original can sit there indefinitely
+insisting they have no key.
+
+The fix is not polling or focus listeners; it is not depending on the cached
+answer. Use `HasIdentity` to decide what to **offer**, never to decide whether
+the user may **attempt**. Let them try, call `SignWithDefault`, and branch on
+the result — it prompts if the app holds no grant and returns
+`NoIdentityAvailable` only when there is genuinely nothing to sign with. An app
+written that way detects nothing, and a stale tab costs one extra click instead
+of dead-ending.
+
 ## 1.12.0 (2026-08-03)
 
 Bring the ghost key integration guidance in line with the delegate published
