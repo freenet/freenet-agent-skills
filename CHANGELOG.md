@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.16.0 (2026-08-04)
+
+Make the delegate-reference problem something an agent will actually *find*.
+
+1.15.0 documented it, but only where an agent already reading about delegates
+would look. The people most affected have apps that already work and no reason
+to open that page.
+
+**A grep, at the top of SKILL.md.** An agent picking up an existing Freenet app
+is now told, before anything else, to check whether it hardcodes a platform
+delegate's key — with the command to run. That constant goes stale on every
+re-key of a delegate the app does not own, including a bare version bump, and
+the failure is silent: every request comes back looking like "this user has
+nothing stored".
+
+**How to read client-side delegate errors**, which the skill had never covered.
+`Missing` means the delegate is not registered — almost always a stale
+hardcoded key, and *not* "the user has no data". `ExecutionError` covers rate
+limiting and is transient. Includes the caveat that `Missing` is never proof a
+user has nothing, since `UnregisterDelegate` leaves secrets behind, and a
+version note: up to freenet-core v0.2.119 the websocket layer also emitted
+`Missing` when throttling, so on those nodes the two cannot be told apart at
+all (fixed in freenet-core#5146).
+
+That overloading is why the August 2026 ghostkeys breakage was hard to
+diagnose. The affected app's error handling was correct and still produced a
+misleading message, because the protocol gave it nothing to distinguish an app
+that needed updating from a user who had never bought a key.
+
 ## 1.15.0 (2026-08-04)
 
 Add the consumer side of delegate re-keying, which the skill had never covered.

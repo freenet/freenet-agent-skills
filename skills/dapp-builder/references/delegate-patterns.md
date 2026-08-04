@@ -365,6 +365,20 @@ If you pass `keyBytes` for both fields (or `codeHashBytes` for both), the node w
 
 ## Depending on Someone Else's Delegate (consumer side)
 
+> **Working on an app that already exists? Check this first.**
+>
+> ```bash
+> # Any of these hits means the app will break silently on the next re-key.
+> grep -rniE "delegate_key|DELEGATE_KEY|delegate_code_hash|ghostkeys.*delegate" \
+>     --include=*.ts --include=*.js --include=*.rs --include=*.json \
+>     --include=*.toml . | grep -v node_modules
+> ```
+>
+> A hit in a build config, a generated constants file, or a `vite.config` /
+> `build.rs` define is the pattern that breaks. Replace it with a runtime fetch
+> (below). This is not theoretical — it silently broke every ghostkeys
+> integration and was found by a confused user, not by any test.
+
 Everything below about migration is written from the *author's* side: your
 delegate re-keys, so migrate your users' secrets forward. There is a second,
 easily-missed half — **you are a consumer of other people's delegates too**, and
@@ -424,6 +438,34 @@ Three rules that matter:
   smaller exposure, not zero: it would move if the *web container contract*
   were upgraded, which is a much larger and more visible event than a delegate
   re-key.
+
+### Reading delegate errors on the client
+
+The client-side `DelegateError` (from `freenet-stdlib`, distinct from the
+`DelegateError` your delegate's `process` returns) is what tells you *why* a
+request did not work. Two variants are worth branching on:
+
+| Variant | Means | What to do |
+|---|---|---|
+| `Missing(key)` | that delegate is **not registered** on this node | almost always a stale hardcoded key. Tell the user the app needs updating, and tell yourself — this is not "the user has no data" |
+| `ExecutionError(msg)` | includes rate limiting after repeated failures | transient. Back off and retry; the message carries the delay |
+
+**Do not treat `Missing` as proof the user has nothing stored.** It is not,
+for a reason that survives even a correct client: `UnregisterDelegate` removes
+a delegate's code while leaving its secrets in place, so a node can report "no
+such delegate" while still holding data under it.
+
+**Version note.** Up to and including freenet-core **v0.2.119**, the websocket
+layer also emitted `Missing` when throttling a client after repeated failures,
+so on those nodes the two are indistinguishable and you should not branch on it
+at all. Fixed in
+[freenet-core#5146](https://github.com/freenet/freenet-core/pull/5146) — from
+the following release, `Missing` means only "not registered".
+
+That overloading is exactly why the ghostkeys breakage was so hard to diagnose:
+the app's error handling was correct and still produced a misleading message,
+because the protocol gave it nothing to distinguish an app that needed updating
+from a user who had never bought a key.
 
 ### If you publish a delegate others depend on
 

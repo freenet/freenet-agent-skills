@@ -114,6 +114,16 @@ Beyond that, make sure your state genuinely converges through `summarize` / `del
 
 Follow these phases in order.
 
+> **Working on an app that already exists?** Before anything else, check whether
+> it hardcodes a *delegate key* belonging to a platform delegate it does not own
+> (ghostkeys being the one in use today). That constant goes stale on every
+> re-key of that delegate — including a bare version bump — and the failure is
+> silent: every request comes back looking like "this user has nothing stored".
+> One grep, and the fix is a runtime fetch. See
+> `references/delegate-patterns.md` → "Depending on Someone Else's Delegate".
+> This broke every ghostkeys integration in August 2026 and was found by a
+> confused user rather than by any test.
+>
 > **Already shipped v1 and here to UPGRADE?** (bump `freenet-stdlib`, ship a new
 > contract/delegate version, or fix a bug that re-keys the WASM) — go straight to
 > **`references/upgrade-and-migration.md` → "Upgrading a Freenet dApp — the painless
