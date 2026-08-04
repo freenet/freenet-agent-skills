@@ -103,6 +103,32 @@ Beyond that, make sure your state genuinely converges through `summarize` / `del
 > do not treat a ban list or permission field as needing to ride alongside a
 > frequently-changing one. The earlier guidance to do so is retired.
 
+### Keep summaries small — it is measured, and it is expensive
+
+Summaries are **~23.7% of all outbound bytes on the Freenet network**, and the fleet-mean summary is **16,675 bytes** against a protocol digest-entry size of 21 bytes (freenet-core#5153). A fat summary is not a local inefficiency: it ships to every interested peer on every ~5-minute anti-entropy heartbeat whether or not anything changed, and it sets the floor for how cheaply a peer can be brought up to date.
+
+Every rule below is checkable in review and grounded in a measured finding from River.
+
+1. **Every summary field must be read by `delta()`.** Grep each field name against the `delta()` bodies. A field nothing reads is dead weight re-sent forever.
+
+2. **A value that is only ever compared for equality must be a fixed-width digest, never the thing it fingerprints.** River carried raw Ed25519 signatures in `member_info` purely to run `>`; replacing them with a 16-byte digest measured **135.27 → 28.01 bytes per entry**. The DM summary still does this for a bare `contains()` at 66 bytes/entry — 19,803 bytes at its cap, larger than the whole rest of the summary (freenet/river#596).
+
+3. **Size a digest by who controls the colliding inputs, not by taste.** If a party can grind *both* sides of the comparison, 64 bits is a ~2^32 birthday search — hours on commodity hardware — so use 128. If the attacker controls only one side, 64 may do. Write the threat model in the doc comment. A collision here is not a crash; it is a record that silently never propagates.
+
+4. **Assert the encoding; never derive it.** The *same* 64 bytes cost **66 CBOR bytes** as a byte string and **119** as a derived tuple — ciborium maps `serialize_tuple` to an array where every byte ≥ 24 costs two. River quoted 66 for a type that actually encoded at 119, and the wrong number survived an issue, a PR body, and a review. Hand-write `Serialize` with `serialize_bytes` for any fixed-size byte array, and pin it with a **golden vector**: one fixed input, one fixed expected digest, one fixed expected byte length. A randomised digest oracle misses byte-order bugs intermittently.
+
+5. **Measure size with realistic key values, not small integers.** A `FastHash(i)` for small `i` encodes in 1-3 CBOR bytes; a real key's encodes in 9. A test built from `0..N` understates the per-entry cost by ~30% and will pass review.
+
+6. **A summary should be O(1) or sub-linear in the collections it describes — or justify the linearity in writing.** A flat enumeration grows without bound as your app succeeds. If you keep it linear, state the element cap that bounds it and check `cap × per-entry` against your budget. River's is fully linear; at 200 members × 1000 messages it measures 16,723 bytes.
+
+7. **A lossy summary is legal when `apply_delta` is idempotent — exploit that.** K fixed buckets each holding an 8-byte digest of that bucket's contents makes the summary constant-size: measured **K=16 → 145 bytes, independent of N**, against 3,894 bytes for the flat form at 139 members. `get_state_delta` may then return a *superset* of the true delta, which is sound only if applying an already-held element is a no-op — verify that first. The trade is real: one changed element resends its whole bucket. It wins because summaries go out on every heartbeat while deltas fire only on change, so **measure your summary-broadcast : state-change ratio before committing.**
+
+8. **A capped or pruning collection needs a retention horizon in the summary.** Without one, `delta()` is a pure set difference: the receiver prunes what it just received, neither summary changes, and the pair re-sends forever. Publish the oldest key *held*, only at capacity, so it strictly increases each exchange and the loop provably terminates.
+
+9. **Nothing in a summary should reveal information the recipient is not entitled to.** A summary goes to more peers, more often, than state does. River's DM summary advertises every DM in the room to every member, participant or not, leaking exact DM volume.
+
+10. **A summary is a wire-format commitment: changing it re-keys the contract and strands every existing copy.** Which hash, how wide, which bytes in which order, and how it serializes are all frozen at publish. Keep a registry of past generations (River keeps `legacy_room_contracts.toml`, 31 entries) and expect every abandoned generation to keep costing anti-entropy bandwidth indefinitely — one stranded River generation is currently doing 3,829 failed summary comparisons against **zero** update events (freenet-core#5158). Batch summary changes rather than shipping them one at a time.
+
 ## Advanced Capabilities
 
 - **Subscriptions:** Clients can subscribe to contracts and get notified of changes immediately (real-time apps)

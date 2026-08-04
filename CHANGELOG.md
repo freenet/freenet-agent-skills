@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.17.0 (2026-08-04)
+
+Summary SIZE guidance, alongside the determinism guidance that was already here.
+
+Summaries turn out to be ~23.7% of all outbound bytes on the network, with a
+fleet-mean summary of 16,675 bytes against a protocol digest-entry size of 21
+(freenet-core#5153). The skill told authors to make summaries deterministic and
+smaller than state, but gave them nothing to check against — so a summary could
+satisfy every stated rule and still be two orders of magnitude too big.
+
+Adds ten checkable rules under "Keep summaries small", each grounded in a
+measured finding from a River audit rather than general advice. The ones most
+likely to change what an agent writes:
+
+- A value only ever compared for equality must be a digest, not the thing it
+  fingerprints. River carried raw Ed25519 signatures to run `>` and `contains()`;
+  the digest form measured 135.27 -> 28.01 bytes/entry.
+- Assert the encoding, never derive it. The same 64 bytes cost 66 CBOR bytes as a
+  byte string and 119 as a derived tuple; a wrong figure survived an issue, a PR
+  body and a review.
+- A lossy bucketed summary is legal when apply_delta is idempotent, and makes the
+  summary constant-size (K=16 -> 145 bytes, independent of N).
+- A summary is a wire-format commitment: changing it re-keys the contract and
+  strands a generation that keeps failing anti-entropy forever.
+
 ## 1.16.0 (2026-08-04)
 
 Make the delegate-reference problem something an agent will actually *find*.
