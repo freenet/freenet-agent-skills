@@ -363,6 +363,76 @@ If you pass `keyBytes` for both fields (or `codeHashBytes` for both), the node w
 3. Pre-decode both to byte arrays for the UI (base58 → JSON for key, hex → JSON for code_hash)
 4. Verify both are injected separately in your build config
 
+## Depending on Someone Else's Delegate (consumer side)
+
+Everything below about migration is written from the *author's* side: your
+delegate re-keys, so migrate your users' secrets forward. There is a second,
+easily-missed half — **you are a consumer of other people's delegates too**, and
+their re-keys break you in a way no migration fixes.
+
+**Do not hardcode another project's delegate key into your build.**
+
+The key is `BLAKE3(BLAKE3(wasm) || params)`, so it changes whenever that
+delegate changes — including for a bare version bump, which alters the WASM
+without altering behaviour. When it changes:
+
+- *Their* users' secrets migrate forward automatically, if that project did its
+  job. That problem is solved.
+- *Your app's reference does not migrate.* It is a build-time constant. After a
+  re-key it addresses a namespace that is now empty.
+
+The failure is silent and misleading. Every request comes back as though the
+user simply has nothing stored — not as an error. Your error handling cannot
+help, because at the protocol level "the user has no data" and "the delegate you
+named no longer exists" look identical.
+
+This is not hypothetical. The ghostkeys delegate was re-keyed twice in one day.
+Every integration broke, and the first anyone knew was a user reporting that
+their Ghost Key worked in the vault but not elsewhere — the app had told them to
+go and buy one they already owned
+([freenet/ghostkeys#21](https://github.com/freenet/ghostkeys/issues/21)).
+
+### What to do instead
+
+**Fetch the current key at runtime from something whose address is stable.**
+
+The pattern ghostkeys uses, and a good default: the project publishes its
+current delegate key as a file inside its own **webapp bundle**, and you fetch
+it. A webapp contract's id is derived from the web container WASM and its
+parameters — both fixed — so publishing a new version updates the contract's
+*state*, not its key. The id survives every update of the thing it points at.
+
+```js
+const VAULT = 'DLog47hEsrtuGT4N5XCeMBG45m4n1aWM89tBZXue2E1N';  // ghostkeys vault
+const { delegate_key_bytes, code_hash_bytes } =
+  await (await fetch(`/v1/contract/web/${VAULT}/delegate-key.json`)).json();
+```
+
+This works from inside a sandboxed webapp: the gateway serves bundle files with
+`Access-Control-Allow-Origin: *`, and the sandbox CSP permits `connect-src` to
+the gateway origin. (Verified from an opaque-origin frame — `localStorage`
+throws there, and the fetch still returns 200.)
+
+Three rules that matter:
+
+- **Re-fetch on load, cache only for the session.** Persisting it recreates the
+  problem with extra steps.
+- **On a failed fetch, do not fall back to a stored key.** The webapp and the
+  delegate are published together, so a node lacking one almost certainly lacks
+  the other. "Not available on this node" is the honest reading.
+- **You still hardcode one constant** — the webapp contract id. That is a
+  smaller exposure, not zero: it would move if the *web container contract*
+  were upgraded, which is a much larger and more visible event than a delegate
+  re-key.
+
+### If you publish a delegate others depend on
+
+Then your delegate key is a **public API**, whether or not you meant it to be.
+Publish the current one somewhere fetchable, in the same operation that changes
+it, so the pointer cannot drift from what it points at. Gate the publish on the
+two agreeing. And batch version bumps with functional changes — a bump alone
+re-keys the delegate and breaks every consumer for nothing.
+
 ## Delegate WASM Upgrade & Secret Migration
 
 **CRITICAL:** When delegate WASM changes (code changes, dependency updates, even transitive dependency changes), the delegate key changes: `delegate_key = BLAKE3(BLAKE3(wasm) || params)`. Secrets stored under the old key become inaccessible to the new delegate.

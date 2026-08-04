@@ -293,6 +293,20 @@ As a CAPTCHA replacement it answers the same question with better properties:
 
 ### Integration sketch
 
+**First, do not hardcode the delegate key.** It changes whenever the ghostkeys
+delegate does — including on a bare version bump — and a stale reference fails
+in the most misleading way available: every request looks exactly like "this
+user has no ghost key". Fetch it instead:
+
+```js
+const VAULT = 'DLog47hEsrtuGT4N5XCeMBG45m4n1aWM89tBZXue2E1N';
+const { delegate_key_bytes, code_hash_bytes } =
+  await (await fetch(`/v1/contract/web/${VAULT}/delegate-key.json`)).json();
+```
+
+See `delegate-patterns.md` → "Depending on Someone Else's Delegate" for why,
+what to do when the fetch fails, and the one constant that remains.
+
 Your app never touches the private key. It sends a CBOR `GhostkeyRequest` to
 the ghostkeys delegate via delegate messaging and gets back a
 `GhostkeyResponse`. The permission prompt ("allow once / always allow / deny")

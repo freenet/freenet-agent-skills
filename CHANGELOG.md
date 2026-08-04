@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.15.0 (2026-08-04)
+
+Add the consumer side of delegate re-keying, which the skill had never covered.
+
+Everything about delegate migration was written from the **author's**
+perspective: your delegate re-keys, so migrate your users' secrets forward. The
+other half was missing — **you are a consumer of other people's delegates too**,
+and their re-keys break you in a way no migration fixes, because your reference
+to them is a build-time constant.
+
+The failure is silent and actively misleading. After a re-key your requests
+address an empty namespace, and every response looks exactly like "this user has
+nothing stored" — not like an error. No amount of care in your error handling
+distinguishes them, because at the protocol level they are identical.
+
+It happened: the ghostkeys delegate was re-keyed twice in one day, every
+integration broke, and the first anyone knew was a user reporting their Ghost
+Key working in the vault but not elsewhere — the app had told them to go and buy
+one they already owned (freenet/ghostkeys#21).
+
+The guidance is to fetch the current key at runtime from something whose address
+is stable — a webapp contract's id survives every update of its own state — plus
+what to do when that fetch fails (not: fall back to a stored key), and an honest
+note that one hardcoded constant remains.
+
+Also states the obligation in the other direction: if you publish a delegate
+others depend on, its key is a public API whether or not you intended it.
+Publish the current one in the same operation that changes it, gate the publish
+on the two agreeing, and never bump a version alone — a bump re-keys the
+delegate and breaks every consumer for nothing.
+
 ## 1.14.0 (2026-08-04)
 
 Pin the coverage-oriented review agents to Sonnet. They previously carried no
