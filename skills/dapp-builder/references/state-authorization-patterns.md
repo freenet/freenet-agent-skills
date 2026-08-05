@@ -324,6 +324,8 @@ Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32
 
 **Design target: stay well under 4 MB per instance, regardless of the 50 MiB cap.** The cap is about correctness, not user experience — a GET transfers the entire state before the UI can render anything, so state size is felt directly as load latency, and it's the wire-transfer floor under the streaming behavior described in `ui-patterns.md` → "Large state handling". If a kind of data can grow without bound (message history, uploaded files, a list that only grows), shard by the natural unit of write concurrency — one contract per room, per user, per time-window, per shard-key — so each instance's state stays small no matter how large the dataset gets in aggregate. Treat a multi-MB instance as a signal to split the data model, not to compress harder or budget more cap headroom.
 
+Large *binary* assets served by the UI (audio, video, images, user uploads) are a special case of the same sharding advice, not a new problem: give the asset its own contract instance instead of embedding it in the webapp bundle's state, and reference it from the UI by key. See `ui-patterns.md` → "Large Binary Assets: Their Own Contract, Not the Webapp Bundle" for the same-origin fetch mechanism that makes this work under the gateway CSP.
+
 ## Per-Context Identity Considerations
 
 If your dApp uses **per-context signing keys** (River's pattern: the inviter generates a fresh keypair for each new member, scoped to one room):

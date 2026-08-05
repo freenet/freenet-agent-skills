@@ -67,6 +67,37 @@ this regression by asserting `getComputedStyle(...).fontWeight` matches the
 value set by your vendored stylesheet — it flips back to the user-agent
 default the moment the stylesheet fails to load.
 
+### Large Binary Assets: Their Own Contract, Not the Webapp Bundle
+
+Vendoring covers your CSS/JS/fonts, but don't extend that reflex to
+large or unbounded binary assets — audio, video, images, datasets, user
+uploads. Those don't belong in the webapp contract's state at all, for the
+same reason described in `state-authorization-patterns.md` → "State Size
+Budget": state is versioned as a whole, so every byte you embed gets
+re-published and re-transferred on every unrelated UI change, and a GET
+transfers the entire state before the UI can render anything.
+
+The fix isn't to fetch the asset from an external server — the CSP above
+blocks that (`connect-src`/`default-src <iframe-origin>` only). It's to give
+the asset **its own contract instance** and reference it by key from your
+UI. Any contract's non-HTML files are servable at
+`/v1/contract/web/{CONTRACT_KEY}/{path}`, and that path is same-origin
+with your own UI's iframe regardless of whose key it names — the CSP is
+scoped to the gateway's origin, not to a specific contract. So this works
+even though it names a different contract than the one serving the page:
+
+```html
+<audio src="/v1/contract/web/{ASSET_CONTRACT_KEY}/track.mp3"></audio>
+```
+
+A contract used purely as an asset store doesn't need an `index.html` — it
+can just be a bundle of static files addressed by key. Splitting assets out
+this way also decouples their hosting from the UI contract's: Freenet's
+demand-driven hosting retains/evicts each contract instance independently
+based on its own subscriber/access pattern, so an asset contract's
+popularity (or lack of it) no longer forces every peer serving your UI to
+also carry bytes nobody is requesting.
+
 ## Dioxus Setup
 
 ### Project Structure

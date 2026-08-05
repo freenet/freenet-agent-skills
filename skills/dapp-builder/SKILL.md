@@ -246,7 +246,8 @@ skill, "Debugging with Playwright".
 
 References:
 - `references/ui-patterns.md` - WebSocket connection models, gateway CSP,
-  framework-specific patterns.
+  serving large binary assets from a dedicated contract, framework-specific
+  patterns.
 - `references/production-smoke-testing.md` - the four test tiers, the
   development-loop browser-validation recipe, and the iframe-shell Playwright
   idioms.

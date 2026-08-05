@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.17.0 (2026-08-04)
+
+Document where large binary assets (audio, video, images, uploads) belong:
+their own contract, not the webapp bundle.
+
+The existing "State Size Budget" guidance already said to shard unbounded
+data by write-concurrency unit, but never spelled out the mechanism for the
+common case of a UI wanting to serve a media file — an agent following only
+"vendor your assets" from the CSP section would reasonably conclude large
+files need to ship inside the webapp bundle too, which hits the 50 MiB hard
+cap fast and forces re-publishing every asset byte on any unrelated UI
+change.
+
+**New section in `ui-patterns.md`**: any contract's non-HTML files are
+servable at `/v1/contract/web/{KEY}/{path}`, and that path is same-origin
+with the UI's own iframe no matter whose key it names, so a UI can embed
+`<audio src="/v1/contract/web/{ASSET_CONTRACT_KEY}/track.mp3">` pointing at
+a *different* contract instance without tripping the gateway CSP. Splitting
+assets out this way also lets demand-driven hosting retain/evict each asset
+independently of the UI contract's own popularity.
+
 ## 1.16.0 (2026-08-04)
 
 Make the delegate-reference problem something an agent will actually *find*.
