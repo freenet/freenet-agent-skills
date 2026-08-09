@@ -51,10 +51,13 @@ The whole procedure, start to finish:
    - an **ecosystem-standard pointer contract** (emerging, not yet consumable) —
      a shared, frozen "pointer" WASM at a derivable address `(author_vk,
      app_id)`, whose state is an author-signed `{version, code_hash, sig}`
-     naming the current code hash of *some other* contract or delegate. Design
-     is settled and locked (freenet-core#5194) and the WASM itself has shipped
-     as a standalone crate (freenet-migrate#9), but **no client resolver
-     exists yet** — as of this writing it is unconsumed scaffolding, not an
+     naming the current code hash of *some other* contract or delegate. The
+     record format is settled (freenet-core#5194; governance questions — author-key
+     rotation and recovery, whether adoption is mandatory — are still open), and
+     the contract is merged as an in-repo crate (freenet-migrate#9, deliberately
+     unpublished; the frozen, CI-hash-checked WASM artifact is the deliverable).
+     But **no client resolver exists yet** — as of this writing it is
+     unconsumed scaffolding, not an
      adoptable mechanism, and it solves *addressing only* (it says nothing
      about whether state or secrets held under the old key survived). It is
      also a different thing from the in-state `OptionalUpgrade` pointer in
@@ -89,7 +92,7 @@ The whole procedure, start to finish:
 4. **Use the `freenet-migrate` crate for the carry-forward instead of hand-rolling
    it.** The legacy-hash registry, the `build.rs` codegen, the backward probe, and
    the preconditions-as-types are identical across every app, so `freenet-migrate`
-   packages them. It is **`freenet-migrate` 0.3.0 on crates.io** (with
+   packages them. It is **`freenet-migrate` 0.4.0 on crates.io** (with
    `freenet-migrate-build` 0.2.0): `cargo add freenet-migrate` (runtime
    carry-forward) and `cargo add --build freenet-migrate-build` (build.rs codegen +
    CI hash-guard). This is the mechanism River's contract-migration path runs in
@@ -97,20 +100,23 @@ The whole procedure, start to finish:
    it without a rewrite, its build codegen reading the existing `[[entry]]`
    registries and emitting view consts that match the hand-rolled shapes
    (freenet/river#434, #436, #437). Honest caveat: the crate's field-deployed path
-   is the *contract* side only. A node-level delegate-secret copy-forward was
+   is the *contract* side. A node-level delegate-secret copy-forward was
    designed and shipped (`RegisterDelegateWithPredecessors`, freenet-core#4908)
-   — then found forgeable and disabled as a live security hole
-   (freenet-core#5199, GHSA-824h-7x5x-wfmf: predecessor delegate keys are
-   publicly derivable, so there was no sound way to verify a client's claim to
-   own a predecessor's secrets), and the wire variant itself was subsequently
-   removed (freenet-stdlib#91, stdlib 0.9.0). **There is currently no core
-   mechanism for delegate secret migration, and none is expected without a new
-   trust model** — two independent designs have been tried and disproven.
-   Delegate secret migration still runs the River/Delta way (the app re-runs
-   the old delegate WASM over `DelegateRequest::ApplicationMessages`); see
-   `delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
-   why" for the full history and current guidance. See `contract-patterns.md`
-   and `delegate-patterns.md` for the mechanics it codifies.
+   — then found forgeable and disabled as a security fix (freenet-core#5199:
+   predecessor delegate keys are publicly derivable, so there was no sound way
+   to verify a client's claim to own a predecessor's secrets), and the wire
+   variant was removed from freenet-stdlib `main` (freenet-stdlib#91, version
+   bumped to 0.9.0, **unreleased as of 2026-08-09** — crates.io's latest is
+   0.8.5, which still carries the variant; nodes are protected by #5199's
+   disable, not the removal). **There is no core mechanism for delegate secret
+   migration and there will not be one**: three trust-model designs have been
+   tried and rejected, and the settled standing policy (freenet-core#2776,
+   2026-08-09) is that delegate secret migration happens at the app level
+   permanently, not as an interim measure. That does not mean bespoke per app —
+   `freenet-migrate` 0.4.0 ships delegate-side entry points too, though with no
+   production adopters yet. See `delegate-patterns.md` → "Delegate secret
+   migration: no core mechanism, and why" for the full history and current
+   guidance, and `contract-patterns.md` for the contract-side mechanics.
 
 5. **Publish the new version, then let clients migrate themselves.** Publish the
    new WASM to the shared production key **from `main` only**, after review and
@@ -316,7 +322,7 @@ and verify by mutation that removing the fix fails the test.
   precondition for permissionless migration.
 - The reusable `freenet/freenet-migrate` crate packages the registry, the
   build-time codegen, the backward probe, and the preconditions (`freenet-migrate`
-  0.3.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
+  0.4.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
   `cargo add --build freenet-migrate-build`). River's contract-migration path (UI
   and `riverctl`) runs it in production, and existing apps adopt it without a
   rewrite via the `[[entry]]`-registry build codegen (freenet/river#434, #436, #437).

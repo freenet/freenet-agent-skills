@@ -771,7 +771,7 @@ contract lives; either way the probe is what carries the state.
 The registry, the `build.rs` codegen, and the backward probe are the same across
 every app, so a reusable crate — `freenet/freenet-migrate` — packages them (plus
 the delegate carry-forward and the preconditions above as enforced types). It is
-**`freenet-migrate` 0.3.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+**`freenet-migrate` 0.4.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
 `cargo add freenet-migrate` for the runtime carry-forward and `cargo add --build
 freenet-migrate-build` for the `build.rs` codegen + CI hash-guard. This is the
 mechanism River's contract-migration path runs in production; both the browser UI
@@ -803,12 +803,14 @@ helpers. River drives its event-driven browser probe (freenet/river#436) and
 `riverctl`'s synchronous recovery (freenet/river#437) through the same driver.
 
 The one honest caveat is on the **delegate** side: there is no core mechanism
-for delegate secret migration. A node-level copy-forward was designed and
-shipped, then found forgeable and disabled as a security hole
-(GHSA-824h-7x5x-wfmf), and the wire variant was later removed entirely
-(stdlib 0.9.0) — none is expected without a new trust model. Delegate secret
-migration runs the River/Delta way instead, with the app carrying the export
-across `DelegateRequest` round-trips and re-running the old WASM (see
+for delegate secret migration and there will not be one. A node-level
+copy-forward was designed and shipped, then found forgeable and disabled as a
+security fix (freenet-core#5199), and the wire variant was removed from
+stdlib `main` (unreleased — crates.io is still 0.8.5). Three trust-model
+designs have been tried and rejected, and app-level migration is now settled
+standing policy rather than an interim measure. Delegate secret migration
+runs the River/Delta way, with the app carrying the export across
+`DelegateRequest` round-trips and re-running the old WASM (see
 `delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
 why" for the full history and current guidance). Tracked live under
 [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).

@@ -6,27 +6,38 @@ All notable changes to this project will be documented in this file.
 
 Delegate secret migration docs described the node-level copy-forward as a
 work-in-progress stub. It isn't in progress — it was designed, shipped, found
-forgeable, and disabled as a security hole, and the wire variant was then
-removed entirely. Nothing at the platform level is coming to replace it
-without a new trust model. The skill previously said "still a documented
-stub" and "future work"; both read as "wait for it," which is the wrong
-guidance for an agent building a dApp today.
+forgeable, and disabled, and after three rejected trust-model designs,
+app-level migration is now settled standing policy rather than an interim
+measure. The skill previously said "still a documented stub" and "future
+work"; both read as "wait for it," which is the wrong guidance for an agent
+building a dApp today.
 
 - `delegate-patterns.md`: adds "Delegate secret migration: no core mechanism,
   and why" — the full history (`RegisterDelegateWithPredecessors`,
-  freenet-core#4908, shipped then disabled by freenet-core#5199 /
-  GHSA-824h-7x5x-wfmf, wire variant removed in freenet-stdlib#91 / stdlib
-  0.9.0), the two disproven trust-model designs, and concrete guidance:
-  build your own app-level migration (ghostkeys' `legacy_delegates.toml` is a
-  working example), and don't rely on incidental survival the way River's
-  `self_sk` currently does (freenet/river#612).
+  freenet-core#4908, shipped then disabled by freenet-core#5199; wire variant
+  removed from freenet-stdlib `main` in #91 but **0.9.0 is unreleased**, so
+  crates.io is still 0.8.5 and what protects nodes is the call-site disable),
+  the three rejected trust-model designs, and concrete guidance.
+- Documents that app-level does **not** mean bespoke-per-app:
+  `freenet-migrate` 0.4.0 already packages the delegate-side probe
+  (`migrate_delegate_secrets`, `register_delegate_with_migration`,
+  `PredecessorSecretsIo`) — with the honest caveat that it has no production
+  adopters and its ~50 tests all drive mocked I/O, so ghostkeys' hand-rolled
+  sweep remains the field-proven shape it codifies. Also names the
+  no-user-consent limitation explicitly.
+- Resolves an internal contradiction on River's `signing_key:` secret: it is
+  never *exported* from the old delegate, but `migrate_signing_key` re-seeds
+  the new delegate's copy from `RoomData.self_sk`. Keeps the freenet/river#612
+  warning about `self_sk`'s incidental survival.
 - `upgrade-and-migration.md` and `contract-patterns.md`: correct the same
   "still a documented stub" / "future work" framing to match.
 - `upgrade-and-migration.md`: documents the ecosystem-standard pointer
-  contract (freenet-core#5194 design, shipped as the standalone
-  `freenet-pointer-contract` crate via freenet-migrate#9) as an addressing
-  option — explicitly flagged as unconsumed scaffolding with no client
-  resolver yet, not an adoptable mechanism.
+  contract (freenet-core#5194 record format settled, governance questions
+  open; merged via freenet-migrate#9 as a deliberately unpublished in-repo
+  crate whose frozen WASM is the deliverable) as an addressing option —
+  explicitly flagged as unconsumed scaffolding with no client resolver yet.
+- Corrects stale `freenet-migrate` 0.3.0 → 0.4.0 across all four files
+  (`freenet-migrate-build` 0.2.0 is still current and unchanged).
 - All four touched files now point to
   [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) as
   the live-maintained canonical status source, so future drift is a stale

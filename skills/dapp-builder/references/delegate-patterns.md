@@ -570,7 +570,7 @@ Rather than hand-roll the registry, the `build.rs` codegen, and the backward
 probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
 legacy-key registry, build-time codegen, the backward probe, the delegate
 carry-forward, and the preconditions as enforced types). It is
-**`freenet-migrate` 0.3.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+**`freenet-migrate` 0.4.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
 `cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. Adopting
 the build codegen is not a rewrite: `freenet-migrate-build` reads the River-style
 `[[entry]]` registry above (`entry_registry`) and emits byte-array *view* consts
@@ -581,10 +581,12 @@ dependency in views-only mode. Every build re-derives
 derivation with `irregular_key = true` (River adopted the build codegen this way
 in freenet/river#434).
 
-One caveat is specific to delegates: the crate's shipped, field-deployed
-carry-forward is the *contract* path only — River's UI and `riverctl` run it
-live (see `contract-patterns.md`). Delegate secrets have no core-level
-equivalent; see the next section for the full history and current guidance.
+One caveat is specific to delegates: the crate's *field-deployed* carry-forward
+is the contract path — River's UI and `riverctl` run it live (see
+`contract-patterns.md`). The crate does also ship delegate-side entry points
+(0.4.0's `delegate_migrate` module), but with no production adopters yet.
+Delegate secrets have no core-level equivalent and never will; see the next
+section for the full history and current guidance.
 
 ## Delegate secret migration: no core mechanism, and why
 
@@ -592,44 +594,73 @@ A node-level copy-forward was designed and shipped:
 `DelegateRequest::RegisterDelegateWithPredecessors` (freenet-core#4908, merged
 2026-07-22), an origin-authorized copy of a predecessor's secrets performed by
 the node at registration time. It was then **found forgeable and disabled**
-as a live security hole (freenet-core#5199, merged 2026-08-05,
-[GHSA-824h-7x5x-wfmf](https://github.com/freenet/freenet-core/security/advisories/GHSA-824h-7x5x-wfmf)):
-predecessor delegate keys are publicly derivable, so there was no sound way
-for the node to verify that a client requesting the copy actually owned the
-predecessor's secrets rather than merely knowing its key. The wire protocol
-variant was subsequently removed entirely (freenet-stdlib#91, merged
-2026-08-06, released as stdlib 0.9.0) — it no longer exists on the wire,
-disabled or otherwise. The underlying `SecretsStore::migrate_secrets`
-machinery (idempotence markers, immutable first-writer origin record,
-fail-closed error handling) is left in place, uncalled, in case a trustworthy
-trigger is found later.
+(freenet-core#5199, merged 2026-08-05): predecessor delegate keys are publicly
+derivable and a malicious web app *is* the client, so there was no sound way
+for the node to verify that a requester actually owned the predecessor's
+secrets rather than merely knowing its key. The wire variant was subsequently
+removed from freenet-stdlib `main` (freenet-stdlib#91, merged 2026-08-06,
+version bumped to 0.9.0) — but **0.9.0 is unreleased as of 2026-08-09**:
+crates.io's latest is **0.8.5**, which still carries the variant, and
+freenet-core still pins 0.8.5. What protects production nodes today is
+#5199's call-site disable, not the wire removal. Do not try to pin 0.9.0; it
+does not exist on crates.io. The underlying `SecretsStore::migrate_secrets`
+machinery is left in place but uncalled (its docstring reads "UNREACHABLE FROM
+PRODUCTION").
 
-**Two independent trust-model designs were tried and disproven** — a
-consent-based flow, then a first-writer-wins origin record — before the
-version that ultimately shipped, and it too was unsound enough to disable.
-There is currently no known path to a sound platform mechanism. Treat "every
-app rolls its own delegate-secret migration, indefinitely" as the reality to
-design for, not a gap that is about to close.
+**Three trust-model designs have now been tried and rejected:** a
+consent-based flow, rejected in design (client consent cannot gate the copy
+when the malicious app is the client); a first-writer-wins origin record,
+which *shipped* as #4908's gate and was disproven in production by #5199; and
+a third routing trust through the pointer-contract author key, rejected in
+adversarial review (2026-08-09) because it substitutes "is this a legitimate
+code successor" for "does this requester own *this* predecessor's user
+secrets", and makes author-key compromise catastrophic rather than contained.
 
-**What to do instead:** the app-level backward probe described above (re-run
-the old delegate's own WASM over `DelegateRequest::ApplicationMessages`) is
-the only mechanism there is, and it is what you should build. ghostkeys'
-`legacy_delegates.toml` is a working production example — a committed
-registry of predecessor delegate keys (the same shape as the "Migration Entry
-Registry" section above) that an app-level sweep walks to re-import each
-secret forward, CI-enforced against silently dropping a predecessor entry.
+**The decision is settled, not pending** (freenet-core#2776, 2026-08-09): no
+further effort on a node-level mechanism. **Migration happens at the app
+level — permanently, as standing policy, not as an interim measure.** Do not
+propose or wait for a node-level copy-forward; design as though one will
+never exist.
+
+**App-level does not mean bespoke-per-app.** The goal is shared, reusable
+app-side tooling, the same way `freenet-migrate` already serves contract
+state. Two options, in order of preference:
+
+- **`freenet-migrate` 0.4.0 packages this probe app-side** —
+  `migrate_delegate_secrets` and `register_delegate_with_migration`
+  (`delegate_migrate.rs:488,526`), over a `PredecessorSecretsIo` transport
+  seam you implement for your client. It has **no production adopters yet**,
+  and while it carries ~50 tests they all drive mocked I/O — there is no
+  integration test against a real node or a real WASM delegate. Sound design,
+  unproven in the field.
+- **ghostkeys' hand-rolled sweep** (`ui/src/migration.rs` plus a committed
+  `legacy_delegates.toml` registry) remains the field-proven shape the crate
+  codifies — the two converged on structurally identical probe/classify/import
+  logic independently, which is good evidence the abstraction is right.
+
+One limitation to name either way: there is **no user consent in this flow**,
+only app-author self-assertion. That is sound *at this trust boundary* — the
+caller is your own compiled client code inside your own trust boundary, not a
+network-reachable RPC any client can hit, which is exactly why the node-level
+version failed and this does not. But it is a deliberate choice, so make it
+knowingly.
 
 **What NOT to rely on:** River's per-room identity key (`self_sk`) currently
 survives delegate re-keys only *by accident* — it lives inside the
 generically-indexed `RoomData` blob (`room:<vk>`), which the ordinary
 migration probe already walks for unrelated reasons. It is not a deliberate
 secret-migration mechanism: moving `self_sk` into its own dedicated,
-non-indexed secret (the pattern the `signing_key:` secret already uses, which
-is deliberately *not* migrated — see above) would silently stop migrating it
-at the next release. See [freenet/river#612](https://github.com/freenet/river/issues/612).
-Design your delegate's secret layout so anything that must survive a re-key
-is *deliberately* covered by your registry/enumeration probe, never
-incidentally along for the ride inside something else.
+non-indexed secret — the pattern the `signing_key:` secret already uses —
+would silently stop migrating it at the next release. (No contradiction with
+the carry-forward described above: the `signing_key:` secret itself is never
+*exported* from the old delegate, because the private key never leaves it and
+it is not in the walked index. What `migrate_signing_key` does is **re-seed**
+the new delegate's copy from `RoomData.self_sk` — so the key survives via
+`RoomData`, not via the `signing_key:` namespace.) See
+[freenet/river#612](https://github.com/freenet/river/issues/612). Design your
+delegate's secret layout so anything that must survive a re-key is
+*deliberately* covered by your registry/enumeration probe, never incidentally
+along for the ride inside something else.
 
 Canonical, live-maintained status for this and the related addressing/pointer
 and contract-state-migration problems:
