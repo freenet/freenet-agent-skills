@@ -48,6 +48,20 @@ The whole procedure, start to finish:
    - an **index/registry contract** mapping a stable name → the current contract
      key — a level of indirection. (The index contract itself needs this same
      treatment: its own address must be reachable via a stable anchor.)
+   - an **ecosystem-standard pointer contract** (emerging, not yet consumable) —
+     a shared, frozen "pointer" WASM at a derivable address `(author_vk,
+     app_id)`, whose state is an author-signed `{version, code_hash, sig}`
+     naming the current code hash of *some other* contract or delegate. Design
+     is settled and locked (freenet-core#5194) and the WASM itself has shipped
+     as a standalone crate (freenet-migrate#9), but **no client resolver
+     exists yet** — as of this writing it is unconsumed scaffolding, not an
+     adoptable mechanism, and it solves *addressing only* (it says nothing
+     about whether state or secrets held under the old key survived). It is
+     also a different thing from the in-state `OptionalUpgrade` pointer in
+     `contract-patterns.md`, which is per-instance and only findable by
+     clients that already hold a reference to *that* contract; the pointer
+     contract is for a third party with no prior reference at all. Check
+     freenet-core#2776 for current status before building on it.
 
    If v1 exposed a raw contract key as an identifier, fix *that* first — an upgrade
    cannot rescue an identifier that moves with the WASM. See
@@ -83,11 +97,20 @@ The whole procedure, start to finish:
    it without a rewrite, its build codegen reading the existing `[[entry]]`
    registries and emitting view consts that match the hand-rolled shapes
    (freenet/river#434, #436, #437). Honest caveat: the crate's field-deployed path
-   is the *contract* side; the node-mediated transport into a predecessor
-   *delegate* is still a documented stub, so delegate secret migration still runs
-   the River/Delta way (the app re-runs the old delegate WASM over
-   `DelegateRequest::ApplicationMessages`, tracked under freenet-core#2776). See
-   `contract-patterns.md` and `delegate-patterns.md` for the mechanics it codifies.
+   is the *contract* side only. A node-level delegate-secret copy-forward was
+   designed and shipped (`RegisterDelegateWithPredecessors`, freenet-core#4908)
+   — then found forgeable and disabled as a live security hole
+   (freenet-core#5199, GHSA-824h-7x5x-wfmf: predecessor delegate keys are
+   publicly derivable, so there was no sound way to verify a client's claim to
+   own a predecessor's secrets), and the wire variant itself was subsequently
+   removed (freenet-stdlib#91, stdlib 0.9.0). **There is currently no core
+   mechanism for delegate secret migration, and none is expected without a new
+   trust model** — two independent designs have been tried and disproven.
+   Delegate secret migration still runs the River/Delta way (the app re-runs
+   the old delegate WASM over `DelegateRequest::ApplicationMessages`); see
+   `delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
+   why" for the full history and current guidance. See `contract-patterns.md`
+   and `delegate-patterns.md` for the mechanics it codifies.
 
 5. **Publish the new version, then let clients migrate themselves.** Publish the
    new WASM to the shared production key **from `main` only**, after review and
@@ -301,3 +324,9 @@ and verify by mutation that removing the fix fails the test.
   (resumable/interrupted-migration recovery), #253 (regression-gated legacy probe),
   #204 (old delegate WASM unrunnable after an stdlib bump), #393 (gitignored
   `Cargo.lock` silently re-keying contracts).
+- [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) is
+  the live-maintained home base for all three migration problems (addressing /
+  pointer contract, contract-state migration, delegate-secret migration) across
+  every app the team manages. Check it before assuming anything in this
+  document is current — it is the canonical source and will outlive any status
+  claim written here.

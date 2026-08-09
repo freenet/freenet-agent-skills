@@ -802,12 +802,15 @@ idempotent merge, so it takes a loudly-named ack plus `policy_check` property
 helpers. River drives its event-driven browser probe (freenet/river#436) and
 `riverctl`'s synchronous recovery (freenet/river#437) through the same driver.
 
-The one honest caveat is on the **delegate** side: the node-mediated transport
-that reaches into a predecessor *delegate* is still a documented stub (it returns
-`TransportUnavailable`), so delegate secret migration still runs the River/Delta
-way, with the app carrying the export across `DelegateRequest` round-trips and
-re-running the old WASM (see `delegate-patterns.md`). Delegate-side entry points
-and a node copy-forward primitive are future work, tracked under
+The one honest caveat is on the **delegate** side: there is no core mechanism
+for delegate secret migration. A node-level copy-forward was designed and
+shipped, then found forgeable and disabled as a security hole
+(GHSA-824h-7x5x-wfmf), and the wire variant was later removed entirely
+(stdlib 0.9.0) — none is expected without a new trust model. Delegate secret
+migration runs the River/Delta way instead, with the app carrying the export
+across `DelegateRequest` round-trips and re-running the old WASM (see
+`delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
+why" for the full history and current guidance). Tracked live under
 [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
 
 ## River Contract Reference

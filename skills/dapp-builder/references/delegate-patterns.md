@@ -581,15 +581,59 @@ dependency in views-only mode. Every build re-derives
 derivation with `irregular_key = true` (River adopted the build codegen this way
 in freenet/river#434).
 
-One caveat is specific to delegates: the node-mediated transport that reaches into
-a predecessor *delegate* is still a documented stub (`TransportUnavailable`), so
-the delegate secret carry-forward itself still runs the River/Delta way, with the
-app carrying the export across `DelegateRequest::ApplicationMessages` round-trips
-and re-running the old WASM (the mechanism above). Delegate-side entry points and a
-node copy-forward primitive are future work, tracked under
-[freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776). The
-crate's shipped, field-deployed carry-forward today is the *contract* path:
-River's UI and `riverctl` run it live (see `contract-patterns.md`).
+One caveat is specific to delegates: the crate's shipped, field-deployed
+carry-forward is the *contract* path only — River's UI and `riverctl` run it
+live (see `contract-patterns.md`). Delegate secrets have no core-level
+equivalent; see the next section for the full history and current guidance.
+
+## Delegate secret migration: no core mechanism, and why
+
+A node-level copy-forward was designed and shipped:
+`DelegateRequest::RegisterDelegateWithPredecessors` (freenet-core#4908, merged
+2026-07-22), an origin-authorized copy of a predecessor's secrets performed by
+the node at registration time. It was then **found forgeable and disabled**
+as a live security hole (freenet-core#5199, merged 2026-08-05,
+[GHSA-824h-7x5x-wfmf](https://github.com/freenet/freenet-core/security/advisories/GHSA-824h-7x5x-wfmf)):
+predecessor delegate keys are publicly derivable, so there was no sound way
+for the node to verify that a client requesting the copy actually owned the
+predecessor's secrets rather than merely knowing its key. The wire protocol
+variant was subsequently removed entirely (freenet-stdlib#91, merged
+2026-08-06, released as stdlib 0.9.0) — it no longer exists on the wire,
+disabled or otherwise. The underlying `SecretsStore::migrate_secrets`
+machinery (idempotence markers, immutable first-writer origin record,
+fail-closed error handling) is left in place, uncalled, in case a trustworthy
+trigger is found later.
+
+**Two independent trust-model designs were tried and disproven** — a
+consent-based flow, then a first-writer-wins origin record — before the
+version that ultimately shipped, and it too was unsound enough to disable.
+There is currently no known path to a sound platform mechanism. Treat "every
+app rolls its own delegate-secret migration, indefinitely" as the reality to
+design for, not a gap that is about to close.
+
+**What to do instead:** the app-level backward probe described above (re-run
+the old delegate's own WASM over `DelegateRequest::ApplicationMessages`) is
+the only mechanism there is, and it is what you should build. ghostkeys'
+`legacy_delegates.toml` is a working production example — a committed
+registry of predecessor delegate keys (the same shape as the "Migration Entry
+Registry" section above) that an app-level sweep walks to re-import each
+secret forward, CI-enforced against silently dropping a predecessor entry.
+
+**What NOT to rely on:** River's per-room identity key (`self_sk`) currently
+survives delegate re-keys only *by accident* — it lives inside the
+generically-indexed `RoomData` blob (`room:<vk>`), which the ordinary
+migration probe already walks for unrelated reasons. It is not a deliberate
+secret-migration mechanism: moving `self_sk` into its own dedicated,
+non-indexed secret (the pattern the `signing_key:` secret already uses, which
+is deliberately *not* migrated — see above) would silently stop migrating it
+at the next release. See [freenet/river#612](https://github.com/freenet/river/issues/612).
+Design your delegate's secret layout so anything that must survive a re-key
+is *deliberately* covered by your registry/enumeration probe, never
+incidentally along for the ride inside something else.
+
+Canonical, live-maintained status for this and the related addressing/pointer
+and contract-state-migration problems:
+[freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
 
 ## River Delegate Reference
 
