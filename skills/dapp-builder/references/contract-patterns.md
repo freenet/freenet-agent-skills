@@ -789,7 +789,7 @@ dependency. Registries accept hex or base58, and every build validates the hashe
 and re-derives `delegate_key == blake3(code_hash || params)`; a grandfathered row
 whose recorded key predates that derivation marks itself `irregular_key = true`.
 
-**The probe decisions live in a sans-IO driver.** The 0.3.0 `ProbeDriver` owns
+**The probe decisions live in a sans-IO driver.** The `ProbeDriver` owns
 order and adoption (newest generation first by the registry generation field,
 first real state wins, an undecodable response or a timeout advances, late
 responses are single-shot ignored, a hop cap bounds the walk, and exhaustion seeds

@@ -602,8 +602,9 @@ removed from freenet-stdlib `main` (freenet-stdlib#91, merged 2026-08-06,
 version bumped to 0.9.0) — but **0.9.0 is unreleased as of 2026-08-09**:
 crates.io's latest is **0.8.5**, which still carries the variant, and
 freenet-core still pins 0.8.5. What protects production nodes today is
-#5199's call-site disable, not the wire removal. Do not try to pin 0.9.0; it
-does not exist on crates.io. The underlying `SecretsStore::migrate_secrets`
+#5199's call-site disable, not the wire removal. Check crates.io before
+pinning 0.9.0 — at the time of writing it is not published there. The
+underlying `SecretsStore::migrate_secrets`
 machinery is left in place but uncalled (its docstring reads "UNREACHABLE FROM
 PRODUCTION").
 
@@ -624,7 +625,9 @@ never exist.
 
 **App-level does not mean bespoke-per-app.** The goal is shared, reusable
 app-side tooling, the same way `freenet-migrate` already serves contract
-state. Two options, in order of preference:
+state. Two options: the crate packages the shape, and ghostkeys' sweep is the
+field-proven instance of it. Weigh the crate's zero-adopter status against the
+cost of hand-rolling and maintaining your own.
 
 - **`freenet-migrate` 0.4.0 packages this probe app-side** —
   `migrate_delegate_secrets` and `register_delegate_with_migration`
