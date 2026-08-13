@@ -771,7 +771,7 @@ contract lives; either way the probe is what carries the state.
 The registry, the `build.rs` codegen, and the backward probe are the same across
 every app, so a reusable crate — `freenet/freenet-migrate` — packages them (plus
 the delegate carry-forward and the preconditions above as enforced types). It is
-**`freenet-migrate` 0.4.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+**`freenet-migrate` 0.5.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
 `cargo add freenet-migrate` for the runtime carry-forward and `cargo add --build
 freenet-migrate-build` for the `build.rs` codegen + CI hash-guard. This is the
 mechanism River's contract-migration path runs in production; both the browser UI
@@ -788,6 +788,12 @@ Views-only mode (`canonical_consts(false)`) needs no `freenet-migrate` runtime
 dependency. Registries accept hex or base58, and every build validates the hashes
 and re-derives `delegate_key == blake3(code_hash || params)`; a grandfathered row
 whose recorded key predates that derivation marks itself `irregular_key = true`.
+
+"Without a rewrite" is a statement about the const shapes, not a procedure. The
+actual call-site swap in an app that already hand-rolls a sweep has its own
+sequence: write the behavioural spec first, dual-run the old and new paths, gate
+on a parity test, and know what rollback cannot undo. That is the
+`freenet-migrate-adoption` skill.
 
 **The probe decisions live in a sans-IO driver.** The `ProbeDriver` owns
 order and adoption (newest generation first by the registry generation field,
@@ -808,8 +814,10 @@ copy-forward was designed and shipped, then found forgeable and disabled as a
 security fix (freenet-core#5199), and the wire variant was removed from
 stdlib `main` (unreleased — crates.io is still 0.8.5). Three trust-model
 designs have been tried and rejected, and app-level migration is now settled
-standing policy rather than an interim measure. Delegate secret migration
-runs the River/Delta way, with the app carrying the export across
+standing policy rather than an interim measure. App-level is not hand-rolled,
+though: the crate's delegate half is the shared implementation of it, and
+River, Delta and ghostkeys all drive it on `main` at 0.5.0. The transport
+underneath is still app-side, with the app carrying the export across
 `DelegateRequest` round-trips and re-running the old WASM (see
 `delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
 why" for the full history and current guidance). Tracked live under

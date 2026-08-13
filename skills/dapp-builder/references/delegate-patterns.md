@@ -570,7 +570,7 @@ Rather than hand-roll the registry, the `build.rs` codegen, and the backward
 probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
 legacy-key registry, build-time codegen, the backward probe, the delegate
 carry-forward, and the preconditions as enforced types). It is
-**`freenet-migrate` 0.4.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+**`freenet-migrate` 0.5.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
 `cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. Adopting
 the build codegen is not a rewrite: `freenet-migrate-build` reads the River-style
 `[[entry]]` registry above (`entry_registry`) and emits byte-array *view* consts
@@ -581,12 +581,14 @@ dependency in views-only mode. Every build re-derives
 derivation with `irregular_key = true` (River adopted the build codegen this way
 in freenet/river#434).
 
-One caveat is specific to delegates: the crate's *field-deployed* carry-forward
-is the contract path — River's UI and `riverctl` run it live (see
-`contract-patterns.md`). The crate does also ship delegate-side entry points
-(0.4.0's `delegate_migrate` module), but with no production adopters yet.
-Delegate secrets have no core-level equivalent and never will; see the next
-section for the full history and current guidance.
+The delegate half is shipped and has adopters. `migrate_delegate_secrets`
+and `register_delegate_with_migration` (the `delegate_migrate` module) are the
+app-facing entry points, and River, Delta and ghostkeys all drive them on `main`
+at 0.5.0. Delegate secrets still have no core-level equivalent and never will;
+see the next section for the full history and current guidance.
+
+For the call-site swap itself in an app that already hand-rolls a sweep, see the
+`freenet-migrate-adoption` skill.
 
 ## Delegate secret migration: no core mechanism, and why
 
@@ -625,21 +627,30 @@ never exist.
 
 **App-level does not mean bespoke-per-app.** The goal is shared, reusable
 app-side tooling, the same way `freenet-migrate` already serves contract
-state. Two options: the crate packages the shape, and ghostkeys' sweep is the
-field-proven instance of it. Weigh the crate's zero-adopter status against the
-cost of hand-rolling and maintaining your own.
+state, and that tooling now exists and has adopters. Use it rather than
+hand-rolling another copy of the same sweep.
 
-- **`freenet-migrate` 0.4.0 packages this probe app-side** —
-  `migrate_delegate_secrets` and `register_delegate_with_migration`
-  (`delegate_migrate.rs:488,526`), over a `PredecessorSecretsIo` transport
-  seam you implement for your client. It has **no production adopters yet**,
-  and while it carries ~50 tests they all drive mocked I/O — there is no
-  integration test against a real node or a real WASM delegate. Sound design,
-  unproven in the field.
-- **ghostkeys' hand-rolled sweep** (`ui/src/migration.rs` plus a committed
-  `legacy_delegates.toml` registry) remains the field-proven shape the crate
-  codifies — the two converged on structurally identical probe/classify/import
-  logic independently, which is good evidence the abstraction is right.
+- **`freenet-migrate` 0.5.0 packages this probe app-side** —
+  `migrate_delegate_secrets` and `register_delegate_with_migration` in
+  `delegate_migrate.rs`, over two adapters you implement for your client:
+  `PredecessorSecretsIo` reads the predecessors, and `SuccessorSecretsIo`
+  writes the successor. **River, Delta and ghostkeys all drive it on `main`.**
+  ghostkeys' adoption is the shape to copy: the crate took over the walk
+  (which predecessors, newest-first, the executability preflight, marker
+  bookkeeping, cross-generation selection) while the app kept every
+  app-specific judgement in its adapter.
+- **The successor adapter is the load-bearing part of 0.5.0.** Before it, the
+  crate copied raw `(key, value)` pairs into a `SecretStore`, which is wrong
+  for any app whose stored items have cross-entry invariants and fails
+  silently: a recovered credential lands in the store while the index the UI
+  reads never learns about it. Route the write through your app's own import
+  handler. `SecretStoreIo` keeps the old raw-pair behaviour in one line for
+  apps whose secrets genuinely stand alone, behind a deliberately loud ack.
+- **The field evidence comes from the adopters, not from the crate's own
+  tests.** The crate's own tests all drive mocked I/O; there is no integration
+  test against a real node or a real WASM delegate. Both ghostkeys and Delta gated
+  their adoption on a differential test against their prior hand-rolled sweep,
+  which is the check worth copying.
 
 One limitation to name either way: there is **no user consent in this flow**,
 only app-author self-assertion. That is sound *at this trust boundary* — the

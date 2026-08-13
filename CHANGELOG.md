@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.19.1 (2026-08-12)
+
+Corrects the delegate-half status again. 1.19.0 replaced "still a documented
+stub" with "no production adopters yet" and "sound design, unproven in the
+field". That is now wrong too: `freenet-migrate` 0.5.0 is on crates.io and
+River, Delta and ghostkeys all drive its delegate-side entry points on `main`
+(verified against each repo's `origin/main`, not a local checkout).
+
+- Version references updated from 0.4.0 to 0.5.0 across `SKILL.md`,
+  `contract-patterns.md`, `delegate-patterns.md` and `upgrade-and-migration.md`.
+  `freenet-migrate-build` stays at 0.2.0, which is still the published latest.
+- `delegate-patterns.md`: the "two options, weigh the crate's zero-adopter
+  status" framing is replaced with a single recommendation. ghostkeys no longer
+  belongs in it as the hand-rolled alternative, because ghostkeys' own sweep now
+  drives the crate; its adoption is described as the shape to copy instead.
+- Documents `SuccessorSecretsIo`, the load-bearing part of the 0.5.0 breaking
+  change. The raw `(key, value)` copy it replaced is wrong for any app whose
+  stored items carry cross-entry invariants, and it fails silently.
+- The mocked-I/O caveat is kept, since it is still true that the crate has no
+  integration test against a real node or a real WASM delegate. The field
+  evidence comes from the adopters, both of which gated on a differential test
+  against their prior sweep.
+- Adds pointers to the `freenet-migrate-adoption` skill from the four places
+  that assert "existing apps adopt it without a rewrite". That claim is about
+  const shapes and is not a procedure; the procedure lives in that skill.
+
 ## 1.19.0 (2026-08-09)
 
 Delegate secret migration docs described the node-level copy-forward as a
