@@ -22,8 +22,8 @@ River, Delta and ghostkeys all drive its delegate-side entry points on `main`
   stored items carry cross-entry invariants, and it fails silently.
 - The mocked-I/O caveat is kept, since it is still true that the crate has no
   integration test against a real node or a real WASM delegate. The field
-  evidence comes from the adopters, both of which gated on a differential test
-  against their prior sweep.
+  evidence comes from the adopters. ghostkeys and Delta each gated their
+  adoption on a differential test against their prior sweep.
 - Adds pointers to the `freenet-migrate-adoption` skill from the four places
   that assert "existing apps adopt it without a rewrite". That claim is about
   const shapes and is not a procedure; the procedure lives in that skill.

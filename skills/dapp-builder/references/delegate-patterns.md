@@ -635,6 +635,9 @@ hand-rolling another copy of the same sweep.
   `delegate_migrate.rs`, over two adapters you implement for your client:
   `PredecessorSecretsIo` reads the predecessors, and `SuccessorSecretsIo`
   writes the successor. **River, Delta and ghostkeys all drive it on `main`.**
+  River and Delta run the crate's walk alongside their existing hand-rolled
+  sweep, which stays authoritative until the walk field-validates, so expect
+  that staging rather than a single cutover.
   ghostkeys' adoption is the shape to copy: the crate took over the walk
   (which predecessors, newest-first, the executability preflight, marker
   bookkeeping, cross-generation selection) while the app kept every
