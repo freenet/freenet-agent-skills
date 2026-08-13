@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.20.1 (2026-08-13)
+
+`ui-patterns.md` told you to derive the WebSocket URL and, 30 lines earlier,
+told you to hardcode it. A real dApp split the difference with a port sniff and
+shipped it.
+
+- **The connection-model table no longer says "hardcode" for browser pages.**
+  The "outside the gateway" row covered both a native CLI and a page served by
+  a dev server, and its advice — "Hardcode or configure
+  `ws://127.0.0.1:7509/...`" — read as a blanket exemption from the
+  "NEVER hardcode" rule two sections below. The row now sends browser pages to
+  the new dev-server proxy section and keeps configure-with-a-default for CLIs
+  and scripts. Its actual subject, who sends `Authenticate`, is unchanged.
+- **New: "Dev servers: proxy instead of hardcoding".** Proxying `/v1` in the
+  dev server makes the page same-origin in development, so the derivation
+  applies everywhere and app code has one path instead of two. Includes the
+  `changeOrigin: true` requirement (the node's `--allowed-host` is a
+  Host-header allowlist, so without it the upgrade is rejected), an env var for
+  the node address, and a `curl` upgrade probe — an unproxied dev server
+  answers `/v1/...` with its own index, which surfaces as a hang rather than an
+  error. Notes explicitly that a proxy is transport only: no shell appears, so
+  such a page still owns its own auth.
+- **"NEVER hardcode" now names the near-miss.** A port sniff
+  (`location.port === "7509" ? location.host : "127.0.0.1:7509"`) is not a
+  derivation — it breaks as soon as the node serves the app on another port,
+  the exact case "works on any host/port" exists to protect.
+- **The TypeScript example derives the scheme**, as the Rust example above it
+  already did. It hardcoded `ws://`, which is a mixed-content failure under an
+  https-served shell.
+
 ## 1.20.0 (2026-08-13)
 
 Two ways the recommended upgrade mechanism loses user data silently. The docs
