@@ -570,8 +570,10 @@ Rather than hand-roll the registry, the `build.rs` codegen, and the backward
 probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
 legacy-key registry, build-time codegen, the backward probe, the delegate
 carry-forward, and the preconditions as enforced types). It is
-**`freenet-migrate` 0.5.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
-`cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. Adopting
+**`freenet-migrate` 0.6.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+`cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. 0.6.0 is
+breaking on the **contract** half only (silence is no longer read as absence; see
+`contract-patterns.md`); the delegate surface is unchanged from 0.5.0. Adopting
 the build codegen is not a rewrite: `freenet-migrate-build` reads the River-style
 `[[entry]]` registry above (`entry_registry`) and emits byte-array *view* consts
 matching your hand-rolled `LEGACY_DELEGATES` shape (`delegate_pair_view` gives
@@ -630,7 +632,8 @@ app-side tooling, the same way `freenet-migrate` already serves contract
 state, and that tooling now exists and has adopters. Use it rather than
 hand-rolling another copy of the same sweep.
 
-- **`freenet-migrate` 0.5.0 packages this probe app-side** —
+- **`freenet-migrate` packages this probe app-side** (0.6.0 on crates.io; the
+  delegate entry points below have been stable since 0.5.0):
   `migrate_delegate_secrets` and `register_delegate_with_migration` in
   `delegate_migrate.rs`, over two adapters you implement for your client:
   `PredecessorSecretsIo` reads the predecessors, and `SuccessorSecretsIo`

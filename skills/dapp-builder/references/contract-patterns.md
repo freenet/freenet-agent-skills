@@ -771,7 +771,7 @@ contract lives; either way the probe is what carries the state.
 The registry, the `build.rs` codegen, and the backward probe are the same across
 every app, so a reusable crate — `freenet/freenet-migrate` — packages them (plus
 the delegate carry-forward and the preconditions above as enforced types). It is
-**`freenet-migrate` 0.5.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+**`freenet-migrate` 0.6.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
 `cargo add freenet-migrate` for the runtime carry-forward and `cargo add --build
 freenet-migrate-build` for the `build.rs` codegen + CI hash-guard. This is the
 mechanism River's contract-migration path runs in production; both the browser UI
@@ -795,17 +795,55 @@ sequence: write the behavioural spec first, dual-run the old and new paths, gate
 on a parity test, and know what rollback cannot undo. That is the
 `freenet-migrate-adoption` skill.
 
-**The probe decisions live in a sans-IO driver.** The `ProbeDriver` owns
-order and adoption (newest generation first by the registry generation field,
-first real state wins, an undecodable response or a timeout advances, late
-responses are single-shot ignored, a hop cap bounds the walk, and exhaustion seeds
-the local snapshot), while the app pumps I/O and supplies a `ProbeStateOps` adapter
-(`decode`, `is_real`, the merges, and `prepare_forward`, the pointer-strip seam for
-freenet/river#427). `SelectionPolicy::NewestFirstWins` is the default and is safe
-for delete-by-absence states; `SelectionPolicy::FoldAll` folds every real
-generation and is only sound for tombstoned states with a commutative and
-idempotent merge, so it takes a loudly-named ack plus `policy_check` property
-helpers. River drives its event-driven browser probe (freenet/river#436) and
+**The probe decisions live in a sans-IO driver.** The `ProbeDriver` owns order and
+adoption while the app pumps I/O and supplies a `ProbeStateOps` adapter (`decode`,
+`is_real`, the merges, and `prepare_forward`, the pointer-strip seam for
+freenet/river#427). The decisions: newest generation first by the registry
+generation field, first real state wins, an undecodable or placeholder response is
+a miss and advances the walk, late responses are single-shot ignored, and a hop cap
+bounds the walk.
+
+**Silence is not absence.** This is the 0.6.0 break (freenet-migrate#19), and it is
+the whole reason to be on 0.6.0. Your adapter's `ProbeIo::get` returns a three-way
+`ProbeAnswer`: `State(bytes)`; `Absent` for the node's real
+`ContractResponse::NotFound`; and `Unknown` for a timeout, send failure, dropped
+transport, cancelled correlation slot, or any other non-answer. A timeout is never
+a miss. `ProbeDriver::on_timeout` is deprecated and forwards to `on_unknown`, which
+is safe against sealing but is **not a drop-in**: a call site that also routed
+positive not-founds through it will now stop at its first empty generation and
+never ask the older ones, because under `NewestFirstWins` an unanswered candidate
+halts the walk (opting out takes `ProbeDriver::continue_past_unknown` with a
+`RollbackRiskAck`, which forfeits the anti-rollback guarantee for that probe). The outcomes are `Recovered` (a generation
+had real state), `SeedLocal` (every candidate was asked *and answered*, and none
+had state), and `Indeterminate { local, unresolved }` (nothing recovered and at
+least one candidate never answered, or was never reached because the hop cap fired;
+adopt nothing, seal nothing, retry next load). Both `ProbeAnswer` and `Outcome`
+are `#[non_exhaustive]`, so a `match` needs a wildcard arm.
+
+**No outcome licenses recording the migration as finished.** A Freenet `NotFound`
+is the strongest negative the network can give and it is still not proof of
+absence: absence is unauthenticated, and a contract that exists answers `NotFound`
+while it is momentarily unfindable. With the placement migration disabled
+(freenet-core#4440) that is the common case rather than the corner case:
+present-but-unfindable dead-ends measured ~99.6% of all `get_not_found` traffic in
+production telemetry. An undecodable answer is a miss too, so a schema break across
+a whole lineage also lands on `SeedLocal` with every generation intact underneath
+it. Read `SeedLocal` as "asked everyone, found nothing *this time*". Seeding your
+own local snapshot forward on it is fine. If your app must seal something, make the
+write idempotent so a later run picks up a generation that was momentarily
+unfindable, require the same answer across separate attempts spread in time,
+require a connectivity witness (a GET for something you know exists succeeding in
+the same window), and never let a single all-`Absent` walk trigger an irreversible
+write.
+
+**Probe before anything writes to the new key.** The trigger is "the new key has no
+real state yet", so an earlier write can permanently suppress the migration,
+silently. See `upgrade-and-migration.md` → "Probe before you write to the new key".
+
+`SelectionPolicy::NewestFirstWins` is the default and is safe for delete-by-absence
+states; `SelectionPolicy::FoldAll` folds every real generation and is only sound
+for tombstoned states with a commutative and idempotent merge, so it takes a
+loudly-named ack plus `policy_check` property helpers. River drives its event-driven browser probe (freenet/river#436) and
 `riverctl`'s synchronous recovery (freenet/river#437) through the same driver.
 
 The one honest caveat is on the **delegate** side: there is no core mechanism

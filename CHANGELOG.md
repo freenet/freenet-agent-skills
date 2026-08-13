@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.20.0 (2026-08-13)
+
+Two ways the recommended upgrade mechanism loses user data silently. The docs
+described one of them as correct behaviour, and did not mention the other at all.
+
+- **`freenet-migrate` is 0.6.0** on crates.io (published 2026-08-13);
+  `freenet-migrate-build` stays 0.2.0. The break is on the contract half only.
+  Adopters (River, Delta, ghostkeys, Atlas) pin `0.5` and do not pick it up
+  automatically, so the "adopters drive it at 0.5.0" statements are left alone.
+- **`contract-patterns.md`: the `ProbeDriver` description was pre-0.6.0 and
+  described the bug 0.6.0 fixed.** It said "a timeout advances" and "exhaustion
+  seeds the local snapshot". Replaced with the shipped semantics: `ProbeIo::get`
+  returns a three-way `ProbeAnswer` (`State` / `Absent` / `Unknown`), a timeout is
+  `Unknown` and never a miss, `on_timeout` is deprecated and is not a drop-in,
+  `SeedLocal` requires every candidate to have answered, and
+  `Indeterminate { local, unresolved }` is the new outcome for an incomplete walk.
+  Adds the limit the crate now states outright: a Freenet `NotFound` is the
+  strongest negative the network can give and is still not proof of absence, so no
+  outcome licenses recording the migration as finished.
+- **New: `upgrade-and-migration.md` → "Probe before you write to the new key".**
+  The migration trigger is "the new key has no real state yet", so any earlier
+  write to the new key permanently suppresses it. Silent, and it reads as success.
+  River has shipped this since 2026-05-20 across seven room-contract re-keys
+  (freenet/river#621), found by a rehearsal rather than by CI, because the pin over
+  it asserted the probe call *exists* while it was unreachable. Existence is not
+  reachability: pin the outcome, not the call. Cross-referenced from `SKILL.md`,
+  `contract-patterns.md`, and playbook step 5.
+
 ## 1.19.1 (2026-08-12)
 
 Corrects the delegate-half status again. 1.19.0 replaced "still a documented

@@ -92,7 +92,7 @@ The whole procedure, start to finish:
 4. **Use the `freenet-migrate` crate for the carry-forward instead of hand-rolling
    it.** The legacy-hash registry, the `build.rs` codegen, the backward probe, and
    the preconditions-as-types are identical across every app, so `freenet-migrate`
-   packages them. It is **`freenet-migrate` 0.5.0 on crates.io** (with
+   packages them. It is **`freenet-migrate` 0.6.0 on crates.io** (with
    `freenet-migrate-build` 0.2.0): `cargo add freenet-migrate` (runtime
    carry-forward) and `cargo add --build freenet-migrate-build` (build.rs codegen +
    CI hash-guard). This is the mechanism River's contract-migration path runs in
@@ -113,9 +113,10 @@ The whole procedure, start to finish:
    tried and rejected, and the settled standing policy (freenet-core#2776,
    2026-08-09) is that delegate secret migration happens at the app level
    permanently, not as an interim measure. That does not mean bespoke per app:
-   `freenet-migrate` 0.5.0 ships the delegate-side entry points
-   (`migrate_delegate_secrets`, `register_delegate_with_migration`), and River,
-   Delta and ghostkeys all drive them on `main`. See `delegate-patterns.md` →
+   `freenet-migrate` ships the delegate-side entry points
+   (`migrate_delegate_secrets`, `register_delegate_with_migration`, unchanged
+   since 0.5.0), and River, Delta and ghostkeys all drive them on `main` at
+   0.5.0. See `delegate-patterns.md` →
    "Delegate secret migration: no core mechanism, and why" for the full history
    and current guidance, and `contract-patterns.md` for the contract-side
    mechanics. For the procedure of swapping an existing hand-rolled sweep over
@@ -131,7 +132,9 @@ The whole procedure, start to finish:
    for an unbounded rollout window. A **fresh device has no local state to
    migrate** — that is normal, not a failure. Keep the migration itself safe
    (idempotent, resumable, non-destructive, regression-gated, observable) per "The
-   five properties" below.
+   five properties" below, and make sure nothing in your load path writes to the
+   new key before the probe runs. That is a silent way to disable your own
+   migration; see "Probe before you write to the new key".
 
 6. **Do NOT recreate instances, rotate keys, or warn users their invites are
    dead.** None of that is part of a routine upgrade, and doing it *causes* the
@@ -244,6 +247,38 @@ properties below are the whole game.
    build metric is not a "users' data migrated" metric. This is the single
    highest-leverage thing most teams skip.
 
+## Probe before you write to the new key
+
+Property 4 gates migration on "the destination is still empty". That gate is also
+a hazard: **any write to the new key that happens before the probe can permanently
+suppress the migration.** The trigger condition is never met, the migration never
+runs, and the app looks healthy while the user's history stays stranded on the
+predecessor generation. Writes that do it: an optimistic PUT, a default or
+placeholder seed, a cached snapshot pushed forward, a subscribe-then-write path,
+anything that populates the new key so the UI has something to render.
+
+**It is silent and it reads as success.** No error, no crash. The migration simply
+never fires.
+
+River shipped exactly this, and it took a rehearsal to find it
+([freenet/river#621](https://github.com/freenet/river/issues/621)). River's probe
+fires when a GET on the current key returns state whose configuration signature
+*fails* to verify. Earlier in the same pass, another block PUTs a delegate-cached
+room snapshot to that key, and that block is taken exactly when the same signature
+*verifies*. Same predicate, same bytes, so any state qualifying for the PUT is by
+construction a state that suppresses the probe. For rooms restored from the
+delegate the probe had been unable to fire since it shipped on 2026-05-20, across
+seven room-contract re-keys.
+
+**Audit your own app.** Name the exact predicate that triggers your migration, then
+grep for every write to the new key that can run before it, and confirm none of
+them can make that predicate false.
+
+**A source-scrape pin asserting the probe "is called" does not catch this.** River
+had one, green for three months, over a call that was unreachable for a whole class
+of room. Existence is not reachability. Pin the outcome (did the migration run,
+did the predecessor's history arrive), never the presence of the call.
+
 ## Enumerate dynamic key families
 
 If your storage has open-ended key families (one key per entity), a *fixed* list
@@ -325,7 +360,7 @@ and verify by mutation that removing the fix fails the test.
   precondition for permissionless migration.
 - The reusable `freenet/freenet-migrate` crate packages the registry, the
   build-time codegen, the backward probe, and the preconditions (`freenet-migrate`
-  0.5.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
+  0.6.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
   `cargo add --build freenet-migrate-build`). River's contract-migration path (UI
   and `riverctl`) runs it in production, and existing apps adopt it without a
   rewrite via the `[[entry]]`-registry build codegen (freenet/river#434, #436, #437).
