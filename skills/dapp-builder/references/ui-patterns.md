@@ -200,7 +200,7 @@ The correct choice depends on **how the client loads**, not on what it wants to 
 | Client load path | Connection model | What to do |
 |------------------|------------------|-----------|
 | Loaded as a **webapp via `/v1/contract/web/{key}/`** (runs inside the gateway's sandboxed iframe) | **Shell-managed WebSocket.** The gateway's outer page owns the real socket and injects the auth token. Your WASM calls `WebSocket::new(url)` and a shimmed `window.WebSocket` transparently forwards messages via `postMessage`. | Derive the URL from `window.location` (see below). **Do NOT call `Authenticate`; the shell injects it.** Use `freenet-stdlib::WebApi::start()`. |
-| Loaded **outside the gateway** (native CLI, Playwright page served from a dev port like `python3 -m http.server`, a Node script, or any page that did not come from `/v1/contract/web/...`) | **Raw WebSocket.** There is no shell; you talk directly to the node's WS API. | Hardcode or configure `ws://127.0.0.1:7509/v1/contract/command?encodingProtocol=native`. After the socket opens, **send `ClientRequest::Authenticate { token }` yourself** with a token from the node's config or `~/.config/freenet/`. See the `local-dev` skill for details. |
+| Loaded **outside the gateway** (native CLI, Playwright page served from a dev port like `python3 -m http.server`, a Node script, or any page that did not come from `/v1/contract/web/...`) | **Raw WebSocket.** There is no shell; you talk directly to the node's WS API. | **For a browser page, prefer removing this case** — see "Dev servers: proxy instead of hardcoding" below — so the URL derivation still applies. For a CLI or script, configure the address (flag or env var); hardcode only as the default behind that override. After the socket opens, **send `ClientRequest::Authenticate { token }` yourself** with a token from the node's config or `~/.config/freenet/`. See the `local-dev` skill for details. |
 
 In short: **if your code is running inside an iframe served by `/v1/contract/web/...`, the shell does auth for you.** Everywhere else, you do it yourself. Getting this wrong produces confusing symptoms: the shell model fails with "Auth token not found" if you try to authenticate manually, and the raw model hangs forever if you forget.
 
@@ -229,6 +229,13 @@ This means:
 
 **NEVER hardcode `ws://127.0.0.1:7509`.** Derive the URL from the page location:
 
+A port sniff is not a derivation. `location.port === "7509" ? location.host :
+"127.0.0.1:7509"` looks like it handles both rows of the table above, but it
+breaks the moment the node serves the app on any other port — which is the
+exact case "works on any host/port" is there to protect. Derive
+unconditionally; handle the dev case in the dev server, not in app code.
+
+
 ```rust
 /// Get the WebSocket URL for connecting to the Freenet node.
 /// Derives from window.location so the app works on any host/port.
@@ -252,6 +259,52 @@ fn get_websocket_url() -> String {
 The full URL path is: `ws://{host}/v1/contract/command?encodingProtocol=native`
 
 Reference: `river/ui/src/components/app/freenet_api/constants.rs`
+
+### Dev servers: proxy instead of hardcoding
+
+Under `vite dev` (or any dev server) the page is served from the dev port, so
+same-origin does not reach the node — which is what tempts a hardcoded address
+into app code. Proxy `/v1` in the dev server instead, and the page becomes
+same-origin in development too:
+
+```ts
+// vite.config.ts
+server: {
+  proxy: {
+    "/v1": {
+      target: process.env.FREENET_NODE ?? "http://127.0.0.1:7509",
+      ws: true,            // /v1/contract/command is a WebSocket upgrade
+      changeOrigin: true,  // see below
+    },
+  },
+},
+```
+
+`changeOrigin: true` is required, not cosmetic: the node's `--allowed-host` is
+a Host-header allowlist. Without it the upgrade arrives claiming the dev port
+and the node rejects it.
+
+Two things this buys: the node's address lives in one place that an env var can
+override (a node on another host or port needs no code change), and app code
+has exactly one code path, so the dev path and the shipped path are the same
+code.
+
+What it does **not** change is auth. A proxy is transport only — no shell
+appears, so a page served from a dev port is still the "outside the gateway"
+row of the table above and still owns its own `Authenticate` (a local node in
+`network local` mode may accept an empty token, which is why this is easy to
+get wrong in dev and discover in production).
+
+Verify the proxy rather than assuming — a dev server that does not proxy
+returns its own 404/index for `/v1/...`, which surfaces as a hang, not an
+error:
+
+```sh
+curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+     http://127.0.0.1:5173/v1/contract/command | head -1
+# HTTP/1.1 101 Switching Protocols   <- proxied to the node
+```
 
 ### Connection Manager (Using freenet-stdlib WebApi)
 
@@ -623,8 +676,11 @@ import {
   ResponseHandler,
 } from "@freenetorg/freenet-stdlib";
 
-// Build WebSocket URL from current location (works in sandbox iframe)
-const wsUrl = new URL(`ws://${location.host}/v1/contract/command`);
+// Build WebSocket URL from current location (works in sandbox iframe).
+// Derive the scheme too, as the Rust example above does: a shell served over
+// https needs wss:, and a hardcoded ws: is a mixed-content failure there.
+const proto = location.protocol === "https:" ? "wss:" : "ws:";
+const wsUrl = new URL(`${proto}//${location.host}/v1/contract/command`);
 
 const handler: ResponseHandler = {
   onContractPut: (response: PutResponse) => { /* fired on put completion */ },
