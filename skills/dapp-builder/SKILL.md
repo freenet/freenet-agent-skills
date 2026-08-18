@@ -129,7 +129,10 @@ Follow these phases in order.
 > failure is silent: every read comes back looking like "this user has nothing
 > stored". Pinning a version of their crate does not help — that pins you to
 > their view of the key as of their release, which is the thing that went stale.
-> Resolve their pointer at runtime instead. See
+> Fetch their key at runtime instead: resolve their author-signed pointer if
+> they publish one, and otherwise read it from their webapp bundle, which is
+> what ghostkeys does today. Pointer adoption is thin, so expect the fallback to
+> be the path for most apps right now. Either beats a compiled-in constant. See
 > `references/building-on-other-apps.md`.
 >
 > **Working on an app that already exists?** Before anything else, check whether

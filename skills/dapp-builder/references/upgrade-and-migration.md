@@ -57,9 +57,10 @@ The whole procedure, start to finish:
      is merged as an in-repo crate (freenet-migrate#9, deliberately unpublished
      *as a crate*; the frozen, CI-hash-checked WASM artifact is the
      deliverable). A client resolver ships in `freenet-migrate` 0.6.0
-     (`freenet_migrate::pointer`), so this is now consumable rather than
-     scaffolding — earlier revisions of this file said no resolver existed, and
-     that is out of date.
+     (`freenet_migrate::pointer`) — earlier revisions of this file said no
+     resolver existed, and that is out of date. Adoption is a separate question
+     from availability, and it is thin: publishing a pointer is worth doing for
+     your integrators, but do not assume the apps *you* depend on have one.
 
      Two things to keep straight. It solves **addressing only**: it says nothing
      about whether state or secrets held under the old key survived, and

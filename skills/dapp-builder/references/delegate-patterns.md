@@ -421,9 +421,13 @@ wrong (deriving with the pointer's params instead of your own, not persisting
 the floor, and handling only the two outcome arms that carry a record).
 
 **Otherwise, fetch it from the project's webapp bundle.** This needs no
-cooperation beyond the project publishing the file, works today, and is what
-ghostkeys does. Note that it addresses the same problem with less: no signature
-over the answer, no rollback protection, no withdrawal signal.
+cooperation beyond the project publishing the file, works today, is what
+ghostkeys does, and is the path for most apps right now since pointer adoption
+is thin. Note that it addresses the same problem with less. The bundle is
+owner-signed, versioned contract state at the node layer, so this is not "an
+unsigned answer" — but nothing in it is verified by *your* code: you get no
+signature you check client-side, no anti-rollback floor, and no way for the
+author to say "withdrawn".
 
 The pattern ghostkeys uses, and a good default where no pointer exists: the project publishes its
 current delegate key as a file inside its own **webapp bundle**, and you fetch

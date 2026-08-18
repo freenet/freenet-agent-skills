@@ -19,11 +19,15 @@ actually have.
   arms that carry a record, which silently no-ops on the other five), and states
   the scope boundary: the pointer solves **addressing only** and says nothing
   about whether state or secrets under the old key survived.
-- **The pointer contract is consumable, and the skill said it was not.**
-  `references/upgrade-and-migration.md` described it as "emerging, not yet
-  consumable" with "no client resolver exists yet". A resolver ships in
-  `freenet-migrate` 0.6.0 (`freenet_migrate::pointer`), so that text was out of
-  date; corrected, with the author-side and consumer-side halves cross-linked.
+- **The resolver is published, and the skill said no resolver existed.**
+  `references/upgrade-and-migration.md` described the pointer contract as
+  "emerging, not yet consumable" with "no client resolver exists yet". A
+  resolver ships in `freenet-migrate` 0.6.0 (`freenet_migrate::pointer`), so
+  that text was out of date; corrected, with the author-side and consumer-side
+  halves cross-linked. Note this is a claim about the *resolver*, not about
+  adoption: pointer adoption is thin, so the new file and the SKILL.md callout
+  both say to expect the webapp-bundle fallback to be the working path for most
+  apps today.
 - **`delegate-patterns.md` → "Depending on Someone Else's Delegate"** now offers
   the pointer as the principled mechanism alongside the existing webapp-bundle
   fetch, and is explicit about what the bundle pattern does not give you: no
