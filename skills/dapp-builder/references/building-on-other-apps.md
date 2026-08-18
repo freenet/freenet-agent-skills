@@ -6,12 +6,28 @@ project's contracts. Everything in `upgrade-and-migration.md` is written from
 the *author's* side. The two problems are different, and solving the author's
 one does not solve yours.
 
-> **Adoption is thin, so check before you build on it.** The pointer mechanism
-> below is new. Do not assume the app you depend on has published one — for most
-> apps today the honest answer is that they have not, and your resolve will
-> return `NeverPublished`. Resolve first, and keep the bundle-fetch fallback at
-> the end of this file for the apps that have not published yet. Both beat a
-> constant compiled into your build.
+> **Adoption is thin, so check before you build on it.** The mechanism works and
+> is live, but almost nothing publishes yet.
+>
+> | app | `app_id` | pointer key |
+> |---|---|---|
+> | River | `river.room-contract` | `Ai4VLoC2jGdhpcB2UU8VPo3efUoxjm1Ju9VKXqRC63Az` |
+> | River | `river.chat-delegate` | `6qF2H5JRPBxbKC45UtPnzdDzyfsejYFW1UwDLGDU66mu` |
+>
+> That is the complete list as of 2026-08-18. River's author key is
+> `river:v1:vk:9Ebskq4y7NvJpTQTrF1FAxU8g6bR4Rhe4TRikXba55EJ`, published in
+> River's `FREENET.md` — **take it from there, not from here**, for the reason
+> given under "the author key is the whole trust anchor" below.
+>
+> Atlas and Delta have records prepared but not published. Everything else,
+> including ghostkeys, has none — so for those your resolve returns
+> `NeverPublished` (a real "not found") or `Unavailable` (your transport could
+> not tell), and the baked-in fallback is legitimately what you use.
+>
+> So: resolve first, and keep the bundle-fetch fallback at the end of this file
+> for the apps that have not published. Both beat a constant compiled into your
+> build, and the fallback stops being needed one app at a time rather than all
+> at once.
 
 ## The failure, stated once
 

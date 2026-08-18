@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## 1.23.0 (2026-08-17)
 
+> Updated 2026-08-18: the pointer contract is now LIVE. River published the
+> first two records (`river.room-contract`, `river.chat-delegate`), both
+> verified from the network and resolved through `resolve_app_pointer`. Adoption
+> is still thin — Atlas and Delta have records prepared but unpublished, and
+> everything else including ghostkeys has none — so the bundle-fetch fallback in
+> `building-on-other-apps.md` remains the right path for those apps.
+
 The skill covered how to survive *your own* re-keys and said nothing about
 surviving *someone else's*, which is the problem third-party integrators
 actually have.
