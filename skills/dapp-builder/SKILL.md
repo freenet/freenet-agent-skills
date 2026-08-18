@@ -1,6 +1,6 @@
 ---
 name: dapp-builder
-description: Build and maintain decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI, and through upgrading a live dApp safely. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, build a Freenet-connected UI, OR upgrade an existing dApp — bump freenet-stdlib, ship a new contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state across a contract/delegate key change without breaking invites or losing data.
+description: Build and maintain decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI, and through upgrading a live dApp safely. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, build a Freenet-connected UI, OR upgrade an existing dApp — bump freenet-stdlib, ship a new contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state across a contract/delegate key change without breaking invites or losing data. Also use when INTEGRATING with a contract or delegate published by another app — reading another project's contract state, depending on a platform delegate, or deciding how to address someone else's artifact so it survives their re-keys.
 license: LGPL-3.0
 ---
 
@@ -122,6 +122,16 @@ Beyond that, make sure your state genuinely converges through `summarize` / `del
 
 Follow these phases in order.
 
+> **Building on an app you do NOT own** — reading River rooms, using the
+> ghostkeys delegate, indexing another project's contracts? Do not hardcode
+> their contract or delegate key. It is `BLAKE3(BLAKE3(wasm) ‖ params)`, so it
+> moves on every re-key of theirs, including a bare version bump, and the
+> failure is silent: every read comes back looking like "this user has nothing
+> stored". Pinning a version of their crate does not help — that pins you to
+> their view of the key as of their release, which is the thing that went stale.
+> Resolve their pointer at runtime instead. See
+> `references/building-on-other-apps.md`.
+>
 > **Working on an app that already exists?** Before anything else, check whether
 > it hardcodes a *delegate key* belonging to a platform delegate it does not own
 > (ghostkeys being the one in use today). That constant goes stale on every
@@ -325,6 +335,9 @@ References:
   contract/delegate upgrades: the five migration properties (idempotent,
   resumable, non-destructive, regression-gated, observable), enumerating
   dynamic key families, the upgrade test harness, and staged reversible rollout.
+- `references/building-on-other-apps.md` — the *consumer* side: integrating with
+  a contract or delegate you do not own, resolving the author's pointer instead
+  of pinning a key, the seven outcome arms, and what a pointer does not tell you.
 
 ## Project Structure Templates
 

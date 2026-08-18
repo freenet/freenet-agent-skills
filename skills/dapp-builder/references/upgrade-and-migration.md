@@ -48,23 +48,31 @@ The whole procedure, start to finish:
    - an **index/registry contract** mapping a stable name → the current contract
      key — a level of indirection. (The index contract itself needs this same
      treatment: its own address must be reachable via a stable anchor.)
-   - an **ecosystem-standard pointer contract** (emerging, not yet consumable) —
-     a shared, frozen "pointer" WASM at a derivable address `(author_vk,
-     app_id)`, whose state is an author-signed `{version, code_hash, sig}`
-     naming the current code hash of *some other* contract or delegate. The
-     record format is settled (freenet-core#5194; governance questions — author-key
-     rotation and recovery, whether adoption is mandatory — are still open), and
-     the contract is merged as an in-repo crate (freenet-migrate#9, deliberately
-     unpublished; the frozen, CI-hash-checked WASM artifact is the deliverable).
-     But **no client resolver exists yet** — as of this writing it is
-     unconsumed scaffolding, not an
-     adoptable mechanism, and it solves *addressing only* (it says nothing
-     about whether state or secrets held under the old key survived). It is
-     also a different thing from the in-state `OptionalUpgrade` pointer in
-     `contract-patterns.md`, which is per-instance and only findable by
-     clients that already hold a reference to *that* contract; the pointer
-     contract is for a third party with no prior reference at all. Check
-     freenet-core#2776 for current status before building on it.
+   - an **ecosystem-standard pointer contract** — a shared, frozen "pointer"
+     WASM at a derivable address `(author_vk, app_id)`, whose state is an
+     author-signed `{version, code_hash, sig}` naming the current code hash of
+     *some other* contract or delegate. The record format is settled
+     (freenet-core#5194; governance questions — author-key rotation and
+     recovery, whether adoption is mandatory — are still open), and the contract
+     is merged as an in-repo crate (freenet-migrate#9, deliberately unpublished
+     *as a crate*; the frozen, CI-hash-checked WASM artifact is the
+     deliverable). A client resolver ships in `freenet-migrate` 0.6.0
+     (`freenet_migrate::pointer`), so this is now consumable rather than
+     scaffolding — earlier revisions of this file said no resolver existed, and
+     that is out of date.
+
+     Two things to keep straight. It solves **addressing only**: it says nothing
+     about whether state or secrets held under the old key survived, and
+     assuming they did produces a bug shaped like "this user has no data". And
+     it is a different mechanism from the in-state `OptionalUpgrade` pointer in
+     `contract-patterns.md`, which is per-instance and only findable by clients
+     that already hold a reference to *that* contract; the pointer contract is
+     for a third party with no prior reference at all.
+
+     Publishing one is the author-side half. The consumer-side half — resolving
+     a pointer for an app you do **not** own, and the three things integrators
+     get wrong — is `building-on-other-apps.md`. Check freenet-core#2776 for
+     live adoption status.
 
    If v1 exposed a raw contract key as an identifier, fix *that* first — an upgrade
    cannot rescue an identifier that moves with the WASM. See

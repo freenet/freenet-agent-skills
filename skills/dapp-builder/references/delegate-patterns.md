@@ -409,8 +409,23 @@ go and buy one they already owned
 ### What to do instead
 
 **Fetch the current key at runtime from something whose address is stable.**
+Two ways, and they are not exclusive:
 
-The pattern ghostkeys uses, and a good default: the project publishes its
+**If the project publishes a pointer, resolve it.** An author-signed pointer
+record at `(author_vk, app_id)` names the artifact's current code hash, and
+`freenet-migrate` 0.6.0 ships the resolver. You get an author signature over the
+answer, an anti-rollback floor, and an explicit "withdrawn" state — none of
+which the bundle-file pattern below can give you. See
+`building-on-other-apps.md`, which also covers the three things integrators get
+wrong (deriving with the pointer's params instead of your own, not persisting
+the floor, and handling only the two outcome arms that carry a record).
+
+**Otherwise, fetch it from the project's webapp bundle.** This needs no
+cooperation beyond the project publishing the file, works today, and is what
+ghostkeys does. Note that it addresses the same problem with less: no signature
+over the answer, no rollback protection, no withdrawal signal.
+
+The pattern ghostkeys uses, and a good default where no pointer exists: the project publishes its
 current delegate key as a file inside its own **webapp bundle**, and you fetch
 it. A webapp contract's id is derived from the web container WASM and its
 parameters — both fixed — so publishing a new version updates the contract's
