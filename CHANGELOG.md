@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.26.0 (2026-08-19)
+
+Three gaps freenet-core#2776 lists as outstanding for this skill.
+
+**The `freenet-migrate` writer seam** (`delegate-patterns.md`). The crate decides
+what to migrate; the app supplies the write, and four constraints on that write
+are invisible to the crate. Never-clobber is the app's choice and
+`UnionAllGenerations` rests entirely on it, so an overwriting writer installs the
+*oldest* generation's value with a clean report. An aggregate secret is
+read-merge-write, where skipping hides entries and overwriting deletes them.
+Markers must be durable when `record_marker` returns, since the crate never
+flushes one. And the cross-generation policy is a deliberate choice with a cost
+either way, not a default to leave alone.
+
+**Two operational facts** (`build-system.md`). Build-caching bugs cannot be
+reproduced in a git worktree: `.git` is a file there, so a `build.rs` naming
+`../.git/HEAD` in `cargo:rerun-if-changed` makes the script always-dirty, which
+is why Delta's stale-table bug survived investigation. `cargo:` directives are
+also parsed from stdout only, so `eprintln!("cargo:warning=...")` renders nothing
+and a `cargo:warning` is never a gate. Separately, a publish gate must be wired
+into the publish task itself: ghostkeys' author-key check lived only in CI while
+the publish path depended on a different script.
+
+**Three review questions** (`upgrade-and-migration.md`). Does the guard at a seam
+check both sides of it? Is the test double above or below the bug you care about?
+Is the operation idempotent with respect to the UI as well as to stored data?
+The last one is Delta's editor bug, where a storage-idempotent no-op merge still
+wiped the user's unsaved typing.
+
 ## 1.25.0 (2026-08-18)
 
 Summary SIZE guidance, alongside the determinism guidance that was already here.

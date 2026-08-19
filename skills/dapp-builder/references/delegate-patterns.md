@@ -671,6 +671,59 @@ hand-rolling another copy of the same sweep.
   reads never learns about it. Route the write through your app's own import
   handler. `SecretStoreIo` keeps the old raw-pair behaviour in one line for
   apps whose secrets genuinely stand alone, behind a deliberately loud ack.
+
+  **Four constraints the crate cannot check for you.** The seam makes correct
+  behaviour possible; it does not make it automatic, and each of these has cost
+  an app its data.
+
+  1. **Never-clobber is your choice, and `UnionAllGenerations` rests entirely on
+     it.** The crate cannot read the successor, so it cannot tell a decline from
+     an overwrite. Return `ItemWrite::AlreadyAuthoritative` for a key the
+     successor already holds. If your import path overwrites instead (the natural
+     shape of an app's own import handler), predecessors are still offered
+     newest-first, so each older generation overwrites the newer value in turn and
+     you end up with the *oldest* generation's value installed and a completely
+     clean report. Either decline held keys or do not use Union.
+  2. **An aggregate secret is read-merge-write, and constraint 1 does not cover
+     it.** An item whose value is a *collection* (an index, a list, a set, a
+     count, a signature over a set) must be merged into what the successor
+     already holds, not resolved by key precedence in either direction. The two
+     ways of getting it wrong are mirror images: declining the write hides
+     entries, which is what never-clobber does to ghostkeys' `gk:index`, and
+     overwriting deletes them, as forwarding a predecessor's `known_sites`
+     straight into Delta's `StoreKnownSites { sites }` would, since that replaces
+     the whole list and so destroys every site the user added on the new version.
+     Only you know which of your secrets are aggregates.
+  3. **Markers must be durable when `record_marker` returns, not batched.**
+     `flush_predecessor` flushes what the *items* were buffered into; the crate
+     never flushes a marker on its own path. Route markers through the same batch
+     as your items and you break twice. A lost `InProgress` marker drops the
+     sticky-data flag, so a retry that finds the predecessor empty seals
+     `Done { had_data: false }`, and `NewestSnapshotWins` then falls through to
+     older generations and resurrects keys the user had deleted. A batched `Done`
+     marker is recorded after the only flush the crate performs, so it is never
+     flushed at all and the predecessor is re-walked and re-imported on every run.
+     Persist markers synchronously, on their own path if necessary.
+  4. **Choose the cross-generation policy deliberately.** `NewestSnapshotWins` is
+     the default and is the right answer for most apps: it preserves
+     delete-by-absence, at the cost of leaving unrecovered any key that only ever
+     existed in a generation older than the authoritative one.
+     `UnionAllGenerations(ack)` is the opt-in recovery mode for exactly that
+     stranded data (freenet/river#204), and it is not a strictly-better setting.
+     It resurrects secrets a newer generation deleted by absence, it inverts
+     silently against an overwriting writer (constraint 1), and its withheld-key
+     set is scoped to a single call, so a flush failure followed by a transiently
+     unreachable newest generation can lose the newest value for good with a clean
+     report (freenet/freenet-migrate#15). Pass one explicitly and know which cost
+     you accepted.
+
+  Two smaller traps in the same adapter. `write_secret` must be **idempotent**:
+  the crate never re-offers items from a *completed* predecessor, but a retry
+  after a partial run re-offers them, so a writer that appends to a list has to
+  insert into a set. And `ItemWrite::AlreadyAuthoritative` is **not an error
+  channel**: an `Err(_) => ...` arm mapped onto it counts as `skipped`, which
+  reads as success, so the predecessor is sealed and never walked again. A write
+  that failed is `Failed { retry }`, and when in doubt it is `Retryable`.
 - **The field evidence comes from the adopters, not from the crate's own
   tests.** The crate's own tests all drive mocked I/O; there is no integration
   test against a real node or a real WASM delegate. Both ghostkeys and Delta gated

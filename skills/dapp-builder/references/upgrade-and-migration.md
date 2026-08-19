@@ -326,6 +326,33 @@ this pattern; its earlier source-pin-only test had a false positive (it passed
 even with the recovery call deleted), so prefer a pure-function behavioral test
 and verify by mutation that removing the fix fails the test.
 
+**Three questions worth asking of any migration change in review.** Each names a
+failure a green test suite let through.
+
+1. **Does the guard at a seam check BOTH sides of the seam?** A guard that can
+   only see the side it lives on is not a guard. `freenet-migrate`'s newest-wins
+   guarantee is the canonical shape: the crate offers predecessors newest-first,
+   but only the app's writer can see whether the successor already holds a key, so
+   an overwriting writer inverts the guarantee and neither side reports it. When
+   you find a check at a boundary, name what the other side would have to do to
+   defeat it, then confirm something checks that too.
+2. **Is the test double above or below the bug you care about?** A double placed
+   above the layer that can fail proves only that the layers above it agree with
+   each other. `freenet-migrate`'s own tests all drive mocked I/O, with no
+   integration test against a real node or a real WASM delegate, which is why
+   ghostkeys and Delta each gated adoption on a differential test against their
+   prior hand-rolled sweep rather than on the crate's green suite. Put the double
+   below the code under test, or test against the real thing.
+3. **Is the operation idempotent with respect to the UI as well as to stored
+   data?** These are separate properties, and the second is the one that gets
+   missed. Delta's editor bug (freenet/delta#62, fixed in #64) is the shape: the
+   background migration sweep's merge was a genuine no-op for stored data, but it
+   still took the write guard, and Dioxus notifies subscribers on every `write()`
+   whether or not the value changed, so an effect subscribed to that signal
+   re-seeded the editor from persisted state and wiped the user's unsaved typing
+   about five seconds in. Storage idempotence did not save it. Ask what a re-run
+   *renders*, not only what it stores.
+
 ## Staged, reversible rollout
 
 1. Publish the new version to an **isolated key** (a throwaway contract/params)
