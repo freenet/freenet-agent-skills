@@ -48,6 +48,32 @@ The whole procedure, start to finish:
    - an **index/registry contract** mapping a stable name → the current contract
      key — a level of indirection. (The index contract itself needs this same
      treatment: its own address must be reachable via a stable anchor.)
+   - an **ecosystem-standard pointer contract** — a shared, frozen "pointer"
+     WASM at a derivable address `(author_vk, app_id)`, whose state is an
+     author-signed `{version, code_hash, sig}` naming the current code hash of
+     *some other* contract or delegate. The record format is settled
+     (freenet-core#5194; governance questions — author-key rotation and
+     recovery, whether adoption is mandatory — are still open), and the contract
+     is merged as an in-repo crate (freenet-migrate#9, deliberately unpublished
+     *as a crate*; the frozen, CI-hash-checked WASM artifact is the
+     deliverable). A client resolver ships in `freenet-migrate` 0.6.0
+     (`freenet_migrate::pointer`) — earlier revisions of this file said no
+     resolver existed, and that is out of date. Adoption is a separate question
+     from availability, and it is thin: publishing a pointer is worth doing for
+     your integrators, but do not assume the apps *you* depend on have one.
+
+     Two things to keep straight. It solves **addressing only**: it says nothing
+     about whether state or secrets held under the old key survived, and
+     assuming they did produces a bug shaped like "this user has no data". And
+     it is a different mechanism from the in-state `OptionalUpgrade` pointer in
+     `contract-patterns.md`, which is per-instance and only findable by clients
+     that already hold a reference to *that* contract; the pointer contract is
+     for a third party with no prior reference at all.
+
+     Publishing one is the author-side half. The consumer-side half — resolving
+     a pointer for an app you do **not** own, and the three things integrators
+     get wrong — is `building-on-other-apps.md`. Check freenet-core#2776 for
+     live adoption status.
 
    If v1 exposed a raw contract key as an identifier, fix *that* first — an upgrade
    cannot rescue an identifier that moves with the WASM. See
@@ -75,7 +101,7 @@ The whole procedure, start to finish:
 4. **Use the `freenet-migrate` crate for the carry-forward instead of hand-rolling
    it.** The legacy-hash registry, the `build.rs` codegen, the backward probe, and
    the preconditions-as-types are identical across every app, so `freenet-migrate`
-   packages them. It is **`freenet-migrate` 0.3.0 on crates.io** (with
+   packages them. It is **`freenet-migrate` 0.6.0 on crates.io** (with
    `freenet-migrate-build` 0.2.0): `cargo add freenet-migrate` (runtime
    carry-forward) and `cargo add --build freenet-migrate-build` (build.rs codegen +
    CI hash-guard). This is the mechanism River's contract-migration path runs in
@@ -83,11 +109,27 @@ The whole procedure, start to finish:
    it without a rewrite, its build codegen reading the existing `[[entry]]`
    registries and emitting view consts that match the hand-rolled shapes
    (freenet/river#434, #436, #437). Honest caveat: the crate's field-deployed path
-   is the *contract* side; the node-mediated transport into a predecessor
-   *delegate* is still a documented stub, so delegate secret migration still runs
-   the River/Delta way (the app re-runs the old delegate WASM over
-   `DelegateRequest::ApplicationMessages`, tracked under freenet-core#2776). See
-   `contract-patterns.md` and `delegate-patterns.md` for the mechanics it codifies.
+   is the *contract* side. A node-level delegate-secret copy-forward was
+   designed and shipped (`RegisterDelegateWithPredecessors`, freenet-core#4908)
+   — then found forgeable and disabled as a security fix (freenet-core#5199:
+   predecessor delegate keys are publicly derivable, so there was no sound way
+   to verify a client's claim to own a predecessor's secrets), and the wire
+   variant was removed from freenet-stdlib `main` (freenet-stdlib#91, version
+   bumped to 0.9.0, **unreleased as of 2026-08-09** — crates.io's latest is
+   0.8.5, which still carries the variant; nodes are protected by #5199's
+   disable, not the removal). **There is no core mechanism for delegate secret
+   migration and there will not be one**: three trust-model designs have been
+   tried and rejected, and the settled standing policy (freenet-core#2776,
+   2026-08-09) is that delegate secret migration happens at the app level
+   permanently, not as an interim measure. That does not mean bespoke per app:
+   `freenet-migrate` ships the delegate-side entry points
+   (`migrate_delegate_secrets`, `register_delegate_with_migration`, unchanged
+   since 0.5.0), and River, Delta and ghostkeys all drive them on `main` at
+   0.5.0. See `delegate-patterns.md` →
+   "Delegate secret migration: no core mechanism, and why" for the full history
+   and current guidance, and `contract-patterns.md` for the contract-side
+   mechanics. For the procedure of swapping an existing hand-rolled sweep over
+   to the crate, see the `freenet-migrate-adoption` skill.
 
 5. **Publish the new version, then let clients migrate themselves.** Publish the
    new WASM to the shared production key **from `main` only**, after review and
@@ -99,7 +141,9 @@ The whole procedure, start to finish:
    for an unbounded rollout window. A **fresh device has no local state to
    migrate** — that is normal, not a failure. Keep the migration itself safe
    (idempotent, resumable, non-destructive, regression-gated, observable) per "The
-   five properties" below.
+   five properties" below, and make sure nothing in your load path writes to the
+   new key before the probe runs. That is a silent way to disable your own
+   migration; see "Probe before you write to the new key".
 
 6. **Do NOT recreate instances, rotate keys, or warn users their invites are
    dead.** None of that is part of a routine upgrade, and doing it *causes* the
@@ -120,9 +164,21 @@ carry forward.
 
 ## The one truth that shapes everything
 
-Freenet keys are `BLAKE3(code_hash || params)`, so **any** change to contract or
-delegate WASM produces a new address. There is no in-place upgrade. An upgrade is
-always "deploy a new contract/delegate at a new address and migrate state to it."
+Freenet keys are `BLAKE3(code_hash || params)`, so **any change to contract or
+delegate WASM produces a new address**. For a WASM change there is no in-place
+upgrade: it is always "deploy at a new address and migrate state to it."
+
+**Scope this correctly — it is about WASM, not about content.** Changing a
+contract's *state* is an ordinary update at an unchanged address, and that is a
+first-class upgrade path, not a loophole:
+
+- **Your webapp is state.** Shipping a new UI build is an in-place update of a
+  web container contract at a permanent URL. It re-keys nothing, and needs no
+  migration and no redirect contract. See `web-container-contract.md`.
+- **This whole document is about the other case** — your data contracts and
+  delegates, where the WASM itself changes and state has to be carried forward.
+
+Everything below applies to the WASM-change case.
 
 Therefore **the entire risk surface of an upgrade is the migration.** Don't aim
 for "risk-free upgrades" (impossible); aim for migrations that are *idempotent,
@@ -200,6 +256,38 @@ properties below are the whole game.
    build metric is not a "users' data migrated" metric. This is the single
    highest-leverage thing most teams skip.
 
+## Probe before you write to the new key
+
+Property 4 gates migration on "the destination is still empty". That gate is also
+a hazard: **any write to the new key that happens before the probe can permanently
+suppress the migration.** The trigger condition is never met, the migration never
+runs, and the app looks healthy while the user's history stays stranded on the
+predecessor generation. Writes that do it: an optimistic PUT, a default or
+placeholder seed, a cached snapshot pushed forward, a subscribe-then-write path,
+anything that populates the new key so the UI has something to render.
+
+**It is silent and it reads as success.** No error, no crash. The migration simply
+never fires.
+
+River shipped exactly this, and it took a rehearsal to find it
+([freenet/river#621](https://github.com/freenet/river/issues/621)). River's probe
+fires when a GET on the current key returns state whose configuration signature
+*fails* to verify. Earlier in the same pass, another block PUTs a delegate-cached
+room snapshot to that key, and that block is taken exactly when the same signature
+*verifies*. Same predicate, same bytes, so any state qualifying for the PUT is by
+construction a state that suppresses the probe. For rooms restored from the
+delegate the probe had been unable to fire since it shipped on 2026-05-20, across
+seven room-contract re-keys.
+
+**Audit your own app.** Name the exact predicate that triggers your migration, then
+grep for every write to the new key that can run before it, and confirm none of
+them can make that predicate false.
+
+**A source-scrape pin asserting the probe "is called" does not catch this.** River
+had one, green for three months, over a call that was unreachable for a whole class
+of room. Existence is not reachability. Pin the outcome (did the migration run,
+did the predecessor's history arrive), never the presence of the call.
+
 ## Enumerate dynamic key families
 
 If your storage has open-ended key families (one key per entity), a *fixed* list
@@ -263,6 +351,9 @@ and verify by mutation that removing the fix fails the test.
 
 ## References
 
+- `references/web-container-contract.md` — the *other* upgrade path: shipping a
+  new UI is an in-place state update at a permanent URL, with no re-key and no
+  migration. Read it before assuming a release rotates anything.
 - `references/contract-patterns.md` — contract upgrade mechanics: the shipped
   backward-probe baseline (reconstruct old keys from a committed
   `legacy_contracts.toml` registry, GET old state, re-PUT under the current key),
@@ -278,11 +369,20 @@ and verify by mutation that removing the fix fails the test.
   precondition for permissionless migration.
 - The reusable `freenet/freenet-migrate` crate packages the registry, the
   build-time codegen, the backward probe, and the preconditions (`freenet-migrate`
-  0.3.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
+  0.6.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
   `cargo add --build freenet-migrate-build`). River's contract-migration path (UI
   and `riverctl`) runs it in production, and existing apps adopt it without a
   rewrite via the `[[entry]]`-registry build codegen (freenet/river#434, #436, #437).
+- The `freenet-migrate-adoption` skill: the procedure for swapping an app's
+  existing hand-rolled sweep over to the crate (call-site swap, dual-running,
+  the parity test, what rollback cannot undo).
 - River as worked reference: freenet/river#345 (per-entity CAS keys), #352
   (resumable/interrupted-migration recovery), #253 (regression-gated legacy probe),
   #204 (old delegate WASM unrunnable after an stdlib bump), #393 (gitignored
   `Cargo.lock` silently re-keying contracts).
+- [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) is
+  the live-maintained home base for all three migration problems (addressing /
+  pointer contract, contract-state migration, delegate-secret migration) across
+  every app the team manages. Check it before assuming anything in this
+  document is current — it is the canonical source and will outlive any status
+  claim written here.

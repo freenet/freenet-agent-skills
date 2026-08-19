@@ -409,8 +409,27 @@ go and buy one they already owned
 ### What to do instead
 
 **Fetch the current key at runtime from something whose address is stable.**
+Two ways, and they are not exclusive:
 
-The pattern ghostkeys uses, and a good default: the project publishes its
+**If the project publishes a pointer, resolve it.** An author-signed pointer
+record at `(author_vk, app_id)` names the artifact's current code hash, and
+`freenet-migrate` 0.6.0 ships the resolver. You get an author signature over the
+answer, an anti-rollback floor, and an explicit "withdrawn" state — none of
+which the bundle-file pattern below can give you. See
+`building-on-other-apps.md`, which also covers the three things integrators get
+wrong (deriving with the pointer's params instead of your own, not persisting
+the floor, and handling only the two outcome arms that carry a record).
+
+**Otherwise, fetch it from the project's webapp bundle.** This needs no
+cooperation beyond the project publishing the file, works today, is what
+ghostkeys does, and is the path for most apps right now since pointer adoption
+is thin. Note that it addresses the same problem with less. The bundle is
+owner-signed, versioned contract state at the node layer, so this is not "an
+unsigned answer" — but nothing in it is verified by *your* code: you get no
+signature you check client-side, no anti-rollback floor, and no way for the
+author to say "withdrawn".
+
+The pattern ghostkeys uses, and a good default where no pointer exists: the project publishes its
 current delegate key as a file inside its own **webapp bundle**, and you fetch
 it. A webapp contract's id is derived from the web container WASM and its
 parameters — both fixed — so publishing a new version updates the contract's
@@ -570,8 +589,10 @@ Rather than hand-roll the registry, the `build.rs` codegen, and the backward
 probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
 legacy-key registry, build-time codegen, the backward probe, the delegate
 carry-forward, and the preconditions as enforced types). It is
-**`freenet-migrate` 0.3.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
-`cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. Adopting
+**`freenet-migrate` 0.6.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+`cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. 0.6.0 is
+breaking on the **contract** half only (silence is no longer read as absence; see
+`contract-patterns.md`); the delegate surface is unchanged from 0.5.0. Adopting
 the build codegen is not a rewrite: `freenet-migrate-build` reads the River-style
 `[[entry]]` registry above (`entry_registry`) and emits byte-array *view* consts
 matching your hand-rolled `LEGACY_DELEGATES` shape (`delegate_pair_view` gives
@@ -581,15 +602,108 @@ dependency in views-only mode. Every build re-derives
 derivation with `irregular_key = true` (River adopted the build codegen this way
 in freenet/river#434).
 
-One caveat is specific to delegates: the node-mediated transport that reaches into
-a predecessor *delegate* is still a documented stub (`TransportUnavailable`), so
-the delegate secret carry-forward itself still runs the River/Delta way, with the
-app carrying the export across `DelegateRequest::ApplicationMessages` round-trips
-and re-running the old WASM (the mechanism above). Delegate-side entry points and a
-node copy-forward primitive are future work, tracked under
-[freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776). The
-crate's shipped, field-deployed carry-forward today is the *contract* path:
-River's UI and `riverctl` run it live (see `contract-patterns.md`).
+The delegate half is shipped and has adopters. `migrate_delegate_secrets`
+and `register_delegate_with_migration` (the `delegate_migrate` module) are the
+app-facing entry points, and River, Delta and ghostkeys all drive them on `main`
+at 0.5.0. Delegate secrets still have no core-level equivalent and never will;
+see the next section for the full history and current guidance.
+
+For the call-site swap itself in an app that already hand-rolls a sweep, see the
+`freenet-migrate-adoption` skill.
+
+## Delegate secret migration: no core mechanism, and why
+
+A node-level copy-forward was designed and shipped:
+`DelegateRequest::RegisterDelegateWithPredecessors` (freenet-core#4908, merged
+2026-07-22), an origin-authorized copy of a predecessor's secrets performed by
+the node at registration time. It was then **found forgeable and disabled**
+(freenet-core#5199, merged 2026-08-05): predecessor delegate keys are publicly
+derivable and a malicious web app *is* the client, so there was no sound way
+for the node to verify that a requester actually owned the predecessor's
+secrets rather than merely knowing its key. The wire variant was subsequently
+removed from freenet-stdlib `main` (freenet-stdlib#91, merged 2026-08-06,
+version bumped to 0.9.0) — but **0.9.0 is unreleased as of 2026-08-09**:
+crates.io's latest is **0.8.5**, which still carries the variant, and
+freenet-core still pins 0.8.5. What protects production nodes today is
+#5199's call-site disable, not the wire removal. Check crates.io before
+pinning 0.9.0 — at the time of writing it is not published there. The
+underlying `SecretsStore::migrate_secrets`
+machinery is left in place but uncalled (its docstring reads "UNREACHABLE FROM
+PRODUCTION").
+
+**Three trust-model designs have now been tried and rejected:** a
+consent-based flow, rejected in design (client consent cannot gate the copy
+when the malicious app is the client); a first-writer-wins origin record,
+which *shipped* as #4908's gate and was disproven in production by #5199; and
+a third routing trust through the pointer-contract author key, rejected in
+adversarial review (2026-08-09) because it substitutes "is this a legitimate
+code successor" for "does this requester own *this* predecessor's user
+secrets", and makes author-key compromise catastrophic rather than contained.
+
+**The decision is settled, not pending** (freenet-core#2776, 2026-08-09): no
+further effort on a node-level mechanism. **Migration happens at the app
+level — permanently, as standing policy, not as an interim measure.** Do not
+propose or wait for a node-level copy-forward; design as though one will
+never exist.
+
+**App-level does not mean bespoke-per-app.** The goal is shared, reusable
+app-side tooling, the same way `freenet-migrate` already serves contract
+state, and that tooling now exists and has adopters. Use it rather than
+hand-rolling another copy of the same sweep.
+
+- **`freenet-migrate` packages this probe app-side** (0.6.0 on crates.io; the
+  delegate entry points below have been stable since 0.5.0):
+  `migrate_delegate_secrets` and `register_delegate_with_migration` in
+  `delegate_migrate.rs`, over two adapters you implement for your client:
+  `PredecessorSecretsIo` reads the predecessors, and `SuccessorSecretsIo`
+  writes the successor. **River, Delta and ghostkeys all drive it on `main`.**
+  River and Delta run the crate's walk alongside their existing hand-rolled
+  sweep, which stays authoritative until the walk field-validates, so expect
+  that staging rather than a single cutover.
+  ghostkeys' adoption is the shape to copy: the crate took over the walk
+  (which predecessors, newest-first, the executability preflight, marker
+  bookkeeping, cross-generation selection) while the app kept every
+  app-specific judgement in its adapter.
+- **The successor adapter is the load-bearing part of 0.5.0.** Before it, the
+  crate copied raw `(key, value)` pairs into a `SecretStore`, which is wrong
+  for any app whose stored items have cross-entry invariants and fails
+  silently: a recovered credential lands in the store while the index the UI
+  reads never learns about it. Route the write through your app's own import
+  handler. `SecretStoreIo` keeps the old raw-pair behaviour in one line for
+  apps whose secrets genuinely stand alone, behind a deliberately loud ack.
+- **The field evidence comes from the adopters, not from the crate's own
+  tests.** The crate's own tests all drive mocked I/O; there is no integration
+  test against a real node or a real WASM delegate. Both ghostkeys and Delta gated
+  their adoption on a differential test against their prior hand-rolled sweep,
+  which is the check worth copying.
+
+One limitation to name either way: there is **no user consent in this flow**,
+only app-author self-assertion. That is sound *at this trust boundary* — the
+caller is your own compiled client code inside your own trust boundary, not a
+network-reachable RPC any client can hit, which is exactly why the node-level
+version failed and this does not. But it is a deliberate choice, so make it
+knowingly.
+
+**What NOT to rely on:** River's per-room identity key (`self_sk`) currently
+survives delegate re-keys only *by accident* — it lives inside the
+generically-indexed `RoomData` blob (`room:<vk>`), which the ordinary
+migration probe already walks for unrelated reasons. It is not a deliberate
+secret-migration mechanism: moving `self_sk` into its own dedicated,
+non-indexed secret — the pattern the `signing_key:` secret already uses —
+would silently stop migrating it at the next release. (No contradiction with
+the carry-forward described above: the `signing_key:` secret itself is never
+*exported* from the old delegate, because the private key never leaves it and
+it is not in the walked index. What `migrate_signing_key` does is **re-seed**
+the new delegate's copy from `RoomData.self_sk` — so the key survives via
+`RoomData`, not via the `signing_key:` namespace.) See
+[freenet/river#612](https://github.com/freenet/river/issues/612). Design your
+delegate's secret layout so anything that must survive a re-key is
+*deliberately* covered by your registry/enumeration probe, never incidentally
+along for the ride inside something else.
+
+Canonical, live-maintained status for this and the related addressing/pointer
+and contract-state-migration problems:
+[freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
 
 ## River Delegate Reference
 

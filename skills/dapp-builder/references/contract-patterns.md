@@ -20,7 +20,10 @@ impl ContractInterface for MyContract {
         related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError>;
 
-    /// Update state with new data (MUST be commutative)
+    /// Update state with new data.
+    /// MUST be associative, commutative and idempotent — see "Merge Law
+    /// Requirements" below. Merging IS this function: core applies an incoming
+    /// full state as `update_state(current, [UpdateData::State(incoming)])`.
     fn update_state(
         parameters: Parameters<'static>,
         state: State<'static>,
@@ -265,15 +268,33 @@ February ([freenet/freenet-core#5056](https://github.com/freenet/freenet-core/is
 Core is adding a probe for this, so a contract that ships state to peers that
 already have it will end up suppressed rather than merely slow.
 
-## Commutative Monoid Requirement
+## Merge Law Requirements
 
-Contract state must form a **commutative monoid** under the merge operation. This means:
+Contract state must form a **join-semilattice** under the merge operation — in
+practice, a commutative monoid that is also **idempotent**. This means:
 
 1. **Associativity:** `merge(merge(A, B), C) == merge(A, merge(B, C))`
 2. **Commutativity:** `merge(A, B) == merge(B, A)`
-3. **Identity:** There exists an empty/initial state `I` where `merge(A, I) == A`
+3. **Idempotence:** `merge(A, A) == A`
+4. **Identity:** There exists an empty/initial state `I` where `merge(A, I) == A`
 
 This ensures that regardless of the order peers receive and apply updates, they all converge to the same final state.
+
+**Idempotence is the one most often missed, and the one the network gives you no
+way to avoid.** Delivery is at-least-once: the same state or delta legitimately
+arrives more than once, after a retry, a re-subscribe, or anti-entropy healing a
+divergence. A merge that changes the state when re-applied therefore never
+settles — each redelivery mutates it again, which produces an endless stream of
+"new" states to gossip and a contract that cannot converge no matter how healthy
+the network is.
+
+This is not hypothetical. Freenet telemetry attributed the largest single source
+of network traffic to contracts whose merges do not converge (freenet-core
+#5153), and a survey of live contracts found one whose `merge(A, A)` never reached
+a fixpoint at all (freenet-core #5320). Note that identity (`merge(A, I) == A`) does
+*not* imply idempotence (`merge(A, A) == A`): a merge that appends rather than
+unions satisfies the first and fails the second, which is exactly the shape of the
+defects found in the wild.
 
 ### Testing Commutativity
 
@@ -308,6 +329,18 @@ mod tests {
             let ab_c = a.clone().merge(&b).merge(&c);
             let a_bc = a.clone().merge(&b.clone().merge(&c));
             prop_assert_eq!(ab_c, a_bc);
+        }
+
+        /// Re-applying the same state changes nothing.
+        ///
+        /// Delivery is at-least-once, so this WILL happen in production. Merge
+        /// twice as well as once: a merge that only settles after one application
+        /// passes a naive test and still fails here.
+        #[test]
+        fn merge_is_idempotent(a in arb_state(), b in arb_state()) {
+            let once = a.clone().merge(&b);
+            let twice = once.clone().merge(&b);
+            prop_assert_eq!(once, twice);
         }
 
         /// Merging with empty state returns original
@@ -364,7 +397,24 @@ mod tests {
 3. **Mutation during iteration:** Modifying state while iterating can produce different results
 4. **Missing items in merge:** Only keeping "newer" items without proper conflict resolution
 
-> **Determinism matters in your `Summary` type too, for a separate reason.** A
+> **The same rule applies to your STATE, and it is a requirement rather than a
+> tip.** Freenet peers decide whether they have converged by comparing state
+> *bytes*, so two peers holding the same logical state in a different byte order
+> never recognise each other as converged and heal forever. A `HashMap` (or
+> `HashSet`) anywhere in your state type serializes in iteration order, which
+> depends on insertion history, which depends on the order updates happened to
+> arrive — so the same merge on two peers yields different bytes. **Use
+> `BTreeMap`/`BTreeSet`, or sort before serializing, everywhere in state and
+> summaries alike.**
+>
+> This is why the merge laws above are checked on exact bytes: canonical encoding
+> is a platform requirement (freenet-core #5320), not a nicety. A contract that
+> merges correctly but encodes non-canonically will be reported as breaking
+> commutativity, and the conformance checker will tell you which of the two it is —
+> the finding says so explicitly when both results hold the same bytes in a
+> different order.
+
+> **Determinism matters in your `Summary` type too, for the same reason.** A
 > `HashMap` inside a `Summary` (or anything `summarize` returns) serializes in
 > nondeterministic order, so two identical states can produce different summary
 > bytes. Core compares summaries byte-for-byte to decide whether two peers have
@@ -379,9 +429,13 @@ mod tests {
 ### 1. Set-Based Operations
 
 ```rust
-// Members stored as a set - adding/removing is commutative
+// Members stored as a set - adding/removing is commutative.
+// BTreeMap, not HashMap: state is compared byte-for-byte across peers, and a
+// HashMap serializes in insertion order, so two peers that received the same
+// members in a different order would encode the same set differently and never
+// converge.
 pub struct MembersV1 {
-    members: HashMap<VerifyingKey, SignedMember>,
+    members: BTreeMap<VerifyingKey, SignedMember>,
 }
 
 impl MembersV1 {
@@ -573,7 +627,7 @@ to migrate.
 Permissionless contract migration only works if all of these hold:
 
 1. **State is mergeable / commutative.** Carrying old state into the new key is a
-   merge; if the merge isn't a commutative monoid (see above), concurrent old and
+   merge; if the merge doesn't obey the merge laws (see above), concurrent old and
    new writes during the rollout window won't converge.
 2. **Every field in state is self-authorizing.** See "Cryptographic Verification"
    above. The successor's `validate_state` must re-check *every* invariant on the
@@ -771,7 +825,7 @@ contract lives; either way the probe is what carries the state.
 The registry, the `build.rs` codegen, and the backward probe are the same across
 every app, so a reusable crate — `freenet/freenet-migrate` — packages them (plus
 the delegate carry-forward and the preconditions above as enforced types). It is
-**`freenet-migrate` 0.3.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+**`freenet-migrate` 0.6.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
 `cargo add freenet-migrate` for the runtime carry-forward and `cargo add --build
 freenet-migrate-build` for the `build.rs` codegen + CI hash-guard. This is the
 mechanism River's contract-migration path runs in production; both the browser UI
@@ -789,25 +843,76 @@ dependency. Registries accept hex or base58, and every build validates the hashe
 and re-derives `delegate_key == blake3(code_hash || params)`; a grandfathered row
 whose recorded key predates that derivation marks itself `irregular_key = true`.
 
-**The probe decisions live in a sans-IO driver.** The 0.3.0 `ProbeDriver` owns
-order and adoption (newest generation first by the registry generation field,
-first real state wins, an undecodable response or a timeout advances, late
-responses are single-shot ignored, a hop cap bounds the walk, and exhaustion seeds
-the local snapshot), while the app pumps I/O and supplies a `ProbeStateOps` adapter
-(`decode`, `is_real`, the merges, and `prepare_forward`, the pointer-strip seam for
-freenet/river#427). `SelectionPolicy::NewestFirstWins` is the default and is safe
-for delete-by-absence states; `SelectionPolicy::FoldAll` folds every real
-generation and is only sound for tombstoned states with a commutative and
-idempotent merge, so it takes a loudly-named ack plus `policy_check` property
-helpers. River drives its event-driven browser probe (freenet/river#436) and
+"Without a rewrite" is a statement about the const shapes, not a procedure. The
+actual call-site swap in an app that already hand-rolls a sweep has its own
+sequence: write the behavioural spec first, dual-run the old and new paths, gate
+on a parity test, and know what rollback cannot undo. That is the
+`freenet-migrate-adoption` skill.
+
+**The probe decisions live in a sans-IO driver.** The `ProbeDriver` owns order and
+adoption while the app pumps I/O and supplies a `ProbeStateOps` adapter (`decode`,
+`is_real`, the merges, and `prepare_forward`, the pointer-strip seam for
+freenet/river#427). The decisions: newest generation first by the registry
+generation field, first real state wins, an undecodable or placeholder response is
+a miss and advances the walk, late responses are single-shot ignored, and a hop cap
+bounds the walk.
+
+**Silence is not absence.** This is the 0.6.0 break (freenet-migrate#19), and it is
+the whole reason to be on 0.6.0. Your adapter's `ProbeIo::get` returns a three-way
+`ProbeAnswer`: `State(bytes)`; `Absent` for the node's real
+`ContractResponse::NotFound`; and `Unknown` for a timeout, send failure, dropped
+transport, cancelled correlation slot, or any other non-answer. A timeout is never
+a miss. `ProbeDriver::on_timeout` is deprecated and forwards to `on_unknown`, which
+is safe against sealing but is **not a drop-in**: a call site that also routed
+positive not-founds through it will now stop at its first empty generation and
+never ask the older ones, because under `NewestFirstWins` an unanswered candidate
+halts the walk (opting out takes `ProbeDriver::continue_past_unknown` with a
+`RollbackRiskAck`, which forfeits the anti-rollback guarantee for that probe). The outcomes are `Recovered` (a generation
+had real state), `SeedLocal` (every candidate was asked *and answered*, and none
+had state), and `Indeterminate { local, unresolved }` (nothing recovered and at
+least one candidate never answered, or was never reached because the hop cap fired;
+adopt nothing, seal nothing, retry next load). Both `ProbeAnswer` and `Outcome`
+are `#[non_exhaustive]`, so a `match` needs a wildcard arm.
+
+**No outcome licenses recording the migration as finished.** A Freenet `NotFound`
+is the strongest negative the network can give and it is still not proof of
+absence: absence is unauthenticated, and a contract that exists answers `NotFound`
+while it is momentarily unfindable. With the placement migration disabled
+(freenet-core#4440) that is the common case rather than the corner case:
+present-but-unfindable dead-ends measured ~99.6% of all `get_not_found` traffic in
+production telemetry. An undecodable answer is a miss too, so a schema break across
+a whole lineage also lands on `SeedLocal` with every generation intact underneath
+it. Read `SeedLocal` as "asked everyone, found nothing *this time*". Seeding your
+own local snapshot forward on it is fine. If your app must seal something, make the
+write idempotent so a later run picks up a generation that was momentarily
+unfindable, require the same answer across separate attempts spread in time,
+require a connectivity witness (a GET for something you know exists succeeding in
+the same window), and never let a single all-`Absent` walk trigger an irreversible
+write.
+
+**Probe before anything writes to the new key.** The trigger is "the new key has no
+real state yet", so an earlier write can permanently suppress the migration,
+silently. See `upgrade-and-migration.md` → "Probe before you write to the new key".
+
+`SelectionPolicy::NewestFirstWins` is the default and is safe for delete-by-absence
+states; `SelectionPolicy::FoldAll` folds every real generation and is only sound
+for tombstoned states with a commutative and idempotent merge, so it takes a
+loudly-named ack plus `policy_check` property helpers. River drives its event-driven browser probe (freenet/river#436) and
 `riverctl`'s synchronous recovery (freenet/river#437) through the same driver.
 
-The one honest caveat is on the **delegate** side: the node-mediated transport
-that reaches into a predecessor *delegate* is still a documented stub (it returns
-`TransportUnavailable`), so delegate secret migration still runs the River/Delta
-way, with the app carrying the export across `DelegateRequest` round-trips and
-re-running the old WASM (see `delegate-patterns.md`). Delegate-side entry points
-and a node copy-forward primitive are future work, tracked under
+The one honest caveat is on the **delegate** side: there is no core mechanism
+for delegate secret migration and there will not be one. A node-level
+copy-forward was designed and shipped, then found forgeable and disabled as a
+security fix (freenet-core#5199), and the wire variant was removed from
+stdlib `main` (unreleased — crates.io is still 0.8.5). Three trust-model
+designs have been tried and rejected, and app-level migration is now settled
+standing policy rather than an interim measure. App-level is not hand-rolled,
+though: the crate's delegate half is the shared implementation of it, and
+River, Delta and ghostkeys all drive it on `main` at 0.5.0. The transport
+underneath is still app-side, with the app carrying the export across
+`DelegateRequest` round-trips and re-running the old WASM (see
+`delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
+why" for the full history and current guidance). Tracked live under
 [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
 
 ## River Contract Reference

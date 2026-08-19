@@ -159,31 +159,46 @@ explicit, reviewable, and recoverable.
 
 ## Contract ID reproducibility caveat
 
-Contract IDs are **not reproducible from source** under the
-signed-and-committed publishing pattern.
+Contract IDs are **not reproducible from unpinned source on an arbitrary
+host** — toolchain version, `wasm-opt`, and dependency drift all move the
+WASM bytes, and the ID moves with them (see the next section). With the
+pins in place they *are* reproducible, which is exactly why the
+byte-equality CI gate below can be green and is worth enforcing. They are
+unconditionally reproducible from the committed **artifacts**: the ID is
+`BLAKE3(BLAKE3(wasm) || params)` and nothing else.
 
-The web-container / facade signed-payload format includes a `version`
-field, and the standard signer (`web-container-tool`) writes
-`SystemTime::now().as_secs()` into that field at signing time. Two
-developers signing the same source tree at different moments produce
-different payload bytes → different IDs.
+> **A signing timestamp does NOT move the contract ID.** An earlier version
+> of this section claimed that because `web-container-tool` writes
+> `SystemTime::now().as_secs()` into the signed payload's `version` field,
+> two developers signing at different moments get different IDs. That is
+> wrong: the `version` and signature live in the webapp **metadata**, which
+> is part of the contract's *state*. The only ID inputs are the container
+> WASM and the `parameters` file (32 bytes of Ed25519 verifying key).
+> Different signing times produce different *state*, at the same ID — which
+> is precisely the in-place upgrade mechanism described in
+> `web-container-contract.md`.
 
-Why timestamp and not commit hash? The on-chain `web-container`
-contract's `update_state` requires strictly monotonic `version` across
-updates. A commit-hash scheme is not monotonic (any hash can compare
-either way against any other). A previous attempt at commit-hash
-versioning broke the v0.1.1 release of freenet/mail when the on-chain
-update was rejected for non-monotonic version.
+The `version` field still matters, just for a different failure. The
+container's `update_state` requires it to be **strictly** greater than
+the stored version, so a bad version scheme breaks your ability to
+*publish an update*, while leaving the ID alone. A commit-hash scheme is
+not monotonic (any hash can compare either way against any other) and
+broke the v0.1.1 release of freenet/mail for exactly this reason.
+Wall-clock seconds fail the same way when two publishes tie or a clock
+runs ahead. Prefer a committed monotonic counter file.
 
 **Practical consequences.**
 
-- `published-contract/contract-id.txt` (and `facade-id.txt`) are
-  **authoritative artifacts**, not derivable. Commit them.
-- CI cannot verify "the source still produces this ID" — only "the
-  source still produces these WASM **bytes**". Use byte-equality on
-  `published-contract/<contract>.wasm`, not on the ID.
-- A second developer cannot "redo" a release from a clean checkout and
-  get the same ID; they must pull the committed snapshot.
+- Commit `published-contract/<contract>.wasm` and
+  `published-contract/*.parameters`. Those two files *are* your address;
+  `contract-id.txt` is a convenience copy derived from them, worth
+  committing so a mistake is visible in review.
+- CI should enforce byte-equality on the committed **WASM**, which is the
+  check that actually catches an unintended re-key. Recomputing the ID
+  from the committed WASM + parameters is a valid second check.
+- A second developer *can* redo a publish from a clean checkout and reach
+  the same ID, provided they use the committed WASM and parameters rather
+  than rebuilding the contract.
 - `rust-toolchain.toml` must be committed and mirrored in any CI
   workflow that rebuilds the contract — rustc version affects WASM
   bytes, and the byte-equality check will fail if CI's rustc differs
@@ -442,10 +457,17 @@ tar -cJf ../../../../../webapp/webapp.tar.xz .
 description = "Sign webapp for deployment"
 dependencies = ["package-webapp"]
 script = '''
+# Most projects should use `fdev website publish/update` instead of this
+# hand-rolled pipeline — it ships a generic container contract and signer.
+# See web-container-contract.md. The tasks below are the River-style bespoke
+# path, kept for projects that already have one.
+#
 # web-container-tool is built in the web-container-contract subcrate
 # (see contracts/web-container-contract/web-container-tool in River).
-# Version must be strictly greater than the currently-published metadata;
-# check the error message from a failed publish for the current version.
+# Version must be strictly greater than the currently-published metadata.
+# Source it from a COMMITTED COUNTER FILE, not wall-clock time: ties and
+# clock skew both hard-block future publishes. This publishes to the SAME
+# contract ID every release — that is the in-place upgrade, not a re-key.
 web-container-tool sign \
     --input target/webapp/webapp.tar.xz \
     --output target/webapp/webapp.metadata \

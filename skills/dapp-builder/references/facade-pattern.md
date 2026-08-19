@@ -1,23 +1,46 @@
-# Facade Contract Pattern — Stable URLs Across Releases
+# Facade Contract Pattern — Moving an Audience to a Different Contract
 
-## Why
+> **Read `web-container-contract.md` first. You probably do not need this.**
+>
+> An earlier version of this page claimed that "every release rebuilds the UI →
+> produces new WASM → produces a new contract ID → produces a new gateway URL,"
+> and recommended the facade to every dApp shipping more than one release. **That
+> premise is wrong.** A web container contract's ID is
+> `BLAKE3(BLAKE3(container_wasm) || publisher_key)`, and your UI is neither — it
+> is the contract's *state*. Rebuilding your UI cannot move your URL. Ordinary
+> releases are in-place state updates at a permanent address
+> (`fdev website update`), and River has published dozens of releases to one
+> unchanging key this way.
+>
+> If you are here because you think your URL rotates every release, stop: it
+> doesn't, and a facade would add a second contract, a second signing key, a
+> loader page, an iframe navigation hop, and a cache-bust step to solve nothing.
 
-A Freenet web-container contract ID is `hash(wasm, parameters)`. Every
-release rebuilds the UI → produces new WASM → produces a new contract
-ID → produces a new gateway URL.
+## When this pattern is actually justified
 
-This is fine for early development, but it's hostile to users: every
-bookmark, every shared link, every external integration breaks the
-moment you ship. There's no DNS-equivalent to forward them.
+Only when you must point an existing audience at a **genuinely different
+contract**, which is a deliberate, rare event rather than release mechanics:
 
-The **facade pattern** gives you a contract ID that stays byte-stable
-across every release. Users bookmark the facade URL once; per-release
-updates flip a pointer inside the facade's state to whatever the
-current web-container ID is. The facade WASM itself is never rebuilt.
+- **A container-WASM migration you can't avoid.** A newer `fdev` embeds a newer
+  website contract, which re-keys. The cheap fix is to commit your container
+  WASM and pass `--contract-wasm` forever (see `web-container-contract.md`); the
+  facade is for when you have decided to move to the new container and want old
+  bookmarks to follow.
+- **A publisher-key rotation.** The key is half the address, so rotating it is a
+  new site. If the old key is compromised rather than lost, a facade can forward
+  from the old address to the new one.
 
-This is the pattern freenet/mail uses (issue #200). It is the
-recommended approach for any Freenet dApp that expects to ship more
-than one release.
+Two limits, both load-bearing:
+
+- **A facade cannot rescue a *lost* signing key.** Whichever contract holds your
+  audience's bookmark needs a live key to flip its pointer.
+- **For the *compromise* case the facade needs its OWN key.** "Production key
+  lifecycle" below says to sign the web-container and the facade with one key,
+  which halves what you have to back up — but one key means a compromise takes
+  the facade with it, and your escape hatch is gone exactly when you need it. If
+  you are adopting a facade *in order to* survive key rotation, give it a
+  separate key, stored separately. Choose one of these two postures deliberately;
+  they are mutually exclusive.
 
 ## Architecture
 
@@ -31,10 +54,16 @@ published-contract/
 ├── facade.wasm                 # committed snapshot — never rebuilt per release
 ├── facade.parameters           # 32 bytes: ed25519 verifying key
 ├── facade-id.txt               # the stable contract ID users bookmark
-├── webapp.wasm                 # web-container WASM — rebuilt every release
-├── webapp.parameters
-└── contract-id.txt             # web-container ID — rotates every release
+├── webapp.wasm                 # web-container WASM — committed, NOT rebuilt
+├── webapp.parameters           # 32 bytes: ed25519 verifying key
+└── contract-id.txt             # web-container ID — stable across releases
 ```
+
+Note both `*.wasm` files are committed snapshots. Neither is rebuilt for a
+release, and so neither ID moves — the web-container ID is stable on its own,
+which is exactly why the facade is unnecessary for ordinary releases. It earns
+its place only when you deliberately move to a *different* web-container ID, at
+which point the pointer flip below carries existing bookmarks across.
 
 ### `contracts/facade-types/`
 
@@ -50,7 +79,9 @@ pub const FACADE_MAX_PREV_APP_IDS: usize = 8;
 
 #[derive(Serialize, Deserialize)]
 pub struct FacadePointer {
-    pub version: u64,                       // unix timestamp at signing time
+    pub version: u64,                       // monotonic; seed ABOVE the last
+                                            // published value if you ever switch
+                                            // schemes (see web-container-contract.md)
     pub current_app_id: ContractInstanceId, // the web-container to serve now
     pub prev_app_ids: Vec<ContractInstanceId>, // ring buffer for rollback
 }
@@ -111,10 +142,21 @@ if (window.parent !== window && !location.search.includes("__sandbox=1")) {
 
 ## Per-release flow
 
-`scripts/release.sh` chains these automatically. Manually:
+**You do not run this on an ordinary release.** A normal release is a web
+container state update at an unchanged ID (`fdev website update`), and the facade
+pointer already points there — nothing to flip. Run the flow below only when
+`NEW_APP_ID` is genuinely a *different* contract, i.e. after a deliberate
+container-WASM migration or publisher-key rotation.
+
+If your project has a `scripts/release.sh` that chains these steps, **gate it on
+`NEW_APP_ID` having actually changed** rather than running it every release — an
+unconditional flip re-signs and re-publishes a pointer to the address it already
+holds, burning a version number and a cache-bust for nothing. Manually:
 
 ```bash
-# 1. Build the new web-container webapp (rotates contract-id.txt).
+# 1. Build/publish the new web-container. contract-id.txt only changes here if
+#    the container WASM or the publisher key changed — a UI rebuild alone
+#    leaves it untouched, and then there is no pointer to flip.
 cargo make build
 NEW_APP_ID=$(cat published-contract/contract-id.txt)
 FACADE_ID=$(cat published-contract/facade-id.txt)
@@ -287,6 +329,11 @@ non-canonical hosts so devs aren't blocked by emulation drift.
 
 ## Production key lifecycle
 
+> The paths below are the **legacy hand-rolled pipeline's**. If you publish with
+> `fdev website`, your key lives at `~/.config/freenet/website-keys/<name>.toml`
+> and is created by `fdev website init` — see `web-container-contract.md`. The
+> custody rules are the same either way.
+
 The facade's verifying key is embedded in its `parameters` blob —
 **rotating the key rotates the facade contract ID.** The whole point of
 the facade is to never do that. So the signing key needs the same care
@@ -310,14 +357,18 @@ Rules:
 - Override path with `WEB_CONTAINER_KEY_FILE=/path/to/keys.toml` if you
   use a hardware token / agent that exposes the key under a different
   path.
-- The same key signs both the web-container `webapp.metadata` and the
-  facade's `FacadeMetadata`. They're two contracts with the same
-  publisher identity. Don't generate separate keys; you'll just have two
-  things to back up and your operational risk doubles.
+- One key can sign both the web-container `webapp.metadata` and the
+  facade's `FacadeMetadata` — two contracts, one publisher identity — and
+  that keeps you with a single thing to back up. **Only choose this if the
+  facade exists for a container-WASM migration.** If the facade is your
+  answer to a *compromised* key, one key defeats it entirely: the attacker
+  can flip the pointer too. In that case generate a separate facade key and
+  store it separately, and accept the second backup. See the two limits at
+  the top of this page.
 
 ## Recovery: manual pointer flip after script failure
 
-`scripts/release.sh` is idempotent up to step 7 (commit) — if it dies
+`scripts/release.sh` is idempotent up to the commit step — if it dies
 between publishing the new webapp and flipping the facade pointer
 (e.g. fdev's default 300s timeout fires even though the gateway accepted
 the request), recover manually:
@@ -357,7 +408,7 @@ published contract is a no-op).
 
 - Lockfile isolation that keeps facade WASM byte-stable: `build-system.md`
   → "Per-contract lockfile isolation".
-- Why the contract ID is not reproducible from source: `build-system.md`
+- What does and does not make a contract ID reproducible: `build-system.md`
   → "Contract ID reproducibility caveat".
 - The two-message gateway shell architecture and CSP gotchas:
   `ui-patterns.md` → "Two Connection Models".

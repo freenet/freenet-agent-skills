@@ -50,6 +50,13 @@ Once installed, Claude will automatically use this skill when you ask about buil
   - `delegate-patterns.md` - Delegate implementation patterns
   - `ui-patterns.md` - UI implementation patterns
   - `build-system.md` - Build and deployment
+  - `web-container-contract.md` - Publishing a webapp: why its URL is permanent
+    and how to upgrade it in place
+  - `upgrade-and-migration.md` - Migrating contract/delegate state across a
+    WASM re-key
+  - `facade-pattern.md` - Indirection for moving an audience to a different
+    contract (rare; not needed for ordinary releases)
+  - `production-smoke-testing.md` - Post-publish liveness checks
 
 ## Reference Project
 

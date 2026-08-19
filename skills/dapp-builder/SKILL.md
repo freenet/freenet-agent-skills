@@ -1,6 +1,6 @@
 ---
 name: dapp-builder
-description: Build and maintain decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI, and through upgrading a live dApp safely. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, build a Freenet-connected UI, OR upgrade an existing dApp — bump freenet-stdlib, ship a new contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state across a contract/delegate key change without breaking invites or losing data.
+description: Build and maintain decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI, and through upgrading a live dApp safely. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, build a Freenet-connected UI, OR upgrade an existing dApp — bump freenet-stdlib, ship a new contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state across a contract/delegate key change without breaking invites or losing data. Also use when INTEGRATING with a contract or delegate published by another app — reading another project's contract state, depending on a platform delegate, or deciding how to address someone else's artifact so it survives their re-keys.
 license: LGPL-3.0
 ---
 
@@ -51,6 +51,13 @@ A single UI typically talks to *all* of an app's contracts and delegates.
   - Connects to the local Freenet Kernel via WebSocket/HTTP
   - Built using standard web frameworks (Dioxus, React, Vue, etc.)
   - Agnostic to underlying P2P network complexity
+- **How it is published and addressed:** the UI ships as the *state* of a **web
+  container contract** — a generic, pre-built contract whose params are your
+  32-byte publisher key. Because neither key input contains your UI, **your
+  webapp has one permanent URL and is upgraded in place**: `fdev website update`
+  publishes v2 to the same address users bookmarked. Do not design around a
+  rotating URL, and do not build a redirect contract to work around one. See
+  `references/web-container-contract.md`.
 
 **"Native app" above means desktop.** Freenet does not currently support running a full node on mobile devices. Do not recommend or generate a production mobile wrapper without clearly warning about likely bandwidth, battery, thermal, CPU, and background-execution problems. Treat any such work as experimental, require explicit resource measurements before calling it viable, and do not represent it as an official Freenet client without approval from the Freenet Project.
 
@@ -68,17 +75,18 @@ The key for a piece of data is derived from the **cryptographic hash of the cont
 
 Freenet solves "Eventual Consistency" using a specific mathematical requirement:
 
-**Commutative Monoid:** The function that merges updates must be a *commutative monoid*.
+**Join-semilattice:** The function that merges updates must be associative, commutative and *idempotent*.
 - Order Independent: It shouldn't matter what order updates arrive in
 - If Peer A merges Update X then Y, and Peer B merges Update Y then X, they must end up with the same result
+- Redelivery-safe: `merge(A, A) == A`. Delivery is at-least-once, so the same update *will* arrive twice — after a retry, a re-subscribe, or anti-entropy. A merge that changes the state on re-application never settles. This is the requirement most often missed; see `references/contract-patterns.md` → "Merge Law Requirements" for why identity is not the same thing, and for the property tests.
 
 **Efficiency:** Peers exchange **Summaries** (compact representations) and **Deltas** (patches/diffs) rather than re-downloading full state.
 
 **Requirement: `get_state_delta` must not ship state to a peer that already has it.** When the requester's summary shows it holds everything you have, the delta carries no information, so it must not contain the state or approach the state's size. It *should* be a literally empty `StateDelta` (`vec![]`), which is the unambiguous "converged" answer and what `freenet-scaffold` produces for you; a few tens of bytes of encoding framing from serializing an all-empty struct is acceptable. What matters is delta size relative to state size: 20 bytes against a 500 KB state is fine, a state-sized delta is a broken delta mechanism that re-ships everything on every reconciliation, forever. Your summary must likewise be far smaller than your state. Core is adding a probe for contracts that get this wrong, and it currently costs the network real bandwidth. Full detail, code shapes, and a test are in `references/contract-patterns.md` → "The Delta to an Up-to-Date Peer".
 
-### Summaries must serialize deterministically
+### State and summaries must serialize canonically
 
-**Use deterministic maps in your `Summary` type: `BTreeMap`, never `HashMap`.** A `HashMap` serializes in nondeterministic order (ciborium), so two identical states can summarize to different bytes and core's byte-level convergence check misfires — spurious heals, or missed ones. The same caution applies to any map inside whatever `summarize` returns.
+**Use deterministic maps everywhere in state AND summaries: `BTreeMap`/`BTreeSet`, never `HashMap`/`HashSet`.** Peers decide they have converged by comparing state bytes, so two peers holding the same logical state in a different byte order heal forever without ever agreeing. Canonical encoding is a platform requirement (freenet-core #5320), and the merge laws are checked on exact bytes because of it. A `HashMap` serializes in nondeterministic order (ciborium), so two identical states can summarize to different bytes and core's byte-level convergence check misfires — spurious heals, or missed ones. The same caution applies to any map inside whatever `summarize` returns.
 
 Beyond that, make sure your state genuinely converges through `summarize` / `delta` / `apply`, and test that it does, rather than assuming a live broadcast reaches every peer.
 
@@ -140,6 +148,19 @@ Every rule below is checkable in review and grounded in a measured finding from 
 
 Follow these phases in order.
 
+> **Building on an app you do NOT own** — reading River rooms, using the
+> ghostkeys delegate, indexing another project's contracts? Do not hardcode
+> their contract or delegate key. It is `BLAKE3(BLAKE3(wasm) ‖ params)`, so it
+> moves on every re-key of theirs, including a bare version bump, and the
+> failure is silent: every read comes back looking like "this user has nothing
+> stored". Pinning a version of their crate does not help — that pins you to
+> their view of the key as of their release, which is the thing that went stale.
+> Fetch their key at runtime instead: resolve their author-signed pointer if
+> they publish one, and otherwise read it from their webapp bundle, which is
+> what ghostkeys does today. Pointer adoption is thin, so expect the fallback to
+> be the path for most apps right now. Either beats a compiled-in constant. See
+> `references/building-on-other-apps.md`.
+>
 > **Working on an app that already exists?** Before anything else, check whether
 > it hardcodes a *delegate key* belonging to a platform delegate it does not own
 > (ghostkeys being the one in use today). That constant goes stale on every
@@ -180,13 +201,13 @@ Start by listing each *kind* of shared state your app needs — each kind become
 1. Define state structure using `#[composable]` macro from freenet-scaffold
 2. Implement `ComposableState` trait for each component
 3. Implement `ContractInterface` trait for the contract
-4. Ensure all state updates satisfy the commutative monoid requirement, and that `get_state_delta` returns a negligible delta (ideally zero bytes, never state-sized) when the requester's summary already matches your state (see `contract-patterns.md`)
+4. Ensure all state updates satisfy the merge laws (associative, commutative, idempotent), and that `get_state_delta` returns a negligible delta (ideally zero bytes, never state-sized) when the requester's summary already matches your state (see `contract-patterns.md`)
 5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
-6. **Plan contract upgrade from v1 — it's low-risk and mechanical when you design for it.** A WASM change moves the contract key, but if you anchor your app's durable references on a **stable identity anchor that is independent of the WASM** — never the raw contract key — the upgrade is transparent to users: state migrates itself on next load, and every reference derived from that anchor (invites, share links, membership, external services) survives the re-key because the client re-derives the new contract key from the *unchanged anchor*, not from a stored contract key. What the anchor *is* depends on the app (an owner/user key — e.g. River; a fixed namespace/singleton params; a DID; or an index contract mapping a stable name → current key); the options are in `upgrade-and-migration.md` step 1. Invites and links do **not** die on an upgrade — River's 0.6→0.8 re-key on the live network kept every room and invite. Recreation is only for deliberately changing the app's *identity anchor* (e.g. rotating a compromised owner key), never for a routine contract/stdlib bump. The shipped baseline (River #292, Delta) is a **backward probe from a committed legacy-code-hash registry**: reconstruct each predecessor key from `(stable params ‖ old code_hash)`, GET the old state, fold it forward, and re-PUT under the current key — permissionless because the successor's `validate_state` re-verifies every byte. The one required operational step is registering the *outgoing* code hash in the registry before the WASM changes, then republishing. An author-signed `OptionalUpgrade` pointer is an *optional* straggler courtesy on top, not the mechanism that moves state. The reusable `freenet-migrate` crate (0.3.0 on crates.io, with `freenet-migrate-build` 0.2.0) packages this baseline and owns the probe decisions in a sans-IO driver; it is what River's contract-migration path runs in production (browser UI and `riverctl`), and existing apps adopt it without a rewrite because its build codegen reads their existing `[[entry]]` registries and emits view consts matching the hand-rolled shapes (freenet/river#434, #436, #437). See `contract-patterns.md` → "Contract WASM Upgrade & State Migration". For the cross-cutting operational discipline that keeps the migration itself from losing data (resumable, idempotent, non-destructive, regression-gated, observable), see `upgrade-and-migration.md`.
+6. **Plan contract upgrade from v1 — it's low-risk and mechanical when you design for it.** A WASM change moves the contract key, but if you anchor your app's durable references on a **stable identity anchor that is independent of the WASM** — never the raw contract key — the upgrade is transparent to users: state migrates itself on next load, and every reference derived from that anchor (invites, share links, membership, external services) survives the re-key because the client re-derives the new contract key from the *unchanged anchor*, not from a stored contract key. What the anchor *is* depends on the app (an owner/user key — e.g. River; a fixed namespace/singleton params; a DID; or an index contract mapping a stable name → current key); the options are in `upgrade-and-migration.md` step 1. Invites and links do **not** die on an upgrade — River's 0.6→0.8 re-key on the live network kept every room and invite. Recreation is only for deliberately changing the app's *identity anchor* (e.g. rotating a compromised owner key), never for a routine contract/stdlib bump. The shipped baseline (River #292, Delta) is a **backward probe from a committed legacy-code-hash registry**: reconstruct each predecessor key from `(stable params ‖ old code_hash)`, GET the old state, fold it forward, and re-PUT under the current key — permissionless because the successor's `validate_state` re-verifies every byte. The one required operational step is registering the *outgoing* code hash in the registry before the WASM changes, then republishing. An author-signed `OptionalUpgrade` pointer is an *optional* straggler courtesy on top, not the mechanism that moves state. The reusable `freenet-migrate` crate (0.6.0 on crates.io, with `freenet-migrate-build` 0.2.0) packages this baseline and owns the probe decisions in a sans-IO driver; it is what River's contract-migration path runs in production (browser UI and `riverctl`), and existing apps adopt it without a rewrite because its build codegen reads their existing `[[entry]]` registries and emits view consts matching the hand-rolled shapes (freenet/river#434, #436, #437). Two things about the probe that lose data silently if you get them wrong: **silence is not absence** (0.6.0's breaking change: a timeout is `Unknown`, never a miss, and no outcome certifies that the migration is safe to record as finished), and **nothing may write to the new key before the probe runs**, because the probe's trigger is "the new key has no real state yet" and an earlier write permanently suppresses it (freenet/river#621). For the procedure of swapping an existing hand-rolled sweep over to the crate, see the `freenet-migrate-adoption` skill. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration". For the cross-cutting operational discipline that keeps the migration itself from losing data (resumable, idempotent, non-destructive, regression-gated, observable), see `upgrade-and-migration.md`.
 7. **Read `state-authorization-patterns.md` before designing the second iteration.** It captures cross-cutting patterns (per-item vs bundled signatures, replay protection via monotonic counter / tombstones / cross-context binding, signed-payload hygiene, `time::now()` gotchas, related-contracts limits, wire-format stability) that bite on every contract beyond the trivial.
 
 References:
-- `references/contract-patterns.md` — `ContractInterface`, commutative monoid, composable state, basic signatures.
+- `references/contract-patterns.md` — `ContractInterface`, the merge laws, composable state, basic signatures.
 - `references/state-authorization-patterns.md` — authentication, replay protection, signed-payload hygiene, time, related-contracts, wire-format stability, common pitfalls.
 - `references/identity-and-addressing.md` — short self-certifying user-facing addresses, keeping large (post-quantum) keys out of identifiers, identity that survives WASM upgrades, and blocking bots without a server (ghost keys vs proof-of-work).
 
@@ -205,7 +226,7 @@ Determine what private data each user needs stored locally and split it across d
 2. Implement `DelegateInterface` trait
 3. Handle secret storage operations (Store, Get, Delete, List)
 4. Implement cryptographic operations (signing, encryption)
-5. **Design for secret migration from v1** -- when delegate WASM changes, the delegate key changes and all stored secrets become inaccessible. There is **no `ExportSecrets` handler** (an earlier misconception): River's real mechanism messages each old delegate key via `DelegateRequest::ApplicationMessages`, re-running the old WASM to read its secrets, and folds the signing keys forward (encryption secrets are re-derived). Keep a committed registry of old delegate keys and migrate promptly — the re-run breaks after a stdlib/ABI bump (freenet/river#204). See delegate-patterns.md for the mechanism; `freenet-migrate` codifies the delegate registry and build codegen, though the delegate secret carry-forward itself still runs app-side today (the crate's field-deployed path is the contract side, freenet-core#2776). See `upgrade-and-migration.md` for the operational discipline (resumable/interrupted-migration recovery, migration telemetry, and the upgrade test harness).
+5. **Design for secret migration from v1** -- when delegate WASM changes, the delegate key changes and all stored secrets become inaccessible. There is **no `ExportSecrets` handler** (an earlier misconception): River's real mechanism messages each old delegate key via `DelegateRequest::ApplicationMessages`, re-running the old WASM to read its secrets, and folds the signing keys forward (encryption secrets are re-derived). Keep a committed registry of old delegate keys and migrate promptly — the re-run breaks after a stdlib/ABI bump (freenet/river#204). See delegate-patterns.md for the mechanism; `freenet-migrate` codifies the delegate registry and build codegen, but delegate secret carry-forward has no core mechanism and never will — a node-level attempt (`RegisterDelegateWithPredecessors`) was built, shipped, then found forgeable and disabled as a security fix (freenet-core#5199), and after three rejected trust-model designs, app-level migration is settled standing policy, not an interim measure. App-level does not mean bespoke: `freenet-migrate` ships the delegate-side entry points (`migrate_delegate_secrets`, `register_delegate_with_migration`, unchanged since 0.5.0; crates.io is now 0.6.0, whose break is contract-half only), and River, Delta and ghostkeys all drive them on `main` at 0.5.0. Note that River and Delta run the crate's walk *alongside* their existing hand-rolled sweep, which stays authoritative for now; retiring the sweep is a later release, after the walk field-validates. See delegate-patterns.md → "Delegate secret migration: no core mechanism, and why" for the full history, the `freenet-migrate-adoption` skill for the swap procedure, and freenet-core#2776 for live status. See `upgrade-and-migration.md` for the operational discipline (resumable/interrupted-migration recovery, migration telemetry, and the upgrade test harness).
 
 Reference: `references/delegate-patterns.md`
 
@@ -272,7 +293,8 @@ skill, "Debugging with Playwright".
 
 References:
 - `references/ui-patterns.md` - WebSocket connection models, gateway CSP,
-  framework-specific patterns.
+  serving large binary assets from a dedicated contract, framework-specific
+  patterns.
 - `references/production-smoke-testing.md` - the four test tiers, the
   development-loop browser-validation recipe, and the iframe-shell Playwright
   idioms.
@@ -297,13 +319,23 @@ Set up the build system, CI, and deployment pipeline.
    with the GNU flags listed under "Tooling Preflight" in
    `references/build-system.md`.
 
-7. **If you'll ship more than one release, plan for a facade contract
-   from day one.** Without it, every release rotates the gateway URL
-   users have bookmarked. The facade is a stable-URL indirection: a
-   never-rebuilt contract whose state holds a signed pointer to the
-   current web-container. See `references/facade-pattern.md`. Cheaper
-   to design in now than retrofit later — retrofitting means asking
-   every existing user to update their bookmark.
+7. **Publish the UI as a web container contract — its URL is permanent, and
+   you upgrade in place.** Shipping a new release does **not** rotate the
+   gateway URL: the UI is the container's *state*, while the contract key is
+   `BLAKE3(BLAKE3(container_wasm) || publisher_key)` and neither input contains
+   your UI.
+   `fdev website init` once (it prints your URL and writes your signing key),
+   then `fdev website publish` / `fdev website update` for every release
+   thereafter. **Back up the signing key on day one** — lose it and the site is
+   frozen at its last version forever, and no redirect can rescue it. Keep
+   `fdev`'s built-in versioning unless you have a concrete reason not to: a
+   hand-rolled counter seeded *below* the stored version bricks the site
+   permanently, so if you must switch, seed strictly above the current
+   on-network version. Whether to pin the container WASM with `--contract-wasm`
+   is a real trade-off (stable address vs. freezing a third-party contract
+   implementation) — read it before deciding. See
+   `references/web-container-contract.md`. Do **not** build a redirect/pointer
+   contract for stable URLs; you already have one.
 8. **Plan contract-WASM stability before the first release.** A
    `cargo update` in the workspace root must not silently rotate
    contract IDs. See `references/build-system.md` →
@@ -322,12 +354,19 @@ References:
   reproducibility caveat, pre-commit hook for stray `.wasm`.
 - `references/production-smoke-testing.md` — iframe shell architecture,
   Playwright recipe for post-publish liveness checks.
-- `references/facade-pattern.md` — stable-URL facade contract
-  architecture for projects that ship more than one release.
+- `references/web-container-contract.md` — how a webapp is addressed and
+  upgraded **in place** at a permanent URL, `fdev website`, version
+  monotonicity, key backup, and the size budget.
+- `references/facade-pattern.md` — indirection for the rare case where you
+  must move an audience to a *different* contract (container-WASM migration
+  or publisher-key rotation). Not needed for ordinary releases.
 - `references/upgrade-and-migration.md` — operational discipline for safe
   contract/delegate upgrades: the five migration properties (idempotent,
   resumable, non-destructive, regression-gated, observable), enumerating
   dynamic key families, the upgrade test harness, and staged reversible rollout.
+- `references/building-on-other-apps.md` — the *consumer* side: integrating with
+  a contract or delegate you do not own, resolving the author's pointer instead
+  of pinning a key, the seven outcome arms, and what a pointer does not tell you.
 
 ## Project Structure Templates
 

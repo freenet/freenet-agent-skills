@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.17.0 (2026-08-04)
+## 1.25.0 (2026-08-18)
 
 Summary SIZE guidance, alongside the determinism guidance that was already here.
 
@@ -26,6 +26,259 @@ likely to change what an agent writes:
   summary constant-size (K=16 -> 145 bytes, independent of N).
 - A summary is a wire-format commitment: changing it re-keys the contract and
   strands a generation that keeps failing anti-entropy forever.
+
+## 1.23.0 (2026-08-17)
+
+> Updated 2026-08-18: the pointer contract is now LIVE. River published the
+> first two records (`river.room-contract`, `river.chat-delegate`), both
+> verified from the network and resolved through `resolve_app_pointer`. Adoption
+> is still thin — Atlas and Delta have records prepared but unpublished, and
+> everything else including ghostkeys has none — so the bundle-fetch fallback in
+> `building-on-other-apps.md` remains the right path for those apps.
+
+The skill covered how to survive *your own* re-keys and said nothing about
+surviving *someone else's*, which is the problem third-party integrators
+actually have.
+
+- **New `references/building-on-other-apps.md`** — the consumer side of
+  addressing. A backward probe searches backward from a key you already hold, so
+  it cannot help an integrator who is pinned to a key that has since moved;
+  neither can pinning a version of the author's crate, which pins you to their
+  view of the key as of their release. The answer is to resolve the author's
+  pointer at runtime. Covers the three things integrators get wrong (deriving
+  with the pointer's params instead of your own, not persisting the anti-rollback
+  floor — including after a withdrawal — and handling only the two `PointerOutcome`
+  arms that carry a record, which silently no-ops on the other five), and states
+  the scope boundary: the pointer solves **addressing only** and says nothing
+  about whether state or secrets under the old key survived.
+- **The resolver is published, and the skill said no resolver existed.**
+  `references/upgrade-and-migration.md` described the pointer contract as
+  "emerging, not yet consumable" with "no client resolver exists yet". A
+  resolver ships in `freenet-migrate` 0.6.0 (`freenet_migrate::pointer`), so
+  that text was out of date; corrected, with the author-side and consumer-side
+  halves cross-linked. Note this is a claim about the *resolver*, not about
+  adoption: pointer adoption is thin, so the new file and the SKILL.md callout
+  both say to expect the webapp-bundle fallback to be the working path for most
+  apps today.
+- **`delegate-patterns.md` → "Depending on Someone Else's Delegate"** now offers
+  the pointer as the principled mechanism alongside the existing webapp-bundle
+  fetch, and is explicit about what the bundle pattern does not give you: no
+  author signature over the answer, no rollback protection, no withdrawal signal.
+- **Skill description now names integration**, so the skill loads for "how do I
+  read another app's contract" and not only for building or upgrading your own.
+- **Version housekeeping:** `marketplace.json` was still at 1.20.0 while this
+  changelog had already published 1.21.0 and 1.22.0 — both landed directly on
+  main, and the version-bump workflow only triggers on `pull_request`, so it
+  never ran for them. Bumped straight to 1.23.0. The CI trigger gap is filed
+  separately; this entry only fixes the drift.
+
+## 1.22.0 (2026-08-17)
+
+Canonical serialization was documented for summaries only, and the commutativity
+example stored state in a `HashMap` — teaching the defect it warns about
+elsewhere.
+
+- **State must serialize canonically, stated as a requirement.** Peers decide they
+  have converged by comparing state *bytes*, so two peers holding the same logical
+  state in a different byte order heal forever without agreeing. A `HashMap`
+  anywhere in state serializes in insertion order, which depends on the order
+  updates happened to arrive.
+- **Fixed the "Set-Based Operations" example** to use `BTreeMap` rather than
+  `HashMap<VerifyingKey, SignedMember>` for state.
+- **`SKILL.md`: the rule now covers state as well as summaries**, and says why the
+  merge laws are checked on exact bytes — canonical encoding is a platform
+  requirement (freenet-core #5320), which is what makes exact comparison correct
+  rather than over-strict.
+
+## 1.21.0 (2026-08-17)
+
+The merge laws were stated as a commutative monoid: associativity, commutativity
+and identity. Idempotence was missing, which is the one Freenet's delivery model
+makes unavoidable and the one live contracts are actually breaking.
+
+- **`contract-patterns.md`: idempotence is now a stated law**, with its own
+  property test, and the section is framed as a join-semilattice rather than a
+  commutative monoid. Delivery is at-least-once, so the same state or delta
+  legitimately arrives more than once (a retry, a re-subscribe, anti-entropy
+  healing a divergence); a merge that changes the state on re-application never
+  settles, and gossips an endless stream of "new" states while doing it.
+- **Called out that identity does not imply idempotence.** `merge(A, I) == A`
+  and `merge(A, A) == A` are different requirements, and a merge that appends
+  rather than unions satisfies the first while failing the second — which is the
+  shape of the defects found in the wild.
+- **`SKILL.md`: the one-line summary named only commutativity**; it now names all
+  three laws and points at the detail.
+- **Renamed the section from "Commutative Monoid Requirement" to "Merge Law
+  Requirements"**, and updated every cross-reference. A heading naming three of
+  the four laws while the body named four is the same drift that lost idempotence
+  in the first place. The `update_state` doc comment in the trait example said
+  only "MUST be commutative"; it now names all three laws and points out that
+  merging IS `update_state`.
+
+Evidence: freenet-core #5153 attributed the largest single source of network
+traffic to contracts whose merges do not converge, and the #5320 conformance
+survey found a live contract whose `merge(A, A)` never reaches a fixpoint, plus
+three more breaking commutativity.
+
+## 1.20.0 (2026-08-13)
+
+Two ways the recommended upgrade mechanism loses user data silently. The docs
+described one of them as correct behaviour, and did not mention the other at all.
+
+- **`freenet-migrate` is 0.6.0** on crates.io (published 2026-08-13);
+  `freenet-migrate-build` stays 0.2.0. The break is on the contract half only.
+  Adopters (River, Delta, ghostkeys, Atlas) pin `0.5` and do not pick it up
+  automatically, so the "adopters drive it at 0.5.0" statements are left alone.
+- **`contract-patterns.md`: the `ProbeDriver` description was pre-0.6.0 and
+  described the bug 0.6.0 fixed.** It said "a timeout advances" and "exhaustion
+  seeds the local snapshot". Replaced with the shipped semantics: `ProbeIo::get`
+  returns a three-way `ProbeAnswer` (`State` / `Absent` / `Unknown`), a timeout is
+  `Unknown` and never a miss, `on_timeout` is deprecated and is not a drop-in,
+  `SeedLocal` requires every candidate to have answered, and
+  `Indeterminate { local, unresolved }` is the new outcome for an incomplete walk.
+  Adds the limit the crate now states outright: a Freenet `NotFound` is the
+  strongest negative the network can give and is still not proof of absence, so no
+  outcome licenses recording the migration as finished.
+- **New: `upgrade-and-migration.md` → "Probe before you write to the new key".**
+  The migration trigger is "the new key has no real state yet", so any earlier
+  write to the new key permanently suppresses it. Silent, and it reads as success.
+  River has shipped this since 2026-05-20 across seven room-contract re-keys
+  (freenet/river#621), found by a rehearsal rather than by CI, because the pin over
+  it asserted the probe call *exists* while it was unreachable. Existence is not
+  reachability: pin the outcome, not the call. Cross-referenced from `SKILL.md`,
+  `contract-patterns.md`, and playbook step 5.
+
+## 1.19.1 (2026-08-12)
+
+Corrects the delegate-half status again. 1.19.0 replaced "still a documented
+stub" with "no production adopters yet" and "sound design, unproven in the
+field". That is now wrong too: `freenet-migrate` 0.5.0 is on crates.io and
+River, Delta and ghostkeys all drive its delegate-side entry points on `main`
+(verified against each repo's `origin/main`, not a local checkout).
+
+- Version references updated from 0.4.0 to 0.5.0 across `SKILL.md`,
+  `contract-patterns.md`, `delegate-patterns.md` and `upgrade-and-migration.md`.
+  `freenet-migrate-build` stays at 0.2.0, which is still the published latest.
+- `delegate-patterns.md`: the "two options, weigh the crate's zero-adopter
+  status" framing is replaced with a single recommendation. ghostkeys no longer
+  belongs in it as the hand-rolled alternative, because ghostkeys' own sweep now
+  drives the crate; its adoption is described as the shape to copy instead.
+- Documents `SuccessorSecretsIo`, the load-bearing part of the 0.5.0 breaking
+  change. The raw `(key, value)` copy it replaced is wrong for any app whose
+  stored items carry cross-entry invariants, and it fails silently.
+- The mocked-I/O caveat is kept, since it is still true that the crate has no
+  integration test against a real node or a real WASM delegate. The field
+  evidence comes from the adopters. ghostkeys and Delta each gated their
+  adoption on a differential test against their prior sweep.
+- Adds pointers to the `freenet-migrate-adoption` skill from the four places
+  that assert "existing apps adopt it without a rewrite". That claim is about
+  const shapes and is not a procedure; the procedure lives in that skill.
+
+## 1.19.0 (2026-08-09)
+
+Delegate secret migration docs described the node-level copy-forward as a
+work-in-progress stub. It isn't in progress — it was designed, shipped, found
+forgeable, and disabled, and after three rejected trust-model designs,
+app-level migration is now settled standing policy rather than an interim
+measure. The skill previously said "still a documented stub" and "future
+work"; both read as "wait for it," which is the wrong guidance for an agent
+building a dApp today.
+
+- `delegate-patterns.md`: adds "Delegate secret migration: no core mechanism,
+  and why" — the full history (`RegisterDelegateWithPredecessors`,
+  freenet-core#4908, shipped then disabled by freenet-core#5199; wire variant
+  removed from freenet-stdlib `main` in #91 but **0.9.0 is unreleased**, so
+  crates.io is still 0.8.5 and what protects nodes is the call-site disable),
+  the three rejected trust-model designs, and concrete guidance.
+- Documents that app-level does **not** mean bespoke-per-app:
+  `freenet-migrate` 0.4.0 already packages the delegate-side probe
+  (`migrate_delegate_secrets`, `register_delegate_with_migration`,
+  `PredecessorSecretsIo`) — with the honest caveat that it has no production
+  adopters and its ~50 tests all drive mocked I/O, so ghostkeys' hand-rolled
+  sweep remains the field-proven shape it codifies. Also names the
+  no-user-consent limitation explicitly.
+- Resolves an internal contradiction on River's `signing_key:` secret: it is
+  never *exported* from the old delegate, but `migrate_signing_key` re-seeds
+  the new delegate's copy from `RoomData.self_sk`. Keeps the freenet/river#612
+  warning about `self_sk`'s incidental survival.
+- `upgrade-and-migration.md` and `contract-patterns.md`: correct the same
+  "still a documented stub" / "future work" framing to match.
+- `upgrade-and-migration.md`: documents the ecosystem-standard pointer
+  contract (freenet-core#5194 record format settled, governance questions
+  open; merged via freenet-migrate#9 as a deliberately unpublished in-repo
+  crate whose frozen WASM is the deliverable) as an addressing option —
+  explicitly flagged as unconsumed scaffolding with no client resolver yet.
+- Corrects stale `freenet-migrate` 0.3.0 → 0.4.0 across all four files
+  (`freenet-migrate-build` 0.2.0 is still current and unchanged).
+- All four touched files now point to
+  [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) as
+  the live-maintained canonical status source, so future drift is a stale
+  link to fix rather than restated claims to re-verify.
+
+## 1.18.0 (2026-08-06)
+
+Webapps are upgraded IN PLACE at a permanent URL. The skill said the opposite.
+
+A dApp developer built their own redirect contract to get a stable URL, because
+the skill told them every release rotates it. It doesn't. A web container
+contract's key is `BLAKE3(container_wasm || publisher_key)`, and the UI is
+neither — it is the contract's *state*. Rebuilding a UI cannot move its address.
+River has published dozens of releases to one unchanging key this way, and
+`fdev website update` is the supported one-command path.
+
+The skill contradicted itself: `delegate-patterns.md` stated the mechanism
+correctly, while `facade-pattern.md` opened on the false premise and `SKILL.md`
+told every developer shipping more than one release to plan a facade contract
+"from day one" — i.e. to hand-build exactly the redirect that isn't needed.
+
+- Adds `references/web-container-contract.md`: how a webapp is addressed, why
+  the URL is permanent, `fdev website init/publish/update`, and the operational
+  hazards around it — including one that permanently bricks a live site.
+  `fdev` versions are unix seconds (~1.78e9), so replacing them with a
+  hand-rolled counter seeded below that value makes every future publish fail
+  forever, with no recovery. The page now says to keep fdev's versioning unless
+  you have a reason not to, and to seed strictly above the current on-network
+  version if you switch.
+- Documents the `--contract-wasm` pin as a real trade-off rather than a free
+  win: it buys a permanently stable address and costs you a frozen container
+  implementation that can no longer receive upstream fixes. Also covers where
+  the WASM actually comes from (rebuilding it from source yields different
+  bytes and silently publishes to a new URL), and that `fdev website list` and
+  `init` ignore the pin and will report a different key after an fdev upgrade.
+- Covers unrecoverable signing-key loss with real custody guidance (three
+  backups, `chmod 600` since `init` doesn't, and the macOS config path, since
+  backing up the wrong path looks identical to having a backup), the 50 MiB
+  state cap, and rehearsing the first publish against a local node.
+- Rewrites `facade-pattern.md` around what it is actually for: moving an
+  audience to a *different* contract after a deliberate container-WASM
+  migration or key rotation. Not release mechanics.
+- Corrects `build-system.md`'s "contract ID reproducibility caveat", which
+  blamed ID rotation on the signer's timestamp. That timestamp goes into the
+  webapp metadata, which is state; it changes the state at an unchanged ID,
+  which is the upgrade mechanism itself.
+- Scopes `upgrade-and-migration.md`'s "there is no in-place upgrade" to WASM
+  changes, since read flatly it is the sentence that causes this whole mistake.
+
+## 1.17.0 (2026-08-04)
+
+Document where large binary assets (audio, video, images, uploads) belong:
+their own contract, not the webapp bundle.
+
+The existing "State Size Budget" guidance already said to shard unbounded
+data by write-concurrency unit, but never spelled out the mechanism for the
+common case of a UI wanting to serve a media file — an agent following only
+"vendor your assets" from the CSP section would reasonably conclude large
+files need to ship inside the webapp bundle too, which hits the 50 MiB hard
+cap fast and forces re-publishing every asset byte on any unrelated UI
+change.
+
+**New section in `ui-patterns.md`**: any contract's non-HTML files are
+servable at `/v1/contract/web/{KEY}/{path}`, and that path is same-origin
+with the UI's own iframe no matter whose key it names, so a UI can embed
+`<audio src="/v1/contract/web/{ASSET_CONTRACT_KEY}/track.mp3">` pointing at
+a *different* contract instance without tripping the gateway CSP. Splitting
+assets out this way also lets demand-driven hosting retain/evict each asset
+independently of the UI contract's own popularity.
 
 ## 1.16.0 (2026-08-04)
 
