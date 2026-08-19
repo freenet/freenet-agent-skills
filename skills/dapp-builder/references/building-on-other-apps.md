@@ -17,7 +17,7 @@ one does not solve yours.
 > | Delta | `delta.site-contract` | `6a8ZBaFft9wVFd1mAWVRRZepXXrnQNzRCD5tqM71hBm5` |
 > | Delta | `delta.site-delegate` | `ES2hnErmSh9Aip4862ZDKQCNvMeryfhj6b7FfpP5qmyZ` |
 >
-> That is the complete list as of 2026-08-19, and all five resolve on the live
+> That is the complete list as of 2026-08-18, and all five resolve on the live
 > network today. Each app's author verifying key is published in **that app's
 > own `FREENET.md`** — River's, Atlas's, Delta's — and you should **take it from
 > there, not from this table**, for the reason given under "the author key is

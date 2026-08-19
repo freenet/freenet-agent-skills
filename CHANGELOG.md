@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.24.0 (2026-08-19)
+## 1.24.0 (2026-08-18)
 
 Pointer adoption went from two records to five, so the adoption table in
 `building-on-other-apps.md` was stale within a day of being written. That table
@@ -35,7 +35,7 @@ it states which apps an integrator can rely on resolving *today*.
 > everything else including ghostkeys has none — so the bundle-fetch fallback in
 > `building-on-other-apps.md` remains the right path for those apps.
 >
-> **Superseded by 1.24.0 (2026-08-19):** Atlas and Delta have since published.
+> **Superseded by 1.24.0 (later on 2026-08-18):** Atlas and Delta have since published.
 > The adoption note above is kept as it stood on the 18th; the current list is
 > the table in `building-on-other-apps.md`.
 
