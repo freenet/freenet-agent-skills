@@ -27,6 +27,30 @@ likely to change what an agent writes:
 - A summary is a wire-format commitment: changing it re-keys the contract and
   strands a generation that keeps failing anti-entropy forever.
 
+## 1.24.0 (2026-08-18)
+
+Pointer adoption went from two records to five, so the adoption table in
+`building-on-other-apps.md` was stale within a day of being written. That table
+is the one thing in this skill that goes wrong purely by the passage of time —
+it states which apps an integrator can rely on resolving *today*.
+
+- **Atlas and Delta have published.** The table now lists all five live records:
+  River's two, Atlas's `atlas.index-contract`, and Delta's `site-contract` and
+  `site-delegate`. All five were verified by resolving them from the live
+  network, not by reading the repos that generated them.
+- **Author keys are deliberately not listed here.** The table carries pointer
+  *addresses* only, which are public routing information, and sends the reader
+  to each app's own `FREENET.md` for the verifying key. Reading a trust anchor
+  out of a third-party table is the exact mistake the surrounding section warns
+  against, and listing them here invited it.
+- **Noted that the author-key encodings differ** — River's and Delta's are
+  `river:v1:vk:`-prefixed base58, Atlas's is bare hex, and both decode to the
+  same 32 raw bytes. An integrator who writes one parser and assumes will fail
+  on the second app they try.
+- **Called out that ghostkeys still has no record.** It is the app whose re-keys
+  motivated this file, so a reader is most likely to reach for a pointer exactly
+  where one does not yet exist; that reader needs the bundle-fetch fallback.
+
 ## 1.23.0 (2026-08-17)
 
 > Updated 2026-08-18: the pointer contract is now LIVE. River published the
@@ -35,6 +59,10 @@ likely to change what an agent writes:
 > is still thin — Atlas and Delta have records prepared but unpublished, and
 > everything else including ghostkeys has none — so the bundle-fetch fallback in
 > `building-on-other-apps.md` remains the right path for those apps.
+>
+> **Superseded by 1.24.0 (later on 2026-08-18):** Atlas and Delta have since published.
+> The adoption note above is kept as it stood on the 18th; the current list is
+> the table in `building-on-other-apps.md`.
 
 The skill covered how to survive *your own* re-keys and said nothing about
 surviving *someone else's*, which is the problem third-party integrators
