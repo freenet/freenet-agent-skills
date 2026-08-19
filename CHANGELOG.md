@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.27.0 (2026-08-19)
+
+Two additions to `building-on-other-apps.md`, both from the delegate-succession
+work, which is the first consumer to treat a pointer record as an authorization
+input rather than as an address. That raises the bar on two things the file
+previously stated too weakly.
+
+- **How durable the anti-rollback floor must be.** "Persist it" invites
+  `localStorage`, which an attacker can clear. The rule is now a test: the floor
+  must be at least as durable as whatever it guards, and stored beside it,
+  because clearing the floor is exactly as useful to an attacker as defeating
+  it. With the reassuring corollary, so nobody defends against it: a freshly
+  installed old version has an empty floor AND an empty store, so floor and data
+  are born together and the danger is only in separating them later.
+- **The scope note now names a failure that is silent on both sides.** Freenet's
+  host secret enumeration is best-effort by design: `list_secret_keys` calls
+  `unwrap_or_default()` on an unreadable registry and returns an EMPTY LIST
+  rather than an error, and `register_key` can store a value while declining to
+  register it, warning only on the node. So a handover can enumerate, ship what
+  it found, report an honest success, and still have moved a subset, with
+  nothing the user or the app can inspect. Verified in freenet-core's
+  `secrets_store/store.rs` (`list_secret_keys` at :1508, the cap
+  `MAX_REGISTERED_KEYS_PER_SCOPE = 4096` at :102), not taken from a summary.
+  The rule that falls out: treat "the data arrived" as a separate claim needing
+  its own evidence, and never infer it from the mover reporting success.
+
 ## 1.26.0 (2026-08-19)
 
 Three gaps freenet-core#2776 lists as outstanding for this skill.

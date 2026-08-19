@@ -167,6 +167,27 @@ version, your floor stays at the pre-withdrawal value and any peer can serve a
 real, validly signed pre-withdrawal record that resurrects code the author
 explicitly withdrew.
 
+**How durable does the floor need to be? At least as durable as whatever it
+guards, and stored next to it.** "Persist it" is not a strong enough
+instruction, because it invites `localStorage`, which an attacker can clear and
+a user can clear by accident. Use this test instead: a floor that outlives the
+thing it protects is merely wasteful, while a floor that dies before it is a
+hole, because clearing the floor is exactly as good to an attacker as defeating
+it. So a resolver holding nothing but a cached address can keep its floor
+wherever that address lives, and a consumer using the record to gate access to
+secrets must keep the floor in the same store as those secrets. Co-location is
+the point: the two must be lost together or not at all, or "clear the floor,
+then replay an old record" becomes a working attack.
+
+The corollary is reassuring, and worth stating so nobody builds a defence
+against it: a freshly installed OLD version cannot be exploited this way. That
+instance starts with an empty floor AND an empty store, so there is nothing to
+steal. The floor and the data it guards are born together; the danger is only
+in separating them afterwards.
+
+(Rule contributed by the delegate-succession work, where the record gates a
+transfer of secrets rather than naming an address.)
+
 **4. Handle every arm.** `PointerOutcome` has seven variants and only two carry
 a record. The tempting shape
 
@@ -233,6 +254,24 @@ an integrator who resolves River's delegate pointer correctly, and then assumes
 the user's secrets came with it, will be wrong for every secret in that
 namespace. Resolving the pointer correctly is necessary for a safe upgrade and
 nowhere near sufficient.
+
+Worse, the gap can be **silent on both sides**, so neither you nor the app you
+depend on learns anything went wrong. Freenet's host-side secret enumeration is
+best-effort by design, and its own source says so: `list_secret_keys` calls
+`unwrap_or_default()` on an unreadable key registry, so it returns an **empty
+list** rather than an error, and `register_key` can store a value while
+declining to register it (an unreadable registry, or a 4096 live-key ceiling),
+warning only on the node. So a handover that enumerates what it holds, ships
+what it finds, and reports success can move a subset and be unable to tell.
+Resolve the pointer perfectly, derive the right key, receive an honest success,
+and still find data missing, with no error anywhere and nothing the user can
+inspect. (Verified in `secrets_store/store.rs` as of 2026-08. Neither River nor
+ghostkeys is exposed today, because both use their own app-level protocols
+rather than host enumeration; a design that enumerates directly is.)
+
+The rule that falls out: **treat "the data arrived" as a separate claim needing
+its own evidence.** Never infer it from a successful resolve, and never infer it
+from the mover reporting success either.
 
 What you *do* get, and it is the thing that was missing in the ghostkeys
 incident, is the ability to tell **"the thing I was built against moved"** apart
