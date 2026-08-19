@@ -7,22 +7,36 @@ the *author's* side. The two problems are different, and solving the author's
 one does not solve yours.
 
 > **Adoption is thin, so check before you build on it.** The mechanism works and
-> is live, but almost nothing publishes yet.
+> is live, but most apps still publish nothing.
 >
 > | app | `app_id` | pointer key |
 > |---|---|---|
 > | River | `river.room-contract` | `Ai4VLoC2jGdhpcB2UU8VPo3efUoxjm1Ju9VKXqRC63Az` |
 > | River | `river.chat-delegate` | `6qF2H5JRPBxbKC45UtPnzdDzyfsejYFW1UwDLGDU66mu` |
+> | Atlas | `atlas.index-contract` | `BwsKx5iDhjBJGDNAPtZbbC9f6twDAUrnb2Yh1D6Wng2K` |
+> | Delta | `delta.site-contract` | `6a8ZBaFft9wVFd1mAWVRRZepXXrnQNzRCD5tqM71hBm5` |
+> | Delta | `delta.site-delegate` | `ES2hnErmSh9Aip4862ZDKQCNvMeryfhj6b7FfpP5qmyZ` |
 >
-> That is the complete list as of 2026-08-18. River's author key is
-> `river:v1:vk:9Ebskq4y7NvJpTQTrF1FAxU8g6bR4Rhe4TRikXba55EJ`, published in
-> River's `FREENET.md` — **take it from there, not from here**, for the reason
-> given under "the author key is the whole trust anchor" below.
+> That is the complete list as of 2026-08-19, and all five resolve on the live
+> network today. Each app's author verifying key is published in **that app's
+> own `FREENET.md`** — River's, Atlas's, Delta's — and you should **take it from
+> there, not from this table**, for the reason given under "the author key is
+> the whole trust anchor" below. This file deliberately lists only the pointer
+> *addresses*, which are public routing information; the author key is the thing
+> an attacker would want you to read from the wrong place.
 >
-> Atlas and Delta have records prepared but not published. Everything else,
-> including ghostkeys, has none — so for those your resolve returns
-> `NeverPublished` (a real "not found") or `Unavailable` (your transport could
-> not tell), and the baked-in fallback is legitimately what you use.
+> **The author keys are not all encoded the same way**, which will bite you if
+> you write one parser and assume. River's and Delta's are `river:v1:vk:`-prefixed
+> base58 (Delta reuses River's `web-container-tool` encoding; the prefix says
+> nothing about ownership). Atlas's is bare hex. Both encodings decode to the
+> same 32 raw bytes, and it is those 32 bytes the resolver wants.
+>
+> Everything else, including ghostkeys, has no record — so for those your
+> resolve returns `NeverPublished` (a real "not found") or `Unavailable` (your
+> transport could not tell), and the baked-in fallback is legitimately what you
+> use. Worth noticing that ghostkeys — the app whose re-keys caused the breakage
+> this file exists to prevent — is still in that group, so the reader most likely
+> to reach for a pointer is the one it cannot yet help.
 >
 > So: resolve first, and keep the bundle-fetch fallback at the end of this file
 > for the apps that have not published. Both beat a constant compiled into your
