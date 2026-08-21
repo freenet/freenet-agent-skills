@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.28.0 (2026-08-21)
+
+The guide taught HOW to resolve a pointer but never WHO should, so a reader had
+no way to tell whether it applied to them. Adding resolution where it cannot help
+buys a network dependency and a new failure path in exchange for nothing.
+
+- **The pinned-in-time test.** You need a pointer if a copy of your code can still
+  be running long after the artifact it addresses has moved: anything installed,
+  vendored or bundled, and anything deployed on its own schedule. You do not, on
+  engineering grounds, if you are rebuilt and redelivered whenever that artifact
+  changes, which is the ordinary case for a Freenet web app served from a
+  container republished in place.
+- **Vendoring a copy is the same trap with an extra step**, and looks like a build
+  artifact rather than a stale reference. One app in this ecosystem vendored a
+  delegate six generations and three months stale and registered it on startup.
+- **A backward-searching recovery cannot rescue a stale anchor.** If your idea of
+  "current" is out of date, the live state is FORWARD of everywhere your probe
+  looks, and you may write an ancient copy onto a retired address. A build-time
+  assertion that your bundled hash is current protects the binary when built, not
+  when run.
+- **River's UI is documented as a deliberate exception rather than left as a
+  contradiction.** It resolves despite the test saying it need not, because it is
+  the reference people read when learning to build Freenet apps. Copying that
+  choice means copying its constraint: resolving forward inverts the
+  compatibility direction, so an old client can meet newer state, and the
+  dangerous half is WRITING, not reading. The bound to adopt is refusing to write
+  to an unrecognised generation and staying read-only until reloaded.
+
 ## 1.27.0 (2026-08-19)
 
 Two additions to `building-on-other-apps.md`, both from the delegate-succession

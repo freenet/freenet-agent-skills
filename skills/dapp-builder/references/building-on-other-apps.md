@@ -91,6 +91,64 @@ Mechanics, wire format, and the operational requirements are in the contract's
 own README — do not restate them here, or the two copies drift:
 <https://github.com/freenet/freenet-migrate/blob/main/contracts/pointer-contract/README.md>
 
+## Do you actually need one? The pinned-in-time test
+
+Resolving is not free, and adding it where it cannot help buys you a network
+dependency and a new failure path in exchange for nothing. One question decides
+it:
+
+**Are you pinned in time relative to the thing you address?**
+
+You are pinned, and you need a pointer, if a copy of your code can still be
+running long after the artifact it addresses has moved. The clearest case is a
+CLI installed from a registry: `riverctl` is installed from crates.io and kept
+for months, so the contract generation compiled into it silently becomes older
+than the live one. Anything a user installs, vendors, or bundles is in this
+group, and so is any server or bot deployed on its own schedule.
+
+You are NOT pinned, on engineering grounds alone, if you are rebuilt and
+redelivered whenever the thing you address changes. A Freenet web app is the
+usual example: it ships inside a web container republished in place, and changing
+the contract forces a UI rebuild and republish, so the UI's idea of "current"
+cannot lag reality. Resolving your own artifact's pointer there is close to
+circular, since the answer is already compiled into you.
+
+Two things make this test sharper than it first looks.
+
+**Vendoring a copy is the same trap with an extra step.** Committing another
+project's WASM into your repo pins you exactly as hardcoding its key would, and
+it looks like a build artifact rather than a stale reference. One app in this
+ecosystem vendored a delegate that was six generations and three months stale,
+and registered it on every startup.
+
+**A backward-searching recovery cannot rescue a stale anchor.** If your migration
+walks *older* generations from where you think "current" is, and your idea of
+current is itself out of date, the live state is FORWARD of everywhere you will
+look. You will not merely miss it; you may find an ancient copy and write it
+forward onto a retired address. A build-time assertion that your bundled hash is
+current cannot help here, because it protects the binary when it is built, not
+when it is run.
+
+### The deliberate exception: River's UI
+
+River's UI resolves its pointer even though the test above says it does not need
+to. That is a considered decision by the project lead, not a counterexample, and
+the reason is that River's UI is the reference people read when learning to build
+Freenet apps: it should demonstrate the mechanism it recommends. It also buys a
+real capability, shipping a contract upgrade without republishing the UI.
+
+If you copy that choice, copy its constraint too. Resolving forward means an old
+copy of your app can meet a NEWER artifact, which inverts the compatibility
+direction: ordinarily new code reads old state, and here old code must cope with
+new state. The dangerous half is not reading but WRITING, because an old client
+that parses new state, silently drops what it does not understand, merges and
+writes back has destroyed those fields while reporting success.
+
+The bound worth adopting is the one in the outcome table below: **refuse to write
+to a generation you do not recognise, and stay read-only until reloaded.** That
+removes the round-trip destruction without requiring you to promise forward
+compatibility forever.
+
 ## Resolving one
 
 ```rust
