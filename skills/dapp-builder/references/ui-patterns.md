@@ -649,7 +649,11 @@ const handler: ResponseHandler = {
   onContractNotFound: (instanceId) => {
     console.warn("[freenet] Contract not found:", instanceId);
   },
-  // Added in stdlib v0.2.0: fired on SUBSCRIBE confirmation (subscribed flag = success)
+  // Added in stdlib v0.2.0: fired on SUBSCRIBE confirmation (subscribed flag = success).
+  // On stdlib TS >= 0.4.0 this fires alongside the api.subscribe() promise, which now
+  // also resolves/rejects on this same response. On older versions (0.3.0 and below,
+  // still the published npm version as of 2026-08-22) this callback is the only way
+  // to detect a refused subscribe. See "Contract Operations" below.
   onSubscribeResponse: (key, subscribed) => {
     console.log("[freenet] Subscribe:", key.encode(), "ok=", subscribed);
   },
@@ -689,7 +693,13 @@ const contractKey = new ContractKey(instanceBytes, instanceBytes);
 
 ### Contract Operations
 
-stdlib TS v0.2.0 made `get`, `put`, `update`, `subscribe`, and `disconnect` **promise-based**. They resolve with the typed response, reject on timeout (default 30s), connection close, or host error. The legacy callbacks in `ResponseHandler` still fire for the same response — both APIs coexist for backward compatibility.
+stdlib TS v0.2.0 made `get`, `put`, and `update` **promise-based**. They resolve with the typed response, reject on timeout (default 30s), connection close, or host error. The legacy callbacks in `ResponseHandler` still fire for the same response — both APIs coexist for backward compatibility.
+
+**`subscribe` is version-dependent — check which stdlib TS version you're on.** As of freenet-stdlib PR #94 (merged 2026-08-22, ships as TS package **0.4.0**), `subscribe()` correlates to its response the same way: it resolves on `SubscribeResponse{subscribed:true}` and rejects on `subscribed:false`, a host error naming the contract, connection close, or timeout — the `try/catch` pattern in the example below is correct from 0.4.0 on. **Before 0.4.0** (every version published to npm as of 2026-08-22 — the registry's latest is still 0.3.0), `subscribe()` just calls the synchronous `sendRequest()` and returns: the promise resolves as soon as the request is *sent*, never on the host's response, so it can't reject on a refused subscribe (e.g. hitting the node's per-client subscription cap of 50). On a pre-0.4.0 version, detect the real outcome via the `ResponseHandler` callbacks instead — `onSubscribeResponse` for success/failure the host reports back, `onErr` for a host-level error.
+
+`disconnect` is untouched by #94: in every version it resolves as soon as the request is sent, not on any response — there's no pending-request queue for it the way `pendingGets`/`pendingPuts`/`pendingUpdates`/`pendingSubscribes` back the others.
+
+#94 also narrowed host-error handling: from 0.4.0, a host error only rejects in-flight requests for the contract it names (previously any host error rejected every pending request on the connection), and concurrent requests for different contracts can no longer cross-resolve with each other's responses.
 
 ```typescript
 // GET — fetch current state (await + try/catch)
@@ -703,7 +713,16 @@ try {
   console.error("[freenet] GET failed:", err); // timeout / not-found / closed
 }
 
-// SUBSCRIBE — receive real-time updates (promise resolves on SubscribeResponse)
+// SUBSCRIBE — receive real-time updates.
+// stdlib TS >= 0.4.0: api.subscribe() resolves on SubscribeResponse{subscribed:true}
+// and rejects on subscribed:false / a host error / connection close / timeout —
+// this try/catch is correct.
+// stdlib TS < 0.4.0 (still the published npm version as of 2026-08-22): the
+// promise resolves as soon as the request is SENT and never rejects on a
+// refused subscribe (e.g. the per-client subscription cap). On that version,
+// detect failure via the ResponseHandler callbacks instead:
+//   onSubscribeResponse: (key, subscribed) => { if (!subscribed) { /* failed */ } }
+//   onErr: (err) => { /* host-level error, e.g. limit reached */ }
 try {
   await api.subscribe(new SubscribeRequest(contractKey, []));
 } catch (err) {

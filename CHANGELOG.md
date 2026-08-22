@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.28.1 (2026-08-22)
+
+Corrects the TypeScript client docs' claim about `subscribe`/`disconnect`,
+and makes the claim version-explicit so it doesn't go wrong again as
+freenet-stdlib ships.
+
+`ui-patterns.md` and `SKILL.md` said stdlib TS made `subscribe` and
+`disconnect` promise-based the same way as `get`/`put`/`update` — resolving
+on the matching response, rejecting on timeout/close/host-error. Checked
+against freenet-stdlib's `typescript/src/websocket-interface.ts`: on every
+npm-published version through 0.3.0 (latest on the registry as of
+2026-08-22), `get`/`put`/`update` really do await a per-request
+pending-queue entry, but `subscribe()` and `disconnect()` just call the
+synchronous `sendRequest()` and return — the promise resolves on send, never
+on response, so it can't catch a subscribe failure (e.g. the per-client
+subscription cap). A developer hit exactly this: their subscribe failures
+were silently invisible because a `try/catch` around `await api.subscribe()`
+can never fire on those versions.
+
+While this fix was in flight, freenet-stdlib PR #94 landed on `main`
+(2026-08-22) making `subscribe()` genuinely correlate to its response —
+ships as TS package **0.4.0**, not yet published to npm. `disconnect()` is
+untouched by #94 and stays fire-and-forget in every version.
+
+- `ui-patterns.md` and `SKILL.md` now state both behaviors explicitly by
+  version: pre-0.4.0 (the callback-based workaround via
+  `onSubscribeResponse`/`onErr`) and 0.4.0+ (the `try/catch` pattern is
+  correct).
+- `disconnect` is documented as resolving on send in every version, with no
+  version caveat needed.
+
 ## 1.28.0 (2026-08-21)
 
 The guide taught HOW to resolve a pointer but never WHO should, so a reader had

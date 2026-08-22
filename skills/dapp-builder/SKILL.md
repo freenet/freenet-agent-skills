@@ -488,13 +488,19 @@ matching `@freenetorg/freenet-stdlib` release:
 ```
 
 The TS package v0.2.0 brought the API to parity with the Rust client:
-`FreenetWsApi` with **promise-based** `get`/`put`/`update`/`subscribe`/
-`disconnect` (`await api.X(...)`), full `ResponseHandler` including
-`onContractNotFound`/`onSubscribeResponse`/`onClose`, inbound
-`ReassemblyBuffer`, and transparent outbound chunking for payloads
->512 KB. Callbacks still fire alongside promises for backward
-compatibility; the default request timeout is 30 s. See
-`references/ui-patterns.md` for the full pattern and a warning about the
+`FreenetWsApi` with **promise-based** `get`/`put`/`update`
+(`await api.X(...)`, resolves/rejects on the matching response), full
+`ResponseHandler` including `onContractNotFound`/`onSubscribeResponse`/
+`onClose`, inbound `ReassemblyBuffer`, and transparent outbound chunking
+for payloads >512 KB. Callbacks still fire alongside the promise-based
+calls for backward compatibility; the default request timeout is 30 s.
+`subscribe` is also promise-based **from TS package 0.4.0** (resolves/
+rejects on the matching `SubscribeResponse`); on the npm-published 0.3.0
+and earlier it resolves as soon as the request is sent, never on the
+host's response — use the `ResponseHandler` callbacks to detect a refused
+subscribe on those versions. `disconnect` resolves on send in every
+version. See `references/ui-patterns.md` for the full pattern (including
+which stdlib version you need for which behavior) and a warning about the
 private `sendRequest` cast used for delegate messages until a public
 builder lands.
 
