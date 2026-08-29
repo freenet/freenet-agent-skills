@@ -265,11 +265,11 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 - **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Cap your state's distinct related references at validation time so you can't produce a state needing more than 10.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
-### Validate-After-Update Pattern
+### Requesting Related State From `update_state`
 
-`update_state` does **not** currently have a `related` parameter (as of writing). If your auth needs to consult another contract, do it in `validate_state` — the host runs `validate_state` after every successful `update_state` and rolls back on `Invalid`.
+`update_state` takes no `related` parameter, but it is not confined to `validate_state` for cross-contract reads: return `UpdateModification::requires(vec![...])` and the host resolves those contracts — local state store first, network only as fallback — and re-invokes `update_state` with the results supplied as `UpdateData::RelatedState` entries. The host also runs `validate_state` after every successful `update_state` and rolls back on `Invalid`, so validate remains the backstop.
 
-This pattern means `update_state` does cheap checks only (signature, size, format); cross-contract auth happens in the validate pass that the host runs immediately after.
+**Prefer the `update_state` route where either would work.** Related state resolved during *validation* is never captured by the conformance system (freenet-core#5376), so a contract whose validity depends on that path can never be judged — and an unjudgeable contract reads exactly like a clean one. The update path is captured today.
 
 ### Production Track Record
 

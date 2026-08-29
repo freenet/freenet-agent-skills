@@ -181,6 +181,10 @@ Practical limits:
 - `freenet-scaffold`'s `#[composable]` has no inter-contract awareness
   (freenet-core#2870), so cross-contract dependencies are hand-rolled.
 
+The mechanism with code, and which of the two paths to request related state
+from, is in `references/state-authorization-patterns.md` →
+"Related-Contracts Mechanism".
+
 ---
 
 ## Development Workflow
