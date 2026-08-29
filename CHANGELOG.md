@@ -38,6 +38,17 @@ at `runtime.rs:946` no longer exists anywhere in that file.
   `freenet-scaffold`'s `#[composable]` has no inter-contract awareness
   (freenet-core#2870).
 
+`references/state-authorization-patterns.md` already documented the mechanism
+and its limits, so SKILL.md was contradicting its own reference file; SKILL.md
+now points at it. That reference told authors to do cross-contract auth in
+`validate_state` because `update_state` has no `related` parameter. The
+premise is literally true and the conclusion is now the worse advice:
+`UpdateModification::requires(vec![...])` exists (stdlib
+`src/contract_interface/update.rs:51`) and the host re-invokes `update_state`
+with the results as `UpdateData::RelatedState`, and that is the path
+conformance can actually see. Section rewritten, with `validate_state` kept as
+the documented backstop.
+
 Also corrects two stale version claims found while checking the first:
 
 - "As of May 2026 — River pins `freenet-stdlib = "0.6.0"` but the upstream
