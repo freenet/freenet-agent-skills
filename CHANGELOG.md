@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.29.0 (2026-08-28)
+
+Corrects the `dapp-builder` claim that contracts cannot read each other's
+state, and adds the constraint that actually governs when you may.
+
+The skill said "Contracts reading other contracts' state is planned but not
+yet implemented". That is wrong and it misled a reader today. Verified
+against freenet-core `main`: `validate_state` can return
+`ValidateResult::RequestRelated(Vec<ContractInstanceId>)`, and
+`fetch_related_for_validation_network`
+(`crates/core/src/contract/executor/runtime/contract_ops.rs`) resolves those
+ids and re-invokes with `RelatedContracts` populated, on both the PUT and
+UPDATE paths. The supporting machinery is real, not a stub: off-loop
+deferral bounded by `MAX_INFLIGHT_DEFERRALS = 256`, an RAII `ResumeGuard`
+giving exactly-once resume, and backpressure that surfaces `MissingRelated`
+rather than growing unboundedly (freenet-core#4391). freenet-core#2870 is
+still open but is itself partly stale — the UPDATE-path `todo!()` it cites
+at `runtime.rs:946` no longer exists anywhere in that file.
+
+- The load-bearing addition is the safety rule, not the capability. A
+  contract's verdict must be a function of its inputs or replicas diverge,
+  so reading an immutable or once-true-always-true fact is safe, and gating
+  validity on mutable or growing state is not — "reject if the other party
+  has more than N entries" flips as their state grows, and peers validating
+  at different moments never converge. That belongs in client-side policy.
+- Documents the practical limits: one round only (a `RequestRelated` is
+  fetched and retried exactly once, `contract_ops.rs:431-432`, capped at
+  `MAX_RELATED_CONTRACTS_PER_REQUEST = 10`), `RelatedStateAndDelta` is the
+  client-submittable UPDATE form while bare `RelatedState`/`RelatedDelta`
+  are runtime-internal, a related fetch that times out can wedge an UPDATE
+  merge (freenet-core#4077), related state resolved during *validation* is
+  never captured by the conformance system so such a contract is
+  unjudgeable and reads exactly like a clean one (freenet-core#5376), and
+  `freenet-scaffold`'s `#[composable]` has no inter-contract awareness
+  (freenet-core#2870).
+
+Also corrects two stale version claims found while checking the first:
+
+- "As of May 2026 — River pins `freenet-stdlib = "0.6.0"` but the upstream
+  crate is now `0.8`" is out of date in both halves. River's workspace
+  `Cargo.toml` pins `0.8.5`, which is the current crates.io release, so the
+  reference dApp and upstream no longer diverge. The "track this against
+  stdlib 0.8 once River bumps" conditional is dropped.
+- The security section attributed the `DEFAULT_CIPHER` / `DEFAULT_NONCE`
+  removal to stdlib v0.6.0. Both constants are still present in the
+  published 0.6.0 and 0.6.1 sources and gone by 0.8.2; freenet-stdlib PR #75
+  merged 2026-05-16T18:00Z and 0.8.0 was published four minutes later, so
+  the removal shipped in **0.8.0**. Code referencing them fails against 0.8
+  or newer, not 0.6 or newer. The upgrade note now says 0.6 → 0.8 rather
+  than stepping through 0.7, which was never published to crates.io.
+
 ## 1.28.1 (2026-08-22)
 
 Corrects the TypeScript client docs' claim about `subscribe`/`disconnect`,

@@ -140,7 +140,46 @@ Every rule below is checkable in review and grounded in a measured finding from 
 ## Advanced Capabilities
 
 - **Subscriptions:** Clients can subscribe to contracts and get notified of changes immediately (real-time apps)
-- **Contract Interoperability:** Contracts reading other contracts' state is planned but not yet implemented
+- **Contract Interoperability:** Cross-contract reads are implemented and working.
+  `validate_state` can return `ValidateResult::RequestRelated(Vec<ContractInstanceId>)`;
+  the host fetches those contracts and re-invokes with `RelatedContracts` populated
+  (`fetch_related_for_validation_network` in
+  `crates/core/src/contract/executor/runtime/contract_ops.rs`, on both the PUT and
+  UPDATE paths). The machinery behind it is real: a related fetch that would block the
+  serial contract loop is deferred to an off-loop waiter, bounded by
+  `MAX_INFLIGHT_DEFERRALS = 256` with an RAII guard giving exactly-once resume, and an
+  over-cap op surfaces `MissingRelated` rather than growing unboundedly
+  (freenet-core#4391, `crates/core/src/contract.rs`). freenet-core#2870 ("Complete
+  related contract mechanism implementation") is still open but is itself partly stale —
+  the UPDATE-path `todo!()` it cites at runtime.rs:946 no longer exists.
+
+**The thing to get right is not whether it works, but what you are allowed to read.**
+A contract's verdict must be a function of its inputs, or replicas diverge. Reading
+another contract widens the input set to something that changes underneath you:
+
+- Reading an **immutable** fact (a certificate, a signed key) is safe — every peer gets
+  the same answer forever.
+- Reading a **monotonic** fact in the once-true-always-true direction is safe.
+- **Gating validity on mutable or growing state is not.** "Reject if the other party has
+  more than N entries" flips from valid to invalid as their state grows, so peers
+  validating at different moments disagree and never converge. That class of rule belongs
+  in client-side policy, not in `validate_state`.
+
+Practical limits:
+
+- **One round only.** A `RequestRelated` is fetched and retried **exactly once**; a
+  second is an error (`contract/executor/runtime/contract_ops.rs:431-432`), capped at
+  `MAX_RELATED_CONTRACTS_PER_REQUEST = 10` ids. No chained dependencies.
+- On the client-facing UPDATE surface, `UpdateData::RelatedStateAndDelta` is the form
+  you send; bare `UpdateData::RelatedState` / `RelatedDelta` are rejected from
+  `ContractRequest::Update` and reserved for the runtime's own request-related
+  orchestration, which surfaces `RelatedState` to your WASM itself.
+- A related fetch that times out can wedge an UPDATE merge (freenet-core#4077, open).
+- Related state resolved during *validation* is never captured by the conformance
+  system (freenet-core#5376, open), so a contract that depends on that path is
+  unjudgeable — and an unjudgeable contract reads exactly like a clean one.
+- `freenet-scaffold`'s `#[composable]` has no inter-contract awareness
+  (freenet-core#2870), so cross-contract dependencies are hand-rolled.
 
 ---
 
@@ -443,18 +482,18 @@ deserialization failures, missing features, and "variant index out of range"
 errors. Check [River's workspace Cargo.toml](https://github.com/freenet/river/blob/main/Cargo.toml)
 before pinning.
 
-As of May 2026 — River pins `freenet-stdlib = "0.6.0"` but the upstream
-crate is now `0.8` (0.6 → 0.7 added Base58-stringified `contract_states`
-keys in `NodeDiagnosticsResponse`; 0.7 → 0.8 hardened wire-boundary enums
-with `#[non_exhaustive]` and removed the world-known `DEFAULT_CIPHER` /
-`DEFAULT_NONCE` constants). If you build only against River, mirror its
-pin; if your code links into stdlib 0.8 directly, you need the bumped
-version *and* the wildcard match arms / random cipher generation
-documented in `references/delegate-patterns.md`.
+As of August 2026 — River pins `freenet-stdlib = "0.8.5"`, which is the
+current crates.io release, so River and upstream no longer diverge. If you
+are moving code off an older pin, the step is 0.6 → 0.8 (no 0.7 was ever
+published to crates.io): it added Base58-stringified `contract_states` keys
+in `NodeDiagnosticsResponse`, hardened wire-boundary enums with
+`#[non_exhaustive]`, and removed the world-known `DEFAULT_CIPHER` /
+`DEFAULT_NONCE` constants, so you need the wildcard match arms / random
+cipher generation documented in `references/delegate-patterns.md`.
 
 ```toml
-# Workspace-wide (Cargo.toml) — track this against stdlib 0.8 once River bumps.
-freenet-stdlib = { version = "0.8", features = ["contract"] }
+# Workspace-wide (Cargo.toml) — matches River pin.
+freenet-stdlib = { version = "0.8.5", features = ["contract"] }
 freenet-scaffold = "0.2.2"
 freenet-scaffold-macro = "0.2.2"
 
@@ -506,13 +545,14 @@ builder lands.
 
 ### Security: removed encryption defaults
 
-stdlib v0.6.0 (PR #75) **removed** the public constants `DEFAULT_CIPHER`
+stdlib v0.8.0 (PR #75) **removed** the public constants `DEFAULT_CIPHER`
 and `DEFAULT_NONCE` to close a CVE-class issue (world-known keys leaked
-into any binary that imported them). Delegates that previously used these
+into any binary that imported them). They are still present in 0.6.0 and
+0.6.1. Delegates that previously used these
 must now generate random values per session — e.g.
 `let key: [u8; 32] = rand::random(); let nonce: [u8; 24] = rand::random();`.
 Code still referencing the old constants will fail to compile against
-stdlib 0.6 or newer.
+stdlib 0.8 or newer.
 
 ---
 
