@@ -316,8 +316,9 @@ resolver = "2"
 [workspace.dependencies]
 # Mirror River's pinned versions; bump together when upgrading. Check
 # https://github.com/freenet/river/blob/main/Cargo.toml before pinning.
-# stdlib bumped to 0.8 to track current freenet-stdlib release (0.6→0.7→0.8).
-freenet-stdlib = { version = "0.8", features = ["contract"] }
+# stdlib 0.8.5 tracks the current freenet-stdlib release (0.6 → 0.8; no 0.7
+# was ever published to crates.io).
+freenet-stdlib = { version = "0.8.5", features = ["contract"] }
 freenet-scaffold = "0.2.2"
 freenet-scaffold-macro = "0.2.2"
 serde = { version = "1", features = ["derive"] }

@@ -127,10 +127,10 @@ edition = "2021"
 
 [dependencies]
 # Mirror River's pinned versions; see https://github.com/freenet/river/blob/main/ui/Cargo.toml
-# stdlib bumped to 0.8 to track current freenet-stdlib release.
-dioxus = { version = "0.7.3", features = ["web"] }
+# stdlib 0.8.5 tracks the current freenet-stdlib release.
+dioxus = { version = "0.7.9", features = ["web"] }
 dioxus-free-icons = { version = "0.10.0", features = ["font-awesome-solid"] }
-freenet-stdlib = { version = "0.8", features = ["net"] }
+freenet-stdlib = { version = "0.8.5", features = ["net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "Window", "Location"] }
@@ -299,7 +299,7 @@ asynchronously. Wait for the "connected" callback before sending requests.
 The UI crate needs these dependencies for WebSocket to work on `wasm32-unknown-unknown`:
 
 ```toml
-freenet-stdlib = { version = "0.6.0", features = ["net"] }
+freenet-stdlib = { version = "0.8.5", features = ["net"] }
 # Required for wasm32-unknown-unknown: use JS crypto.getRandomValues for RNG
 getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
 ```

@@ -63,6 +63,17 @@ Also corrects two stale version claims found while checking the first:
   the removal shipped in **0.8.0**. Code referencing them fails against 0.8
   or newer, not 0.6 or newer. The upgrade note now says 0.6 → 0.8 rather
   than stepping through 0.7, which was never published to crates.io.
+- The same sweep over `references/`: `build-system.md` carried a
+  "(0.6→0.7→0.8)" comment attributing changes to a release that never
+  shipped, and its workspace stanza plus `ui-patterns.md` pinned `0.8`,
+  `0.6.0` and `dioxus 0.7.3` while claiming to mirror River. River pins
+  `freenet-stdlib 0.8.5` (workspace) and `dioxus 0.7.9` (`ui/Cargo.toml`);
+  those four pins now say so. The `=0.8.0` pin in `build-system.md`'s
+  contract-crate example is deliberately left alone — that section teaches
+  pinning every WASM-affecting dependency with `=x.y.z` for contract-ID
+  reproducibility, and every dependency in the example is a frozen exact
+  pin, so the numbers illustrate the technique rather than tracking a
+  release.
 
 ## 1.28.1 (2026-08-22)
 

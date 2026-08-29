@@ -505,7 +505,7 @@ freenet-scaffold-macro = "0.2.2"
 freenet-stdlib = { workspace = true, features = ["net"] }
 
 # UI framework
-dioxus = { version = "0.7.3", features = ["web"] }
+dioxus = { version = "0.7.9", features = ["web"] }
 ```
 
 The `contract` feature is required for contract crates targeting
