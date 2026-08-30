@@ -263,6 +263,9 @@ Determine what private data each user needs stored locally and split it across d
 > (freenet-core#3972). Its contract GET reads the local store only, and its
 > contract subscribe registers no network demand, so subscribing does not keep a
 > contract alive in the network (freenet-core#4669). Both are being worked on.
+> Test that work against a real node: `freenet local` never runs the loop that
+> services a delegate's contract requests, so a delegate's GET, PUT, UPDATE and
+> SUBSCRIBE all silently do nothing there (freenet-core#5273).
 > `references/delegate-patterns.md` → "Delegate Capabilities" has the verified
 > detail and the current state.
 

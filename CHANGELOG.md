@@ -23,7 +23,7 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
 - **"Read, write, and subscribe to contracts" moved out of "implemented and
   usable today" into a new "implemented, but local to this node" section**, with
   a per-verb table and the evidence for each. A delegate GET is gated on
-  `lookup_key` resolving locally (`crates/core/src/contract.rs:758`) and bottoms
+  `lookup_key` resolving locally (`crates/core/src/contract.rs:759`) and bottoms
   out in `perform_contract_get` (`executor_impl.rs:1431`), a bare
   `state_store.get(&key)`; the V2 error code says so in words,
   `ERR_CONTRACT_NOT_FOUND (-7): contract not in local store`. A delegate PUT
@@ -48,7 +48,7 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   `GetSecretRequest` / `GetSecretResponse` / `SetSecretRequest` as variants, none
   of which exist any more, and omitted every contract variant. Replaced with the
   real definitions from `freenet-stdlib/rust/src/delegate_interface.rs`
-  (inbound `:524`, outbound `:701`), including the asymmetry that matters when
+  (inbound `:526`, outbound `:701`), including the asymmetry that matters when
   writing a delegate: `InboundDelegateMsg` IS `#[non_exhaustive]` so a `match`
   needs a wildcard arm, while `OutboundDelegateMsg` is NOT, so adding a variant
   there is a breaking change. The doc comment at `delegate_interface.rs:518`
@@ -57,12 +57,46 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   being registered and live: the `freenet_delegate_contracts` namespace
   (`get_contract_state`, `get_contract_state_len`, `put_contract_state`,
   `update_contract_state`, `subscribe_contract`), how core detects a V2 module
-  by scanning imports, and the two traps: V2 converges on the same handlers so
-  the local-only limits apply identically, and `update_contract_state` is a full
-  state replacement that does not run the contract's `update_state` merge.
-  Alongside it, the V1 loop's bound, `MAX_CONTRACT_REQUEST_ITERATIONS = 100`,
-  which returns a truncated result rather than an error on overflow
+  by scanning imports, and the traps. The load-bearing one is that **the two API
+  versions expose the same operations under the same names and do not do the
+  same thing on writes.** V1 PUT and UPDATE go through `upsert_contract_state`
+  into `commit_state_update` (`executor_impl.rs:1996`), which emits
+  `NodeEvent::BroadcastStateChange` and notifies subscribed delegates. V2
+  `put_contract_state` / `update_contract_state` bottom out in
+  `put_contract_state_sync` / `update_contract_state_sync` (`native_api.rs:796`,
+  `:849`), raw ReDb writes whose own comments say they bypass the executor's
+  `state_store.store` call site; there is no broadcast and no delegate
+  notification on that path, so a V2 write lands on local disk and stops. The
+  call returns success and reads back locally, so a single-node test cannot see
+  it. That is freenet-core#5479, open, and the section says to use the V1
+  messages for any write other peers need to see. Also: reads and the subscribe
+  gap do apply to V2 identically, and `update_contract_state` is a full state
+  replacement that does not run the contract's `update_state` merge. Alongside
+  it, the V1 loop's bound, `MAX_CONTRACT_REQUEST_ITERATIONS = 100`, which
+  returns a truncated result rather than an error on overflow
   (freenet-core#5454).
+- **New section on `freenet local`, which does not run the delegate contract
+  loop at all.** `handle_delegate_with_contract_requests`
+  (`crates/core/src/contract.rs:537`) has two call sites, both under
+  `contract_handling` (`:1268`), which is spawned from one production site,
+  `node/p2p_impl.rs:948`, the network node. `run_local_node` (`node.rs:5768`)
+  handles `ClientRequest::DelegateOp` by calling `executor.delegate_request(...)`
+  directly (`:5851`), so a V1 delegate's `GetContractRequest`,
+  `PutContractRequest`, `UpdateContractRequest` and `SubscribeContractRequest`
+  are never serviced and nothing reports an error. freenet-core#5273 records the
+  `RequestUserInput` symptom of the same root cause; the contract verbs are not
+  recorded there. V2 host functions do work locally, because they are wasmtime
+  imports resolved inside the delegate's own execution and
+  `Executor::from_config_local` wires the store behind them
+  (`contract/executor/runtime.rs:366`, `:380`). This matters because an agent
+  building a dApp will reach for `freenet local` first, see nothing happen, and
+  have no way to tell why.
+- **The notification path is narrower than "any local commit".**
+  `send_delegate_contract_notifications` has a single call site, inside
+  `commit_state_update` (`executor_impl.rs:2108`), which is the merge path.
+  Initial-state install and resync-driven applies take a different branch and
+  never reach it (freenet-core#5481), and the V2 write path does not notify at
+  all (freenet-core#5479).
 - **New "Resource Limits" section.** Epoch interruption is the real preemption
   guard: a 100 ms global tick with a per-execution deadline derived from
   `max_execution_seconds` (default 5.0) and `epoch_deadline_trap()`, armed on
@@ -77,7 +111,17 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   (freenet-core#4824), no quarantine or circuit breaker for a delegate that
   panics every invocation (freenet-core#5467 Phase 4, designed not built), and
   no per-delegate observability at all (Phase 0) which is why the subscription
-  gap survived so long.
+  gap survived so long. Two gaps specific to execution, both freenet-core#5480:
+  the epoch trap interrupts guest code only, so a delegate parked inside a host
+  call runs to completion whatever the deadline says
+  (`wasmtime_engine.rs:695-698`); and delegates do not reach
+  `execute_wasm_blocking` (`:2326`, called only from the contract entry points
+  at `:1210` and `:1287`), so they get neither the wall-clock backstop nor the
+  panic capture contracts get. If the epoch ticker thread dies, contracts fall
+  back to the wall-clock poll and delegates fall back to nothing;
+  freenet-core#4864 added a heartbeat because that thread stopping is a real
+  scenario. The section deliberately does not say delegates are unguarded: they
+  are guarded per invocation, and the gaps are specific.
 - **New "What a Delegate Is Not Good For Yet" section**: durable pinning of
   content, autonomous background work (there is no scheduled wakeup;
   freenet-core#3972, freenet-stdlib#82 draft, shelved host side in
@@ -96,7 +140,9 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   no dashboard tab is connected and auto-denies after 60 seconds.
 - `SKILL.md` Phase 2 suggests splitting delegates "per long-running background
   task", which reads as an endorsement of a capability that is not there yet. It
-  now carries a short caveat pointing at the reference section.
+  now carries a short caveat pointing at the reference section, and that caveat
+  also says to test delegate contract access against a real node rather than
+  `freenet local`.
 
 ## 1.29.0 (2026-08-28)
 
