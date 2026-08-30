@@ -2,6 +2,102 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.30.0 (2026-08-30)
+
+Corrects what `dapp-builder` says a delegate can do with contracts, and adds the
+resource limits it never documented. Verified against freenet-core `main` @
+`b863ee7c6` and freenet-stdlib `main` @ `99ee584`.
+
+The dangerous claim was in `references/delegate-patterns.md`: a delegate that
+subscribes to a contract "is woken by `InboundDelegateMsg::ContractNotification`
+whenever that contract's state changes, with no UI open". Notification delivery
+does work, but `send_delegate_contract_notifications`
+(`crates/core/src/contract/executor/runtime/executor_impl.rs:2168`) fires on any
+*local* state commit, so a write that happened elsewhere reaches the delegate only
+if the node is subscribed to that contract by some other route. In practice that
+route is the app's own UI WebSocket, which goes away when the tab closes, so the
+background-service pattern stops working at exactly the moment it was supposed to
+earn its keep. That is the failure freenet/delta#30 hit. Delivery is also
+best-effort: a `try_send` on a bounded channel, dropped when full.
+
+- **"Read, write, and subscribe to contracts" moved out of "implemented and
+  usable today" into a new "implemented, but local to this node" section**, with
+  a per-verb table and the evidence for each. A delegate GET is gated on
+  `lookup_key` resolving locally (`crates/core/src/contract.rs:758`) and bottoms
+  out in `perform_contract_get` (`executor_impl.rs:1431`), a bare
+  `state_store.get(&key)`; the V2 error code says so in words,
+  `ERR_CONTRACT_NOT_FOUND (-7): contract not in local store`. A delegate PUT
+  calls `upsert_contract_state` and emits `NodeEvent::BroadcastStateChange`,
+  which fans out to peers *already* interested, where a client PUT opens a
+  `put::PutMsg` transaction and routes toward the key
+  (`crates/core/src/client_events.rs:519`). A delegate subscribe only inserts
+  into `DELEGATE_SUBSCRIPTIONS` (`wasm_runtime/native_api.rs:40`); nothing in
+  `ring/` reads it and `contract_in_use` (`ring/hosting.rs:1725`) has no delegate
+  term, so it sets no demand, enters no renewal, and exempts nothing from
+  eviction. Fixes are in progress under freenet-core#4669 and the
+  freenet-core#5467 epic, and the text says so rather than describing them as
+  done.
+- **"Creating other delegates from within a delegate" is no longer listed as
+  unimplemented.** The old reasoning was that no such variant exists on
+  `OutboundDelegateMsg`. The variant genuinely does not exist and the capability
+  is a host function, `DelegateCtx::create_delegate` (stdlib
+  `rust/src/delegate_host.rs:642`), registered in the
+  `freenet_delegate_management` namespace at
+  `crates/core/src/wasm_runtime/engine/wasmtime_engine.rs:2117`.
+- **Both message-enum listings were pre-v0.5 and simply wrong.** They showed
+  `GetSecretRequest` / `GetSecretResponse` / `SetSecretRequest` as variants, none
+  of which exist any more, and omitted every contract variant. Replaced with the
+  real definitions from `freenet-stdlib/rust/src/delegate_interface.rs`
+  (inbound `:524`, outbound `:701`), including the asymmetry that matters when
+  writing a delegate: `InboundDelegateMsg` IS `#[non_exhaustive]` so a `match`
+  needs a wildcard arm, while `OutboundDelegateMsg` is NOT, so adding a variant
+  there is a breaking change. The doc comment at `delegate_interface.rs:518`
+  claims otherwise and is wrong; the file now warns about it.
+- **New section on the V2 host-function API**, which was undocumented despite
+  being registered and live: the `freenet_delegate_contracts` namespace
+  (`get_contract_state`, `get_contract_state_len`, `put_contract_state`,
+  `update_contract_state`, `subscribe_contract`), how core detects a V2 module
+  by scanning imports, and the two traps: V2 converges on the same handlers so
+  the local-only limits apply identically, and `update_contract_state` is a full
+  state replacement that does not run the contract's `update_state` merge.
+  Alongside it, the V1 loop's bound, `MAX_CONTRACT_REQUEST_ITERATIONS = 100`,
+  which returns a truncated result rather than an error on overflow
+  (freenet-core#5454).
+- **New "Resource Limits" section.** Epoch interruption is the real preemption
+  guard: a 100 ms global tick with a per-execution deadline derived from
+  `max_execution_seconds` (default 5.0) and `epoch_deadline_trap()`, armed on
+  every guest entry including the V2 delegate one. Memory is capped at 256 MiB
+  by a wasmtime `ResourceLimiter`. **Fuel metering is off by default in
+  production** (`enable_metering = false`), so it is not a live guard and the
+  section says not to reason about cost in terms of it. Child-delegate creation
+  is bounded by depth 4, 8 per call, 1024 per node and a 10 MiB WASM cap; app
+  registrations by `MAX_APPS_PER_DELEGATE = 128`, `MAX_DELEGATES_PER_CLIENT =
+  256` and a 30-minute TTL sweep. The section then names what has no guard: no
+  cross-invocation cost accounting, an unbounded subscription registry
+  (freenet-core#4824), no quarantine or circuit breaker for a delegate that
+  panics every invocation (freenet-core#5467 Phase 4, designed not built), and
+  no per-delegate observability at all (Phase 0) which is why the subscription
+  gap survived so long.
+- **New "What a Delegate Is Not Good For Yet" section**: durable pinning of
+  content, autonomous background work (there is no scheduled wakeup;
+  freenet-core#3972, freenet-stdlib#82 draft, shelved host side in
+  freenet-core#4666), fetching arbitrary contracts from the network, and knowing
+  its own subscriptions after a restart.
+- Smaller corrections in the same file: UPDATE accepts only `UpdateData::State`
+  and `UpdateData::Delta` and rejects every compound and `Related*` variant;
+  subscribe requires the contract to be known locally on both registration
+  paths; there is no explicit unsubscribe, and the `TODO(#2830)` that marks it
+  cites an issue that is now closed. The header note no longer says user
+  permission requests "may have limited support" and the "User Permission
+  Pattern (Limited Support)" heading loses its qualifier: the flow is wired end
+  to end through `DashboardPrompter`
+  (`crates/core/src/contract/user_input.rs:188`, constructed at
+  `node/p2p_impl.rs:950`), which opens the permission page in the browser when
+  no dashboard tab is connected and auto-denies after 60 seconds.
+- `SKILL.md` Phase 2 suggests splitting delegates "per long-running background
+  task", which reads as an endorsement of a capability that is not there yet. It
+  now carries a short caveat pointing at the reference section.
+
 ## 1.29.0 (2026-08-28)
 
 Corrects the `dapp-builder` claim that contracts cannot read each other's

@@ -258,6 +258,14 @@ References:
 
 Determine what private data each user needs stored locally and split it across delegates by responsibility (e.g. one delegate per trust boundary or per long-running background task). Most apps need at least one delegate; many need several.
 
+> **Know the limits before you lean on a delegate for background work.** A
+> delegate runs only when something pokes it: there is no scheduled wakeup
+> (freenet-core#3972). Its contract GET reads the local store only, and its
+> contract subscribe registers no network demand, so subscribing does not keep a
+> contract alive in the network (freenet-core#4669). Both are being worked on.
+> `references/delegate-patterns.md` → "Delegate Capabilities" has the verified
+> detail and the current state.
+
 **Key questions (per delegate):**
 - What user-specific data needs persistence? (keys, preferences, cached data)
 - What signing/encryption operations are needed?
