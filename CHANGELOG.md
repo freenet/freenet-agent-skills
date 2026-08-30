@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.31.0 (2026-08-30)
+
+Adds one thing to `local-dev` that `dapp-builder` learned in 1.30.0: a delegate's
+contract requests are never serviced under `freenet local`.
+
+Every node recipe in the `local-dev` skill already uses `freenet network`, so the
+skill does not steer anyone wrong today. The gap is that it never says why that
+matters, and `freenet local` is the subcommand a reader of a local-development
+skill will reach for on their own. Its own help text calls local mode useful for
+development.
+
+- `handle_delegate_with_contract_requests` (`crates/core/src/contract.rs:537`)
+  has two call sites, both under `contract_handling` (`:1268`), which is spawned
+  from one production site, `node/p2p_impl.rs:948`, the network node.
+  `run_local_node` (`node.rs:5768`) handles `ClientRequest::DelegateOp` by
+  calling `executor.delegate_request(...)` straight through (`:5851`), which runs
+  `process()` and hands back its outbound messages without acting on them. So a
+  delegate's GET, PUT, UPDATE and SUBSCRIBE all do nothing under `freenet local`,
+  with no error anywhere. freenet-core#5273 records the `RequestUserInput`
+  symptom of the same root cause.
+- Delegate notification is dead in local mode as well:
+  `send_delegate_contract_notifications` returns immediately when
+  `delegate_notification_tx` is `None` (`executor_impl.rs:2169-2172`), and only
+  `RuntimePool` sets that field.
+- The V2 host functions are the exception, and the entry says so rather than
+  flattening it: `get_contract_state`, `put_contract_state` and
+  `update_contract_state` are wasmtime imports resolved inside the delegate's own
+  execution, so they do reach the local store. `subscribe_contract` registers and
+  can never fire.
+- A row in the "Common issues" table points at the new section, since a silent
+  no-op is exactly what sends someone to that table.
+
+Verified against freenet-core `main` @ `b863ee7c6`.
+
 ## 1.30.0 (2026-08-30)
 
 Corrects what `dapp-builder` says a delegate can do with contracts, and adds the
