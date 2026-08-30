@@ -14,8 +14,10 @@ skill will reach for on their own. Its own help text calls local mode useful for
 development.
 
 - `handle_delegate_with_contract_requests` (`crates/core/src/contract.rs:537`)
-  has two call sites, both under `contract_handling` (`:1268`), which is spawned
-  from one production site, `node/p2p_impl.rs:948`, the network node.
+  has two call sites, both reached from `contract_handling` (`:1268`) through
+  `handle_delegate_notification` (`:2076`) and `handle_contract_event` (`:2209`),
+  and `contract_handling` is spawned from one production site,
+  `node/p2p_impl.rs:948`, the network node.
   `run_local_node` (`node.rs:5768`) handles `ClientRequest::DelegateOp` by
   calling `executor.delegate_request(...)` straight through (`:5851`), which runs
   `process()` and hands back its outbound messages without acting on them. So a

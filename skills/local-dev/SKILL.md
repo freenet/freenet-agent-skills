@@ -507,9 +507,10 @@ does not service a delegate's contract requests at all.
 The loop that handles `GetContractRequest`, `PutContractRequest`,
 `UpdateContractRequest` and `SubscribeContractRequest` from a delegate is
 `handle_delegate_with_contract_requests` (`crates/core/src/contract.rs:537`).
-Both of its call sites sit under `contract_handling` (`:1268`), which is spawned
-from one production site, `crates/core/src/node/p2p_impl.rs:948`, the network
-node. `run_local_node` (`crates/core/src/node.rs:5768`) handles
+Both of its call sites are reached from `contract_handling` (`:1268`), through
+`handle_delegate_notification` (`:2076`) and `handle_contract_event` (`:2209`),
+and `contract_handling` is spawned from one production site,
+`crates/core/src/node/p2p_impl.rs:948`, the network node. `run_local_node` (`crates/core/src/node.rs:5768`) handles
 `ClientRequest::DelegateOp` by calling `executor.delegate_request(...)` straight
 through (`:5851`), which runs the delegate's `process()` and hands back its
 outbound messages without acting on any of them. Nothing reports an error, so
