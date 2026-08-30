@@ -34,9 +34,9 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   into `DELEGATE_SUBSCRIPTIONS` (`wasm_runtime/native_api.rs:40`); nothing in
   `ring/` reads it and `contract_in_use` (`ring/hosting.rs:1725`) has no delegate
   term, so it sets no demand, enters no renewal, and exempts nothing from
-  eviction. Fixes are in progress under freenet-core#4669 and the
-  freenet-core#5467 epic, and the text says so rather than describing them as
-  done.
+  eviction. Both gaps are open under freenet-core#4669 and the freenet-core#5467
+  epic with no fix merged as of 2026-08-30, and the text says so rather than
+  describing a fix as done or as imminent.
 - **"Creating other delegates from within a delegate" is no longer listed as
   unimplemented.** The old reasoning was that no such variant exists on
   `OutboundDelegateMsg`. The variant genuinely does not exist and the capability
@@ -51,8 +51,9 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   (inbound `:526`, outbound `:701`), including the asymmetry that matters when
   writing a delegate: `InboundDelegateMsg` IS `#[non_exhaustive]` so a `match`
   needs a wildcard arm, while `OutboundDelegateMsg` is NOT, so adding a variant
-  there is a breaking change. The doc comment at `delegate_interface.rs:518`
-  claims otherwise and is wrong; the file now warns about it.
+  there is a breaking change. The doc comment at `delegate_interface.rs:518-519`
+  claims otherwise and is wrong; the file now warns about it, and tells the
+  reader to check the attribute in the stdlib version they build against.
 - **New section on the V2 host-function API**, which was undocumented despite
   being registered and live: the `freenet_delegate_contracts` namespace
   (`get_contract_state`, `get_contract_state_len`, `put_contract_state`,
@@ -64,8 +65,9 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   `NodeEvent::BroadcastStateChange` and notifies subscribed delegates. V2
   `put_contract_state` / `update_contract_state` bottom out in
   `put_contract_state_sync` / `update_contract_state_sync` (`native_api.rs:796`,
-  `:849`), raw ReDb writes whose own comments say they bypass the executor's
-  `state_store.store` call site; there is no broadcast and no delegate
+  `:849`), raw ReDb writes whose own comment says "the V2 path bypasses the
+  executor `state_store` chokepoint" (`native_api.rs:814-816`); there is no
+  broadcast and no delegate
   notification on that path, so a V2 write lands on local disk and stops. The
   call returns success and reads back locally, so a single-node test cannot see
   it. That is freenet-core#5479, open, and the section says to use the V1
@@ -85,12 +87,17 @@ best-effort: a `try_send` on a bounded channel, dropped when full.
   `PutContractRequest`, `UpdateContractRequest` and `SubscribeContractRequest`
   are never serviced and nothing reports an error. freenet-core#5273 records the
   `RequestUserInput` symptom of the same root cause; the contract verbs are not
-  recorded there. V2 host functions do work locally, because they are wasmtime
-  imports resolved inside the delegate's own execution and
+  recorded there. Three of the V2 host functions do work locally, because they
+  are wasmtime imports resolved inside the delegate's own execution and
   `Executor::from_config_local` wires the store behind them
-  (`contract/executor/runtime.rs:366`, `:380`). This matters because an agent
-  building a dApp will reach for `freenet local` first, see nothing happen, and
-  have no way to tell why.
+  (`contract/executor/runtime.rs:366`, `:380`): `get_contract_state`,
+  `put_contract_state` and `update_contract_state` all hit the local store.
+  `subscribe_contract` is the exception, and notification delivery is dead
+  locally for both API versions, because `delegate_notification_tx` is set only
+  by `RuntimePool` (`pool.rs:538`) and `freenet local` builds a plain `Executor`
+  (`bin/freenet.rs:183`) that leaves it `None` (`contract/executor.rs:1685`).
+  This matters because an agent building a dApp will reach for `freenet local`
+  first, see nothing happen, and have no way to tell why.
 - **The notification path is narrower than "any local commit".**
   `send_delegate_contract_notifications` has a single call site, inside
   `commit_state_update` (`executor_impl.rs:2108`), which is the merge path.

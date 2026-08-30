@@ -5,8 +5,9 @@ Delegates are WebAssembly agents that run locally on the user's device within fr
 > **Note:** This document focuses on patterns used in River. Read
 > [Delegate Capabilities](#delegate-capabilities) before designing around
 > contract access or background work. Several delegate verbs exist and their
-> handlers run, but stay local to this node, and the difference decides whether
-> an app works once the browser tab closes.
+> handlers run, and none of them reaches the network the way the client request
+> of the same name does. That difference decides whether an app works once the
+> browser tab closes.
 
 ## DelegateInterface Trait
 
@@ -35,7 +36,7 @@ impl DelegateInterface for MyDelegate {
 **Implemented and usable today:**
 - Store private data on behalf of users (secrets, keys, preferences) through
   `DelegateCtx::get_secret` / `set_secret` / `has_secret` / `remove_secret` /
-  `list_secrets` (freenet-stdlib `rust/src/delegate_host.rs:344-466`)
+  `list_secrets` (freenet-stdlib `rust/src/delegate_host.rs:365-466`)
 - Send/receive messages from UIs, and from *other apps* on the same node
 - Perform cryptographic operations (signing, encryption)
 - **Request user permission** via `OutboundDelegateMsg::RequestUserInput`. The
@@ -54,10 +55,11 @@ impl DelegateInterface for MyDelegate {
   exist and the capability is a host function rather than an outbound message,
   so its absence proved nothing.
 
-**Implemented, but local to this node.** A delegate can read, write and
-subscribe to contracts, and every one of those handlers runs. What none of them
-do is reach the network the way the equivalent client request does. Verified
-against freenet-core `main` @ `b863ee7c6`:
+**Implemented, and none of it reaches the network the way a client request
+does.** A delegate can read, write and subscribe to contracts, and every one of
+those handlers runs. GET and SUBSCRIBE stay entirely local; PUT and UPDATE store
+locally and broadcast to peers that are already interested, without the routing a
+client PUT performs. Verified against freenet-core `main` @ `b863ee7c6`:
 
 The table covers the V1 (`OutboundDelegateMsg`) path. V2 writes reach the
 network even less than these; see
@@ -80,7 +82,7 @@ network even less than these; see
   not hold. The V2 error code says the same thing in words:
   `ERR_CONTRACT_NOT_FOUND (-7): contract not in local store`
   (`crates/core/src/wasm_runtime/native_api.rs:1734`). As of 2026-08-30 the read
-  path has no tracking issue of its own, so do not assume it is about to change.
+  path has no tracking issue of its own, so do not expect it to change soon.
 - **A delegate PUT is not a client PUT.** It calls `upsert_contract_state`
   (`contract.rs:716`), which stores locally and emits
   `NodeEvent::BroadcastStateChange` (`crates/core/src/message.rs:953`), fanning
@@ -89,16 +91,15 @@ network even less than these; see
   (`crates/core/src/client_events.rs:519`, whose own comment reads "finds peers,
   sends the request"). The missing piece is placement: no request is routed
   toward the key, so nothing puts the contract anywhere near where a later GET
-  will look for it. A broadcast that finds no targets is not simply dropped, it
-  retries with backoff and is stashed for re-emission when an interested peer
-  appears (`crates/core/src/node/network_bridge/p2p_protoc/broadcast.rs:178`),
+  will look for it. A broadcast that finds no targets retries with backoff and
+  is stashed for re-emission when an interested peer appears (`crates/core/src/node/network_bridge/p2p_protoc/broadcast.rs:179`),
   and the periodic InterestSync anti-entropy heals from the other direction. So
   the state can still reach peers that later take an interest. It will not become
   findable by key.
 - **A delegate UPDATE takes only `UpdateData::State` and `UpdateData::Delta`.**
   `StateAndDelta` and every `Related*` variant are rejected with
   `Err("Unsupported UpdateData variant")`, because the delegate API has no way to
-  supply the related-contract context (`contract.rs:822-856`). UPDATE also needs
+  supply the related-contract context (`contract.rs:840-855`). UPDATE also needs
   the contract to resolve locally and returns `Err("Contract not found")`
   otherwise.
 - **A delegate subscription registers no network demand.** It inserts into
@@ -109,13 +110,13 @@ network even less than these; see
   `has_client_subscriptions(..) || has_downstream_subscribers(..)` with no
   delegate term. So a delegate subscribe does not set `contract_in_use`, does not
   enter `contracts_needing_renewal()`, and does not exempt the contract from
-  eviction. This is freenet-core#4669, Phase 1 of the freenet-core#5467 epic. It
-  is open, its design is signed off in the issue, and it is being worked on as of
-  2026-08-30. Nothing has landed; treat the behaviour above as current until you
-  have checked `contract_in_use` yourself.
+  eviction. This is freenet-core#4669, Phase 1 of the freenet-core#5467 epic. As
+  of 2026-08-30 it is open with its design signed off in the issue, and no PR is
+  linked to it. Nothing has landed; treat the behaviour above as current until
+  you have checked `contract_in_use` yourself.
 - **Subscribing also requires the contract to be known locally.** Both
   registration paths validate before inserting, under different names: V1 calls
-  `lookup_key` (`contract.rs:932`), V2 calls `resolve_contract_key`
+  `lookup_key` (`contract.rs:931`), V2 calls `resolve_contract_key`
   (`native_api.rs:906`, defined at `:747`), which resolves through the contract
   store's index. Grepping for `lookup_key` in `native_api.rs` finds nothing.
 - **There is no explicit unsubscribe.** `contract.rs:915` carries
@@ -167,12 +168,23 @@ messages without acting on any of them.
 freenet-core#5273. The contract verbs share the root cause and are not recorded
 there.
 
-The V2 host functions behave differently, because they are wasmtime imports
-resolved inside the delegate's own execution rather than messages the node
-services afterwards. `Executor::from_config_local` delegates to `from_config`
-(`crates/core/src/contract/executor/runtime.rs:366`), which wires the state store
-those imports read and write (`:380`). So `ctx.get_contract_state` and
-`ctx.put_contract_state` do run under `freenet local`, against the local store.
+Three of the V2 host functions do work under `freenet local`, because they are
+wasmtime imports resolved inside the delegate's own execution rather than
+messages the node services afterwards. `Executor::from_config_local` delegates to
+`from_config` (`crates/core/src/contract/executor/runtime.rs:366`), which wires
+the state store they read and write (`:380`), so `ctx.get_contract_state`,
+`ctx.put_contract_state` and `ctx.update_contract_state` all hit the local store.
+
+`subscribe_contract` is the exception, and notification delivery is dead locally
+for both API versions. `send_delegate_contract_notifications` returns immediately
+when `delegate_notification_tx` is `None` (`executor_impl.rs:2169-2172`), and that
+field is set only by `RuntimePool` (`contract/executor/runtime/pool.rs:538`,
+`:563`, `:816`). `freenet local` builds a plain `Executor` through
+`from_config_local` (`crates/core/src/bin/freenet.rs:183`), which leaves it `None`
+(`contract/executor.rs:1685`). Nothing drains the channel in local mode either:
+`take_delegate_notification_rx` has one caller, `contract.rs:1276`, inside
+`contract_handling`. So a local `subscribe_contract` returns `true`, registers in
+`DELEGATE_SUBSCRIPTIONS`, and can never fire.
 
 **The rule that falls out:** test a delegate's contract access against a real
 node. A V1 delegate that works on the network does nothing under `freenet local`,
@@ -249,15 +261,14 @@ reordering either enum is a wire break. `inbound_delegate_msg_wire_format_is_sta
 that test, so do not rely on CI to catch it.
 
 One trap when reading the source: the doc comment above `InboundDelegateMsg`
-(`delegate_interface.rs:517-518`) says its `#[non_exhaustive]` "matches the
+(`delegate_interface.rs:518-519`) says its `#[non_exhaustive]` "matches the
 pre-existing `#[non_exhaustive]` on `OutboundDelegateMsg`". `OutboundDelegateMsg`
 does not carry that attribute. Trust the attribute, not the comment.
 
-The asymmetry is a wart rather than a design, so it may be closed. If a later
-stdlib marks `OutboundDelegateMsg` `#[non_exhaustive]` too, an exhaustive match
-on it stops compiling and a wildcard arm becomes required on both sides. Check
-the attribute in the stdlib version you build against rather than trusting the
-listings here.
+Check the attribute in the stdlib version you build against rather than trusting
+the listings here. If a later stdlib marks `OutboundDelegateMsg`
+`#[non_exhaustive]` too, an exhaustive match on it stops compiling and a wildcard
+arm becomes required on both sides.
 
 ## V2 Host Functions: Direct Contract Access
 
@@ -269,8 +280,9 @@ There are two live delegate API versions, and a delegate may use either.
 `DelegateContext`. The loop is at `crates/core/src/contract.rs:591` and is
 bounded by `MAX_CONTRACT_REQUEST_ITERATIONS = 100` (`contract.rs:60`). On
 overflow it returns whatever it accumulated so far (`contract.rs:600`) rather
-than erroring, so a delegate that exceeds the bound sees a truncated result and
-no failure signal. Whether that should be an error is freenet-core#5454.
+than erroring. The delegate is simply not re-invoked, and the client receives a
+truncated set of outbound messages with no failure signal. Whether that should be
+an error is freenet-core#5454.
 
 **V2, synchronous host calls.** Methods on `DelegateCtx` that return in-line,
 with no continuation to manage:
@@ -284,8 +296,9 @@ ctx.create_delegate(wasm, params, cipher, nonce)          // -> Result<([u8; 32]
 ```
 
 `get_contract_state_len` is the paired length query the two-step read protocol
-uses. The first five import from the `freenet_delegate_contracts` namespace and
-`create_delegate` from `freenet_delegate_management`. Both are registered in the
+uses. Those four plus `get_contract_state_len` import from the
+`freenet_delegate_contracts` namespace, and `create_delegate` from
+`freenet_delegate_management`. Both are registered in the
 wasmtime linker (`wasmtime_engine.rs:2035` and `:2117`), and core decides a
 module is V2 by scanning its imports (`wasmtime_engine.rs:923`). The
 implementations are in `crates/core/src/wasm_runtime/native_api.rs`.
@@ -298,14 +311,16 @@ call site says otherwise. On writes they diverge, and the V2 call still returns
 success and still reads back locally, so a single-node test cannot tell them
 apart. Three things to know:
 
-- **V2 writes reach the network LESS than V1 writes, not the same amount.** V1
+- **V2 writes reach the network LESS than V1 writes.** V1
   PUT and UPDATE go through `upsert_contract_state` into `commit_state_update`
   (`executor_impl.rs:1996`), which emits `NodeEvent::BroadcastStateChange` and
   notifies subscribed delegates. V2 `put_contract_state` and
   `update_contract_state` bottom out in `put_contract_state_sync` /
   `update_contract_state_sync` (`native_api.rs:796` and `:849`), which write to
-  ReDb directly. Their own comments say the path "bypasses the executor's
-  `state_store.store` call site". There is no broadcast and no delegate
+  ReDb directly. The comment on the first says "the V2 path bypasses the
+  executor `state_store` chokepoint" (`native_api.rs:814-816`), and the wiring
+  site says the same (`contract/executor/runtime.rs:381-384`). There is no
+  broadcast and no delegate
   notification on that path at all, so a V2 write lands on local disk and stops.
   This is freenet-core#5479, open. Until it is fixed, use the V1
   `PutContractRequest` / `UpdateContractRequest` messages for any write whose
@@ -315,12 +330,13 @@ apart. Three things to know:
   `get_contract_state` reads the same local store.
 - **`update_contract_state` is a full state replacement.** It does not run the
   contract's `update_state` merge logic, and it fails if there is no prior state
-  (stdlib `delegate_host.rs:573-580`).
+  (stdlib `delegate_host.rs:574-580`).
 
 ## Resource Limits
 
-A delegate is not unguarded. The guard that matters is per-invocation
-preemption, and it is not fuel.
+A delegate is not unguarded. The guard that carries the weight is per-invocation
+preemption by the wasmtime epoch deadline. Fuel metering is off in production, so
+it guards nothing today.
 
 - **Epoch preemption.** `max_execution_seconds` defaults to 5.0
   (`crates/core/src/wasm_runtime/runtime.rs:742`), enforced by wasmtime epoch
@@ -347,8 +363,11 @@ preemption, and it is not fuel.
 
 What has no guard today, so do not design as though it did:
 
-- **No cross-invocation cost accounting.** Every limit above bounds one call.
-  Nothing bounds a delegate that makes many cheap calls indefinitely.
+- **No cross-invocation cost accounting.** The execution and memory limits above
+  bound one call each. Nothing measures or bounds the CPU and memory a delegate
+  consumes across many cheap calls. The registry caps are the exception: the
+  child-delegate and app-registration bounds do span invocations, and they bound
+  counts rather than cost.
 - **The epoch trap only interrupts guest code.** Wasmtime's epoch checks sit at
   wasm loop backedges and function entries, so a blocking host call in flight is
   never cut off; the trap fires only once control returns to guest code
