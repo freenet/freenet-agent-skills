@@ -59,6 +59,10 @@ subscribe to contracts, and every one of those handlers runs. What none of them
 do is reach the network the way the equivalent client request does. Verified
 against freenet-core `main` @ `b863ee7c6`:
 
+The table is the V1 (`OutboundDelegateMsg`) path. The V2 host functions are
+worse for writes, not equivalent; see
+[V2 Host Functions](#v2-host-functions-direct-contract-access).
+
 | Verb | Local | Network |
 |---|---|---|
 | `GetContractRequest` | reads the local state store | nothing. No GET operation is started |
@@ -68,26 +72,33 @@ against freenet-core `main` @ `b863ee7c6`:
 
 - **A delegate GET only sees contracts this node already holds.** The handler is
   gated on `executor().lookup_key(&contract_id)` resolving locally
-  (`crates/core/src/contract.rs:758`), and when it does resolve the fetch bottoms
+  (`crates/core/src/contract.rs:759`), and when it does resolve the fetch bottoms
   out in `perform_contract_get`
-  (`crates/core/src/contract/executor/runtime/executor_impl.rs:1431`), which is a
-  `state_store.get(&key)` and nothing else. The delegate gets `None` for anything
-  the node does not hold. The V2 error code says the same thing in words:
+  (`crates/core/src/contract/executor/runtime/executor_impl.rs:1431`), which reads
+  the local state store and, when the code is asked for, the local contract store.
+  Neither touches the network. The delegate gets `None` for anything the node does
+  not hold. The V2 error code says the same thing in words:
   `ERR_CONTRACT_NOT_FOUND (-7): contract not in local store`
-  (`crates/core/src/wasm_runtime/native_api.rs:1734`). A fix is in progress under
-  the freenet-core#5467 epic; re-check this before relying on either behaviour.
+  (`crates/core/src/wasm_runtime/native_api.rs:1734`). As of 2026-08-30 the read
+  path has no tracking issue of its own, so do not assume it is about to change.
 - **A delegate PUT is not a client PUT.** It calls `upsert_contract_state`
-  (`contract.rs:714`), which stores locally and emits
+  (`contract.rs:716`), which stores locally and emits
   `NodeEvent::BroadcastStateChange` (`crates/core/src/message.rs:953`), fanning
   the new state out to peers that are *already* interested in the contract. A
   client PUT instead opens a `put::PutMsg` transaction and routes toward the key
   (`crates/core/src/client_events.rs:519`, whose own comment reads "finds peers,
-  sends the request"). A delegate PUT of a contract nobody is yet interested in
-  therefore lands on this node and nowhere else.
+  sends the request"). The missing piece is placement: no request is routed
+  toward the key, so nothing puts the contract anywhere near where a later GET
+  will look for it. A broadcast that finds no targets is not simply dropped, it
+  retries with backoff and is stashed for re-emission when an interested peer
+  appears (`crates/core/src/node/network_bridge/p2p_protoc/broadcast.rs:179`),
+  and the periodic InterestSync anti-entropy heals from the other direction. So
+  the state can still reach peers that later take an interest. It will not become
+  findable by key.
 - **A delegate UPDATE takes only `UpdateData::State` and `UpdateData::Delta`.**
   `StateAndDelta` and every `Related*` variant are rejected with
   `Err("Unsupported UpdateData variant")`, because the delegate API has no way to
-  supply the related-contract context (`contract.rs:820-855`). UPDATE also needs
+  supply the related-contract context (`contract.rs:822-856`). UPDATE also needs
   the contract to resolve locally and returns `Err("Contract not found")`
   otherwise.
 - **A delegate subscription registers no network demand.** It inserts into
@@ -98,11 +109,15 @@ against freenet-core `main` @ `b863ee7c6`:
   `has_client_subscriptions(..) || has_downstream_subscribers(..)` with no
   delegate term. So a delegate subscribe does not set `contract_in_use`, does not
   enter `contracts_needing_renewal()`, and does not exempt the contract from
-  eviction. This is freenet-core#4669, Phase 1 of the freenet-core#5467 epic,
-  open with the design signed off, and a fix is in progress.
+  eviction. This is freenet-core#4669, Phase 1 of the freenet-core#5467 epic. It
+  is open, its design is signed off in the issue, and it is being worked on as of
+  2026-08-30. Nothing has landed; treat the behaviour above as current until you
+  have checked `contract_in_use` yourself.
 - **Subscribing also requires the contract to be known locally.** Both
-  registration paths validate with `lookup_key` before inserting: V1 at
-  `contract.rs:929`, V2 at `native_api.rs:901`.
+  registration paths validate before inserting, under different names: V1 calls
+  `lookup_key` (`contract.rs:929`), V2 calls `resolve_contract_key`
+  (`native_api.rs:906`, defined at `:747`), which resolves through the contract
+  store's index. Grepping for `lookup_key` in `native_api.rs` finds nothing.
 - **There is no explicit unsubscribe.** `contract.rs:915` carries
   `TODO(#2830): UnsubscribeContractRequest is not yet handled`. That issue is
   closed and the remaining gap is tracked under freenet-core#5467 Phase 1. Today
@@ -112,14 +127,21 @@ against freenet-core `main` @ `b863ee7c6`:
 subscribed delegate "is woken by `InboundDelegateMsg::ContractNotification`
 whenever that contract's state changes, with no UI open". Two things are wrong
 with that. `send_delegate_contract_notifications` (`executor_impl.rs:2168`) fires
-on any *local* state commit, so the delegate is woken only when this node's copy
+on a *local* state commit, so the delegate is woken only when this node's copy
 changes. For a write that happened elsewhere, that means the node has to be
 subscribed to the contract by some other route, and in practice the other route
 is the app's own UI WebSocket, which goes away when the tab closes. The pattern
 stops working at exactly the moment it was supposed to earn its keep. That is the
-failure freenet/delta#30 hit. Delivery is also best-effort: the notification is a
-`try_send` on a bounded channel and is dropped when the channel is full
-(`executor_impl.rs:2196`), so a delegate that needs certainty has to poll the
+failure freenet/delta#30 hit.
+
+Delivery is narrower than "any local commit", in two ways. The function has a
+single call site, inside `commit_state_update` (`executor_impl.rs:2108`), which
+is the merge path. Initial-state install and resync-driven applies take a
+different branch and never reach it, so a subscribed delegate misses those
+(freenet-core#5481), and the V2 write path does not notify at all
+(freenet-core#5479). What does reach the function is then best-effort: a
+`try_send` on a bounded channel, dropped when the channel is full
+(`executor_impl.rs:2194`). A delegate that needs certainty has to poll the
 contract state as well.
 
 ## What a Delegate Is Not Good For Yet
@@ -185,7 +207,9 @@ exist in either enum; secrets are `DelegateCtx` methods now.
 
 Wire format is bincode, with the variant index taken from declaration order, so
 reordering either enum is a wire break. `inbound_delegate_msg_wire_format_is_stable`
-pins the inbound tags.
+(stdlib `delegate_interface.rs:1238`) pins only the FIRST inbound variant,
+`ApplicationMessage`, at tag 0. Reordering the variants after it would not fail
+that test, so do not rely on CI to catch it.
 
 One trap when reading the source: the doc comment above `InboundDelegateMsg`
 (`delegate_interface.rs:518`) says its `#[non_exhaustive]` "matches the
@@ -199,9 +223,9 @@ There are two live delegate API versions, and a delegate may use either.
 **V1, request and response.** `process()` returns e.g.
 `OutboundDelegateMsg::GetContractRequest`; the host handles it and re-invokes
 `process()` with `GetContractResponse`. Continuation state rides in
-`DelegateContext`. The loop is at `crates/core/src/contract.rs:590` and is
+`DelegateContext`. The loop is at `crates/core/src/contract.rs:591` and is
 bounded by `MAX_CONTRACT_REQUEST_ITERATIONS = 100` (`contract.rs:60`). On
-overflow it returns whatever it accumulated so far (`contract.rs:598`) rather
+overflow it returns whatever it accumulated so far (`contract.rs:600`) rather
 than erroring, so a delegate that exceeds the bound sees a truncated result and
 no failure signal. Whether that should be an error is freenet-core#5454.
 
@@ -216,18 +240,30 @@ ctx.subscribe_contract(&instance_id)                      // -> bool
 ctx.create_delegate(wasm, params, cipher, nonce)          // -> Result<([u8; 32], [u8; 32]), i32>
 ```
 
-The first four import from the `freenet_delegate_contracts` namespace and
+`get_contract_state_len` is the paired length query the two-step read protocol
+uses. The first five import from the `freenet_delegate_contracts` namespace and
 `create_delegate` from `freenet_delegate_management`. Both are registered in the
 wasmtime linker (`wasmtime_engine.rs:2035` and `:2117`), and core decides a
 module is V2 by scanning its imports (`wasmtime_engine.rs:923`). The
 implementations are in `crates/core/src/wasm_runtime/native_api.rs`.
 
-Two things to know before reaching for V2:
+Three things to know before reaching for V2:
 
-- **The local-only limits above apply identically.** Both API versions converge
-  on the same handlers, and V2's `subscribe_contract` writes to the same
-  `DELEGATE_SUBSCRIPTIONS` registry. V2 changes the calling convention, not what
-  reaches the network.
+- **V2 writes reach the network LESS than V1 writes, not the same amount.** V1
+  PUT and UPDATE go through `upsert_contract_state` into `commit_state_update`
+  (`executor_impl.rs:1996`), which emits `NodeEvent::BroadcastStateChange` and
+  notifies subscribed delegates. V2 `put_contract_state` and
+  `update_contract_state` bottom out in `put_contract_state_sync` /
+  `update_contract_state_sync` (`native_api.rs:796` and `:849`), which write to
+  ReDb directly. Their own comments say the path "bypasses the executor's
+  `state_store.store` call site". There is no broadcast and no delegate
+  notification on that path at all, so a V2 write lands on local disk and stops.
+  This is freenet-core#5479, open. Until it is fixed, use the V1
+  `PutContractRequest` / `UpdateContractRequest` messages for any write whose
+  result other peers need to see.
+- **The local-only reads and the subscribe gap apply to V2 as well.**
+  `subscribe_contract` writes to the same `DELEGATE_SUBSCRIPTIONS` registry, and
+  `get_contract_state` reads the same local store.
 - **`update_contract_state` is a full state replacement.** It does not run the
   contract's `update_state` merge logic, and it fails if there is no prior state
   (stdlib `delegate_host.rs:573-580`).
