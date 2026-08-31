@@ -392,7 +392,10 @@ mod tests {
 
 ### Common Commutativity Bugs
 
-1. **Non-deterministic tie-breakers:** Using random values or timestamps captured at merge time
+1. **Non-deterministic tie-breakers:** Using random values, or a timestamp read
+   from the host clock at merge time. Reading the clock inside a merge is
+   deprecated outright as of freenet-core v0.2.132 — see "WASM Environment
+   Utilities" below and `state-authorization-patterns.md` → "Time Handling".
 2. **Order-dependent collections:** Using `Vec` where order matters instead of `HashMap`/`BTreeMap`
 3. **Mutation during iteration:** Modifying state while iterating can produce different results
 4. **Missing items in merge:** Only keeping "newer" items without proper conflict resolution
@@ -413,6 +416,20 @@ mod tests {
 > commutativity, and the conformance checker will tell you which of the two it is —
 > the finding says so explicitly when both results hold the same bytes in a
 > different order.
+>
+> The checker is `fdev verify-merge`, and it is worth running before you believe
+> any of the claims in this section about your own contract:
+>
+> ```bash
+> fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin
+> ```
+>
+> Give it a corpus (`--state` samples, `--transition BASE RESULT` pairs, or a
+> `--bundle`) and it exercises the laws against real states. It also emits
+> **code diagnostics** that need no corpus at all — `host_clock_import` is the one
+> to watch for, reported when the module imports the host clock (see "WASM
+> Environment Utilities"). A code diagnostic never changes the exit status: it
+> describes the code, it is not a failing law.
 
 > **Determinism matters in your `Summary` type too, for the same reason.** A
 > `HashMap` inside a `Summary` (or anything `summarize` returns) serializes in
@@ -464,6 +481,10 @@ pub struct MessageId {
     sequence: u32,  // Tie-breaker
 }
 ```
+
+The timestamp here comes from the **author's signed payload**, carried in the
+state — never from `freenet_stdlib::time::now()` inside the merge. It orders and
+ranks; it is an untrusted hint, so don't build eviction or expiry on it.
 
 ### 3. Last-Writer-Wins with Version
 
@@ -579,9 +600,26 @@ freenet_stdlib::log::info(&format!("Processing update: {:?}", data));
 // Random numbers
 let bytes = freenet_stdlib::rand::rand_bytes(32);
 
-// Current time
+// Current time — DELEGATES ONLY.
+// Deprecated for contracts as of freenet-core v0.2.132, and staged to trap.
 let now: DateTime<Utc> = freenet_stdlib::time::now();
 ```
+
+**A contract must not call `freenet_stdlib::time::now()`.** `update_state` has to
+be a function of its inputs or replicas cannot be guaranteed to converge, so a
+merge that reads the wall clock isn't merely breaking the merge laws — they stop
+being well-formed statements about it. As of freenet-core v0.2.132 a node warns
+when it loads a contract importing the clock and `fdev verify-merge` reports a
+`host_clock_import` diagnostic; nothing traps *yet*, but the call is staged to
+**trap** (freenet-core#5465). Carry a client-signed timestamp in state and
+enforce only monotonicity instead. Delegates are unaffected — private per-node
+state, never replicated, no merge laws. Full treatment, including what the swap
+costs you, is in `state-authorization-patterns.md` → "Time Handling".
+
+The same determinism requirement applies to `rand_bytes` even though it is not
+deprecated: randomness drawn inside `update_state`, `summarize_state` or
+`get_state_delta` makes the result depend on which peer evaluated it. Use it for
+key generation and nonces on the client side, not inside a merge.
 
 ## Contract WASM Upgrade & State Migration
 

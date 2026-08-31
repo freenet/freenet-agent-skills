@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.32.0 (2026-08-31)
+
+`dapp-builder` taught contract authors to read the host clock, and freenet-core
+**v0.2.132** deprecated exactly that. The file that mattered most said "This is
+correct" about the future-skew check — verbatim the pattern the #5465 census
+found in every clock-importing contract on the network, and the one being
+removed. Stale and confident is worse than missing.
+
+- **`state-authorization-patterns.md` → "Time Handling" is rewritten.** The
+  section headed "`freenet_stdlib::time::now()` Exists" is now "Contracts Must
+  Not Read the Host Clock", and it gives the reason rather than asserting the
+  rule: `update_state` has to be a function of its inputs, because that is what
+  makes replicas converge, so a merge that reads the wall clock doesn't merely
+  break the merge laws — they stop being well-formed statements about it. Two
+  peers eleven minutes apart produce different states from the same delta and
+  neither is wrong.
+- **What v0.2.132 actually does is stated precisely, without overstating it:** a
+  node warns on loading a contract that imports the clock, `fdev verify-merge`
+  reports a `host_clock_import` code diagnostic, and nothing traps, nothing
+  refuses to load, and no deployed contract broke. The staged plan
+  (freenet-core#5465) is named separately, including that the future failure is
+  per-*call*, so a contract that imports the symbol without reaching it keeps
+  working and needs no re-key.
+- **The alternative is given properly, with its cost.** Carry a client-signed
+  timestamp inside the state and enforce only monotonicity (`new > current`);
+  `freenet-weather`'s `BeaconState.timestamp_ms` is the worked example. A
+  client-supplied timestamp is an untrusted hint, so it cannot do the anti-grief
+  job the skew check was doing — an author who swaps it in and keeps treating it
+  as authoritative has moved the bug. Anti-grief on a per-author log wants a
+  count cap or a monotonic counter; capability expiry has no clean in-contract
+  substitute, and the entry says so.
+- **The sharp edge in the usual replacement is named**, because it is easy to
+  walk into: deriving a retention window from the state's own newest timestamp
+  is a logical clock, and one future-dated entry sets the reference permanently
+  with nothing to heal it, where a wall-clock rule would have recovered.
+- **The blessing is gone, not softened.** "This is correct" about the
+  future-skew check is replaced by an explicit note that an earlier version of
+  the file blessed it, that it is not rescuable by passing the operation's
+  timestamp in (an originator-supplied `now` is attacker-controlled), and that
+  11 measured contracts silently *prune* future-dated entries, making state a
+  function of the evaluating peer's clock. The past-skew self-DoS lesson is kept
+  — it never depended on the clock.
+- **`fdev verify-merge` is finally named.** `contract-patterns.md` said "the
+  conformance checker will tell you which of the two it is" without ever giving
+  the command. It now gives it, in both files and in `SKILL.md`:
+  `fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin`.
+  A code diagnostic never changes the exit status; the bare no-corpus form
+  prints the clock diagnostic on stderr and then exits non-zero asking for a
+  corpus, which is a complaint about the corpus and not about the clock.
+- **Delegates are unaffected and the docs keep that visible** (private per-node
+  state, never replicated, no merge laws). The native-stub UB note survives,
+  re-scoped to delegate host-side tests, where it is still live: the
+  `MaybeUninit::assume_init()` stub is unchanged in freenet-stdlib `main`.
+- Smaller sites: the WASM-utilities block in `contract-patterns.md` marks
+  `time::now()` delegates-only, the commutativity-bug list names the clock, the
+  timestamp-ordering strategy says the timestamp comes from the signed payload,
+  the pitfalls table gains two rows, and `SKILL.md`'s merge-law section carries
+  the rule where a reader meets the laws. Also notes that `rand_bytes` is not
+  deprecated but is subject to the same determinism requirement inside a merge.
+
+Verified against freenet-core `v0.2.132` (`0ca7e02b`) and freenet-stdlib `main`
+@ `99ee584`.
+
 ## 1.31.0 (2026-08-30)
 
 Adds one thing to `local-dev` that `dapp-builder` learned in 1.30.0: a delegate's
