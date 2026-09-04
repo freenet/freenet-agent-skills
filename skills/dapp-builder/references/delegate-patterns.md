@@ -754,7 +754,10 @@ const { delegate_key_bytes, code_hash_bytes } =
 This works from inside a sandboxed webapp: the gateway serves bundle files with
 `Access-Control-Allow-Origin: *`, and the sandbox CSP permits `connect-src` to
 the gateway origin. (Verified from an opaque-origin frame — `localStorage`
-throws there, and the fetch still returns 200.)
+throws there, and the fetch still returns 200.) That `localStorage` throws is
+not a footnote: it is why a Freenet webapp's durable client state, migration
+markers included, has to live in the delegate's secret store. See
+`upgrade-and-migration.md`, property 2.
 
 Three rules that matter:
 
@@ -917,6 +920,47 @@ sealing a marker over it. And secrets written before the host gained its
 key-enumeration registry (freenet-core#4355) are not returned by
 `list_secrets` until they are rewritten — undetectable from inside the delegate,
 so touch such keys before relying on a whole-scope export.
+
+### `Ok(vec![])` is a positive claim, and it seals permanently
+
+The forward-only case above is the *benign* one: a predecessor that cannot
+answer is classified `Unresponsive`, earns no marker, and is re-walked next
+load. The damaging case is the successor's own adapter answering on its behalf.
+
+`SecretsMigrationIo::fetch_secrets` is three-valued in effect, and only two of
+the three are visible in the type. `Ok(pairs)` and `Ok(vec![])` both mean **"I
+asked, and this is what it has"** — an empty vector seals the predecessor with a
+`Done { had_data: false }` marker that is never revisited. Return it for a
+request that merely went *unanswered* and you have recorded a slow, throttled or
+temporarily unreachable predecessor as permanently empty, silently, with the
+migration report reading complete. The crate says so in unusually flat terms:
+
+> the cost of a wrong `Err` is one retry, the cost of a wrong `Ok(vec![])` is the
+> user's data
+
+(`freenet-migrate 0.6.0`, `src/delegate_migrate.rs:417-436`.)
+
+So **`Err` is the right answer for silence** — a timeout, a transport failure,
+an undecodable reply, an answered error. It is not an abort: the driver records
+`PredecessorMigration::Unresponsive`, the walk continues or stops per
+`SecretSelectionPolicy`, and `migrate_delegate_secrets` still returns a report.
+
+The rule generalises past this one call. Wherever a migration adapter converts
+an I/O result into an answer, **silence and absence must stay distinguishable at
+the type level**, because only one of them may seal:
+
+- Make the third value explicit — a three-variant enum (present / definitively
+  absent / no usable answer), not an `Option` that collapses two of them.
+- Route "no usable answer" to the retry path, never the seal path. Only a
+  *definitive* answer may write a durable marker.
+- Do the reduction in a pure function so it is testable without the I/O, and
+  mutate each arm to confirm the test is actually red.
+
+River's adapter overrides the crate's own recommended semantics for exactly this
+reason (`delegate_migration.rs`, constraint 1: "a timeout is not an absence"),
+and Harvest's `migrate::probe_gate` is the same shape on the client side.
+ghostkeys went further and made its markers page-lifetime only, because in its
+case even a definitive-looking answer could be invalidated by a late arrival.
 
 ### Preconditions
 

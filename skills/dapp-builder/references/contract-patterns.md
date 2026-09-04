@@ -850,7 +850,12 @@ The recipe:
 2. **Record per-identity which contract hash that user's state lives
    under**, on the *delegate* (not on-chain) — e.g. an
    `AliasInfo { inbox_wasm_hash: Option<String>, … }` on the identity
-   delegate, persisted client-side.
+   delegate, persisted client-side. The delegate is the right home and the
+   only durable one: a published webapp runs at an opaque origin where
+   `localStorage` throws. Two placement rules come with it — whether the
+   marker travels with a delegate export, and never letting the client
+   choose the raw storage key. Both are in `upgrade-and-migration.md`,
+   property 2; read them before adding a marker.
 3. **Maintain an append-only `LEGACY_*_CODE_HASHES` slice**, ordered
    oldest → newest, listing every prior `INBOX_CODE_HASH` the project
    has shipped.
@@ -867,7 +872,9 @@ The recipe:
    on the delegate BEFORE dispatching GETs; clear it only when the PUT
    under the current key succeeds. If the session ends before any GET
    resolves (offline, browser crash, gateway hiccup), the next session
-   sees the marker and re-attempts.
+   sees the marker and re-attempts. This marker names a **contract**
+   generation, so it is one that should be carried forward on a delegate
+   export — see the placement table in `upgrade-and-migration.md`.
 7. **Backwards-compat the delegate state** so old UI versions can read
    the new fields: every new field on `AliasInfo` is
    `#[serde(default)]`.
@@ -915,7 +922,7 @@ copy:
 |---|---|---|
 | Who triggers the migration | Any updated client; owner also writes pointer | The state's signer, in their own UI |
 | Where the legacy list lives | Embedded in WASM (read via build.rs from `legacy_contracts.toml`) | A Rust `const &[&str]` slice in the UI |
-| Recovery if a hop fails mid-flight | Pointer is permanent on-chain | `pending_migration_from` marker on delegate |
+| Recovery if a hop fails mid-flight | Pointer is permanent on-chain | `pending_migration_from` marker in the delegate's secret store |
 | Works for per-user state with no shared owner | Pointer half doesn't apply; probe half does | Yes |
 | Works for shared-room / single-owner state | Yes | Yes (probe needs no owner) |
 

@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.35.0 (2026-09-04)
+
+Resolves the blocking review finding on 1.34.0's marker rule, and adds two
+pieces of doctrine that came out of the same app.
+
+- **Marker placement, corrected.** 1.34.0 said to keep a contract migration
+  marker in browser `localStorage`. That does not work in the environment this
+  skill targets: the gateway serves a webapp in an iframe whose `sandbox` omits
+  `allow-same-origin`, so the app frame has an opaque origin and
+  `localStorage` throws. It fails *safe* — unreadable reads as "not migrated",
+  so the walk repeats rather than being skipped — which is why the bug was
+  silent in a real app until the sandbox attribute was re-read. The delegate's
+  secret store is the only durable client store a Freenet webapp has, and
+  1.34.0's "never keep a contract marker in the delegate" is withdrawn.
+- **The real question is whether the marker travels with a delegate export**,
+  and it turns on what the marker *names*. A marker naming a predecessor
+  **delegate** must not travel — copying it forward forges migration state for
+  the successor (River). A marker naming a **contract** generation should
+  travel — a delegate re-key does not change that fact (Harvest puts its
+  markers inside the exported prefix deliberately). Written as a table with the
+  deciding question, plus ghostkeys' third case (no durable marker at all), and
+  the note that the crate's own `PRED_DONE_MARKER_KEY_PREFIX` markers are not a
+  substitute. `contract-patterns.md`'s delegate-KV recipe and
+  `delegate-patterns.md`'s opaque-origin note now agree with it and point at it.
+- **A delegate marker request takes an id, not a raw storage key.** The
+  delegate prepends its own namespace, so nothing the caller sends can name a
+  key outside it. The same secret store holds private keys, so a raw-key write
+  would let a migration note overwrite an RSA private key — a general hazard
+  for any delegate with a shared secret namespace.
+- **NEW: a parameter-struct change is itself a migration, and the lineage
+  cannot express it.** A contract's address is
+  `BLAKE3(code_hash ‖ parameter_bytes)`, but `ContractLineageEntry` carries only
+  a code hash and `predecessor_ids(params, lineage)` maps the *current* build's
+  parameter bytes over every entry. So editing a parameter struct orphans every
+  instance ever published, and the probe reports a clean "nothing to migrate"
+  with green tests, green CI and no runtime symptom. Remedy: a frozen
+  generation boundary and a frozen copy of the old struct, deriving each
+  predecessor under the encoding it was published with. Scoped to contracts —
+  `DelegateLineageEntry` stores the full `delegate_key` and the walk never
+  re-derives it, so the delegate registry does not have this hazard.
+- **NEW: `Ok(vec![])` is a positive claim and seals a predecessor
+  permanently.** An empty-success answer from `fetch_secrets` is
+  indistinguishable from "nothing was there" and writes a
+  `Done { had_data: false }` marker that is never revisited; the crate's own
+  words are "the cost of a wrong `Err` is one retry, the cost of a wrong
+  `Ok(vec![])` is the user's data". Placed beside the forward-only section,
+  with the generalisation: silence and absence must stay distinguishable at the
+  type level, because only one of them may seal.
+
 ## 1.34.0 (2026-09-04)
 
 Seven corrections from actually adopting `freenet-migrate` in a live app
