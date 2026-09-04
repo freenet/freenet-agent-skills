@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.20.1 (2026-08-13)
+## 1.33.1 (2026-09-04)
 
 `ui-patterns.md` told you to derive the WebSocket URL and, 30 lines earlier,
 told you to hardcode it. A real dApp split the difference with a port sniff and
@@ -19,11 +19,15 @@ shipped it.
   dev server makes the page same-origin in development, so the derivation
   applies everywhere and app code has one path instead of two. Includes the
   `changeOrigin: true` requirement (the node's `--allowed-host` is a
-  Host-header allowlist, so without it the upgrade is rejected), an env var for
-  the node address, and a `curl` upgrade probe — an unproxied dev server
-  answers `/v1/...` with its own index, which surfaces as a hang rather than an
-  error. Notes explicitly that a proxy is transport only: no shell appears, so
-  such a page still owns its own auth.
+  Host-header allowlist; plain loopback gets away without it because the
+  upgrade guard short-circuits on a localhost `Origin`, but `vite --host` or a
+  phone on the same wifi is rejected 403), an env var for the node address, and
+  a `curl` upgrade probe — an unproxied dev server answers `/v1/...` with its
+  own index, which surfaces as a hang rather than an error. Notes explicitly
+  that a proxy is transport only: no shell appears, so such a page still owns
+  its own auth, and that a *missing* token is accepted by the node in every
+  mode (only an invalid one closes the socket), so forgetting to authenticate
+  is silent in dev.
 - **"NEVER hardcode" now names the near-miss.** A port sniff
   (`location.port === "7509" ? location.host : "127.0.0.1:7509"`) is not a
   derivation — it breaks as soon as the node serves the app on another port,
@@ -31,6 +35,654 @@ shipped it.
 - **The TypeScript example derives the scheme**, as the Rust example above it
   already did. It hardcoded `ws://`, which is a mixed-content failure under an
   https-served shell.
+
+## 1.33.0 (2026-09-04)
+
+Makes the `freenet-app-migration` skill the single owner of migration
+doctrine and fixes two things `dapp-builder` was teaching wrongly.
+
+**The probe-trigger doctrine was backwards.** `upgrade-and-migration.md`
+recommended gating migration on "destination is empty," which is exactly the
+shape that lost River's rooms (freenet/river#621): any write to the successor
+satisfies the gate first and the probe never fires, silently. `SKILL.md` and
+`contract-patterns.md` paraphrased the same framing. The rule is now: probe
+unconditionally per `(instance, current_code_hash)`, seeded from the client's
+own snapshot; gate only the REPEAT, on a durable marker. The working
+reference is the freenet-bitcoin bridge (`bridge/src/freenet.rs:92`,
+`bridge/src/store.rs:145`).
+
+**Legacy-registry placement was wrong.** `contract-patterns.md` said to keep
+`legacy_contracts.toml` at the repo root. River's own
+`common/legacy_room_contracts.toml` header says the opposite and explains
+why: it lives inside the `common` crate so it ships inside the published
+`river-core` crate, and a tool built from crates.io still has the full
+registry. A root registry is invisible to anyone depending on your crate.
+
+The worked example under "Resumable / self-healing" sealed the completion
+marker on `has_new_format_data()` — the empty-destination gate in disguise,
+fifteen lines above the property that now forbids it. It seals on a definitive
+probe outcome instead, and the "audit your own app" procedure (name the
+condition under which your migration does *not* run, then grep every write that
+can make it true) is kept here rather than moved out with the doctrine.
+
+The three duplicated copies of the doctrine are reduced to orientation plus a
+pointer — that duplication is *why* the two errors survived, since no file
+owned the rule and nobody reconciling one copy saw the others. The two skills
+also contradicted each other on River's delegate status; both now say
+hand-rolled (authoritative) with the crate walk dual-running.
+
+New material:
+
+- **Which `Outcome`s may seal a completion marker.** `Outcome` is
+  `#[non_exhaustive]`, so a wildcard arm defaulting to "done" writes a
+  permanent marker wrongly. May seal: `Recovered` with no unresolved
+  candidates and no truncated fold; `SeedLocal`. Must not: `Indeterminate`,
+  `Recovered` with unresolved or truncated, any error, any unmatched variant.
+- **`cargo fmt` re-keys contracts** (`build-system.md`) — panic locations
+  embed `file:line`, so reformatting moves the WASM bytes and the address.
+- **Two `freenet-stdlib` versions cannot co-link** (`ui-patterns.md`) —
+  `__frnt_set_id` is `#[no_mangle]` in both, so it is a link-time
+  impossibility, not a tidiness preference.
+- **Never gate an *item's* validity on a value that can decrease**
+  (`state-authorization-patterns.md`, under "Related-Contracts Mechanism") — an
+  already-accepted item whose validity rests on a live cross-contract read, or
+  on a mutable aggregate elsewhere in the same state, flips valid to invalid
+  over time and peers permanently disagree. Scoped deliberately: a check
+  confined to the bytes in front of `validate_state`, `balance >= 0` included,
+  is deterministic and fine.
+- **Delegate-secret migration must precede contract migration** when a secret
+  is an input to the contract's parameters — lose the secret and predecessor
+  ids are underivable, and the probe may seal on `SeedLocal`.
+- **A state version that skips signature verification is a footgun**
+  (`state-authorization-patterns.md`) — the version tag is attacker-chosen.
+
+Consequences added to sections that were otherwise correct:
+
+- Contract parameters: a parameter you might want to set later cannot be set
+  later, ever, for that instance.
+- State size budget: a count cap over variable-size values bounds nothing;
+  multiply by the largest value the other side may send.
+
+## 1.32.0 (2026-08-31)
+
+`dapp-builder` taught contract authors to read the host clock, and freenet-core
+**v0.2.132** deprecated exactly that. The file that mattered most said "This is
+correct" about the future-skew check — verbatim the pattern the #5465 census
+found in every clock-importing contract on the network, and the one being
+removed. Stale and confident is worse than missing.
+
+- **`state-authorization-patterns.md` → "Time Handling" is rewritten.** The
+  section headed "`freenet_stdlib::time::now()` Exists" is now "Contracts Must
+  Not Read the Host Clock", and it gives the reason rather than asserting the
+  rule: `update_state` has to be a function of its inputs, because that is what
+  makes replicas converge, so a merge that reads the wall clock doesn't merely
+  break the merge laws — they stop being well-formed statements about it. Two
+  peers eleven minutes apart produce different states from the same delta and
+  neither is wrong.
+- **What v0.2.132 actually does is stated precisely, without overstating it:** a
+  node warns on loading a contract that imports the clock, `fdev verify-merge`
+  reports a `host_clock_import` code diagnostic, and nothing traps, nothing
+  refuses to load, and no deployed contract broke. The staged plan
+  (freenet-core#5465) is named separately, including that the future failure is
+  per-*call*, so a contract that imports the symbol without reaching it keeps
+  working and needs no re-key.
+- **The alternative is given properly, with its cost.** Carry a client-signed
+  timestamp inside the state and enforce only monotonicity (`new > current`);
+  `freenet-weather`'s `BeaconState.timestamp_ms` is the worked example. A
+  client-supplied timestamp is an untrusted hint, so it cannot do the anti-grief
+  job the skew check was doing — an author who swaps it in and keeps treating it
+  as authoritative has moved the bug. Anti-grief on a per-author log wants a
+  count cap or a monotonic counter; capability expiry has no clean in-contract
+  substitute, and the entry says so.
+- **The sharp edge in the usual replacement is named**, because it is easy to
+  walk into: deriving a retention window from the state's own newest timestamp
+  is a logical clock, and one future-dated entry sets the reference permanently
+  with nothing to heal it, where a wall-clock rule would have recovered.
+- **The blessing is gone, not softened.** "This is correct" about the
+  future-skew check is replaced by an explicit note that an earlier version of
+  the file blessed it, that it is not rescuable by passing the operation's
+  timestamp in (an originator-supplied `now` is attacker-controlled), and that
+  11 measured contracts silently *prune* future-dated entries, making state a
+  function of the evaluating peer's clock. The past-skew self-DoS lesson is kept
+  — it never depended on the clock.
+- **`fdev verify-merge` is finally named.** `contract-patterns.md` said "the
+  conformance checker will tell you which of the two it is" without ever giving
+  the command. It now gives it, in both files and in `SKILL.md`:
+  `fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin`.
+  A code diagnostic never changes the exit status; the bare no-corpus form
+  prints the clock diagnostic on stderr and then exits non-zero asking for a
+  corpus, which is a complaint about the corpus and not about the clock.
+- **Delegates are unaffected and the docs keep that visible** (private per-node
+  state, never replicated, no merge laws). The native-stub UB note survives,
+  re-scoped to delegate host-side tests, where it is still live: the
+  `MaybeUninit::assume_init()` stub is unchanged in freenet-stdlib `main`.
+- Smaller sites: the WASM-utilities block in `contract-patterns.md` marks
+  `time::now()` delegates-only, the commutativity-bug list names the clock, the
+  timestamp-ordering strategy says the timestamp comes from the signed payload,
+  the pitfalls table gains two rows, and `SKILL.md`'s merge-law section carries
+  the rule where a reader meets the laws. Also notes that `rand_bytes` is not
+  deprecated but is subject to the same determinism requirement inside a merge.
+
+Verified against freenet-core `v0.2.132` (`0ca7e02b`) and freenet-stdlib `main`
+@ `99ee584`.
+
+## 1.31.0 (2026-08-30)
+
+Adds one thing to `local-dev` that `dapp-builder` learned in 1.30.0: a delegate's
+contract requests are never serviced under `freenet local`.
+
+Every node recipe in the `local-dev` skill already uses `freenet network`, so the
+skill does not steer anyone wrong today. The gap is that it never says why that
+matters, and `freenet local` is the subcommand a reader of a local-development
+skill will reach for on their own. Its own help text calls local mode useful for
+development.
+
+- `handle_delegate_with_contract_requests` (`crates/core/src/contract.rs:537`)
+  has two call sites, both reached from `contract_handling` (`:1268`) through
+  `handle_delegate_notification` (`:2076`) and `handle_contract_event` (`:2209`),
+  and `contract_handling` is spawned from one production site,
+  `node/p2p_impl.rs:948`, the network node.
+  `run_local_node` (`node.rs:5768`) handles `ClientRequest::DelegateOp` by
+  calling `executor.delegate_request(...)` straight through (`:5851`), which runs
+  `process()` and hands back its outbound messages without acting on them. So a
+  delegate's GET, PUT, UPDATE and SUBSCRIBE all do nothing under `freenet local`,
+  with no error anywhere. freenet-core#5273 records the `RequestUserInput`
+  symptom of the same root cause.
+- Delegate notification is dead in local mode as well:
+  `send_delegate_contract_notifications` returns immediately when
+  `delegate_notification_tx` is `None` (`executor_impl.rs:2169-2172`), and only
+  `RuntimePool` sets that field.
+- The V2 host functions are the exception, and the entry says so rather than
+  flattening it: `get_contract_state`, `put_contract_state` and
+  `update_contract_state` are wasmtime imports resolved inside the delegate's own
+  execution, so they do reach the local store. `subscribe_contract` registers and
+  can never fire.
+- A row in the "Common issues" table points at the new section, since a silent
+  no-op is exactly what sends someone to that table.
+
+Verified against freenet-core `main` @ `b863ee7c6`.
+
+## 1.30.0 (2026-08-30)
+
+Corrects what `dapp-builder` says a delegate can do with contracts, and adds the
+resource limits it never documented. Verified against freenet-core `main` @
+`b863ee7c6` and freenet-stdlib `main` @ `99ee584`.
+
+The dangerous claim was in `references/delegate-patterns.md`: a delegate that
+subscribes to a contract "is woken by `InboundDelegateMsg::ContractNotification`
+whenever that contract's state changes, with no UI open". Notification delivery
+does work, but `send_delegate_contract_notifications`
+(`crates/core/src/contract/executor/runtime/executor_impl.rs:2168`) fires on any
+*local* state commit, so a write that happened elsewhere reaches the delegate only
+if the node is subscribed to that contract by some other route. In practice that
+route is the app's own UI WebSocket, which goes away when the tab closes, so the
+background-service pattern stops working at exactly the moment it was supposed to
+earn its keep. That is the failure freenet/delta#30 hit. Delivery is also
+best-effort: a `try_send` on a bounded channel, dropped when full.
+
+- **"Read, write, and subscribe to contracts" moved out of "implemented and
+  usable today" into a new "implemented, but local to this node" section**, with
+  a per-verb table and the evidence for each. A delegate GET is gated on
+  `lookup_key` resolving locally (`crates/core/src/contract.rs:759`) and bottoms
+  out in `perform_contract_get` (`executor_impl.rs:1431`), a bare
+  `state_store.get(&key)`; the V2 error code says so in words,
+  `ERR_CONTRACT_NOT_FOUND (-7): contract not in local store`. A delegate PUT
+  calls `upsert_contract_state` and emits `NodeEvent::BroadcastStateChange`,
+  which fans out to peers *already* interested, where a client PUT opens a
+  `put::PutMsg` transaction and routes toward the key
+  (`crates/core/src/client_events.rs:519`). A delegate subscribe only inserts
+  into `DELEGATE_SUBSCRIPTIONS` (`wasm_runtime/native_api.rs:40`); nothing in
+  `ring/` reads it and `contract_in_use` (`ring/hosting.rs:1725`) has no delegate
+  term, so it sets no demand, enters no renewal, and exempts nothing from
+  eviction. Both gaps are open under freenet-core#4669 and the freenet-core#5467
+  epic with no fix merged as of 2026-08-30, and the text says so rather than
+  describing a fix as done or as imminent.
+- **"Creating other delegates from within a delegate" is no longer listed as
+  unimplemented.** The old reasoning was that no such variant exists on
+  `OutboundDelegateMsg`. The variant genuinely does not exist and the capability
+  is a host function, `DelegateCtx::create_delegate` (stdlib
+  `rust/src/delegate_host.rs:642`), registered in the
+  `freenet_delegate_management` namespace at
+  `crates/core/src/wasm_runtime/engine/wasmtime_engine.rs:2117`.
+- **Both message-enum listings were pre-v0.5 and simply wrong.** They showed
+  `GetSecretRequest` / `GetSecretResponse` / `SetSecretRequest` as variants, none
+  of which exist any more, and omitted every contract variant. Replaced with the
+  real definitions from `freenet-stdlib/rust/src/delegate_interface.rs`
+  (inbound `:526`, outbound `:701`), including the asymmetry that matters when
+  writing a delegate: `InboundDelegateMsg` IS `#[non_exhaustive]` so a `match`
+  needs a wildcard arm, while `OutboundDelegateMsg` is NOT, so adding a variant
+  there is a breaking change. The doc comment at `delegate_interface.rs:518-519`
+  claims otherwise and is wrong; the file now warns about it, and tells the
+  reader to check the attribute in the stdlib version they build against.
+- **New section on the V2 host-function API**, which was undocumented despite
+  being registered and live: the `freenet_delegate_contracts` namespace
+  (`get_contract_state`, `get_contract_state_len`, `put_contract_state`,
+  `update_contract_state`, `subscribe_contract`), how core detects a V2 module
+  by scanning imports, and the traps. The load-bearing one is that **the two API
+  versions expose the same operations under the same names and do not do the
+  same thing on writes.** V1 PUT and UPDATE go through `upsert_contract_state`
+  into `commit_state_update` (`executor_impl.rs:1996`), which emits
+  `NodeEvent::BroadcastStateChange` and notifies subscribed delegates. V2
+  `put_contract_state` / `update_contract_state` bottom out in
+  `put_contract_state_sync` / `update_contract_state_sync` (`native_api.rs:796`,
+  `:849`), raw ReDb writes whose own comment says "the V2 path bypasses the
+  executor `state_store` chokepoint" (`native_api.rs:814-816`); there is no
+  broadcast and no delegate
+  notification on that path, so a V2 write lands on local disk and stops. The
+  call returns success and reads back locally, so a single-node test cannot see
+  it. That is freenet-core#5479, open, and the section says to use the V1
+  messages for any write other peers need to see. Also: reads and the subscribe
+  gap do apply to V2 identically, and `update_contract_state` is a full state
+  replacement that does not run the contract's `update_state` merge. Alongside
+  it, the V1 loop's bound, `MAX_CONTRACT_REQUEST_ITERATIONS = 100`, which
+  returns a truncated result rather than an error on overflow
+  (freenet-core#5454).
+- **New section on `freenet local`, which does not run the delegate contract
+  loop at all.** `handle_delegate_with_contract_requests`
+  (`crates/core/src/contract.rs:537`) has two call sites, both under
+  `contract_handling` (`:1268`), which is spawned from one production site,
+  `node/p2p_impl.rs:948`, the network node. `run_local_node` (`node.rs:5768`)
+  handles `ClientRequest::DelegateOp` by calling `executor.delegate_request(...)`
+  directly (`:5851`), so a V1 delegate's `GetContractRequest`,
+  `PutContractRequest`, `UpdateContractRequest` and `SubscribeContractRequest`
+  are never serviced and nothing reports an error. freenet-core#5273 records the
+  `RequestUserInput` symptom of the same root cause; the contract verbs are not
+  recorded there. Three of the V2 host functions do work locally, because they
+  are wasmtime imports resolved inside the delegate's own execution and
+  `Executor::from_config_local` wires the store behind them
+  (`contract/executor/runtime.rs:366`, `:380`): `get_contract_state`,
+  `put_contract_state` and `update_contract_state` all hit the local store.
+  `subscribe_contract` is the exception, and notification delivery is dead
+  locally for both API versions, because `delegate_notification_tx` is set only
+  by `RuntimePool` (`pool.rs:538`) and `freenet local` builds a plain `Executor`
+  (`bin/freenet.rs:183`) that leaves it `None` (`contract/executor.rs:1685`).
+  This matters because an agent building a dApp will reach for `freenet local`
+  first, see nothing happen, and have no way to tell why.
+- **The notification path is narrower than "any local commit".**
+  `send_delegate_contract_notifications` has a single call site, inside
+  `commit_state_update` (`executor_impl.rs:2108`), which is the merge path.
+  Initial-state install and resync-driven applies take a different branch and
+  never reach it (freenet-core#5481), and the V2 write path does not notify at
+  all (freenet-core#5479).
+- **New "Resource Limits" section.** Epoch interruption is the real preemption
+  guard: a 100 ms global tick with a per-execution deadline derived from
+  `max_execution_seconds` (default 5.0) and `epoch_deadline_trap()`, armed on
+  every guest entry including the V2 delegate one. Memory is capped at 256 MiB
+  by a wasmtime `ResourceLimiter`. **Fuel metering is off by default in
+  production** (`enable_metering = false`), so it is not a live guard and the
+  section says not to reason about cost in terms of it. Child-delegate creation
+  is bounded by depth 4, 8 per call, 1024 per node and a 10 MiB WASM cap; app
+  registrations by `MAX_APPS_PER_DELEGATE = 128`, `MAX_DELEGATES_PER_CLIENT =
+  256` and a 30-minute TTL sweep. The section then names what has no guard: no
+  cross-invocation cost accounting, an unbounded subscription registry
+  (freenet-core#4824), no quarantine or circuit breaker for a delegate that
+  panics every invocation (freenet-core#5467 Phase 4, designed not built), and
+  no per-delegate observability at all (Phase 0) which is why the subscription
+  gap survived so long. Two gaps specific to execution, both freenet-core#5480:
+  the epoch trap interrupts guest code only, so a delegate parked inside a host
+  call runs to completion whatever the deadline says
+  (`wasmtime_engine.rs:695-698`); and delegates do not reach
+  `execute_wasm_blocking` (`:2326`, called only from the contract entry points
+  at `:1210` and `:1287`), so they get neither the wall-clock backstop nor the
+  panic capture contracts get. If the epoch ticker thread dies, contracts fall
+  back to the wall-clock poll and delegates fall back to nothing;
+  freenet-core#4864 added a heartbeat because that thread stopping is a real
+  scenario. The section deliberately does not say delegates are unguarded: they
+  are guarded per invocation, and the gaps are specific.
+- **New "What a Delegate Is Not Good For Yet" section**: durable pinning of
+  content, autonomous background work (there is no scheduled wakeup;
+  freenet-core#3972, freenet-stdlib#82 draft, shelved host side in
+  freenet-core#4666), fetching arbitrary contracts from the network, and knowing
+  its own subscriptions after a restart.
+- Smaller corrections in the same file: UPDATE accepts only `UpdateData::State`
+  and `UpdateData::Delta` and rejects every compound and `Related*` variant;
+  subscribe requires the contract to be known locally on both registration
+  paths; there is no explicit unsubscribe, and the `TODO(#2830)` that marks it
+  cites an issue that is now closed. The header note no longer says user
+  permission requests "may have limited support" and the "User Permission
+  Pattern (Limited Support)" heading loses its qualifier: the flow is wired end
+  to end through `DashboardPrompter`
+  (`crates/core/src/contract/user_input.rs:188`, constructed at
+  `node/p2p_impl.rs:950`), which opens the permission page in the browser when
+  no dashboard tab is connected and auto-denies after 60 seconds.
+- `SKILL.md` Phase 2 suggests splitting delegates "per long-running background
+  task", which reads as an endorsement of a capability that is not there yet. It
+  now carries a short caveat pointing at the reference section, and that caveat
+  also says to test delegate contract access against a real node rather than
+  `freenet local`.
+
+## 1.29.0 (2026-08-28)
+
+Corrects the `dapp-builder` claim that contracts cannot read each other's
+state, and adds the constraint that actually governs when you may.
+
+The skill said "Contracts reading other contracts' state is planned but not
+yet implemented". That is wrong and it misled a reader today. Verified
+against freenet-core `main`: `validate_state` can return
+`ValidateResult::RequestRelated(Vec<ContractInstanceId>)`, and
+`fetch_related_for_validation_network`
+(`crates/core/src/contract/executor/runtime/contract_ops.rs`) resolves those
+ids and re-invokes with `RelatedContracts` populated, on both the PUT and
+UPDATE paths. The supporting machinery is real, not a stub: off-loop
+deferral bounded by `MAX_INFLIGHT_DEFERRALS = 256`, an RAII `ResumeGuard`
+giving exactly-once resume, and backpressure that surfaces `MissingRelated`
+rather than growing unboundedly (freenet-core#4391). freenet-core#2870 is
+still open but is itself partly stale — the UPDATE-path `todo!()` it cites
+at `runtime.rs:946` no longer exists anywhere in that file.
+
+- The load-bearing addition is the safety rule, not the capability. A
+  contract's verdict must be a function of its inputs or replicas diverge,
+  so reading an immutable or once-true-always-true fact is safe, and gating
+  validity on mutable or growing state is not — "reject if the other party
+  has more than N entries" flips as their state grows, and peers validating
+  at different moments never converge. That belongs in client-side policy.
+- Documents the practical limits: one round only (a `RequestRelated` is
+  fetched and retried exactly once, `contract_ops.rs:431-432`, capped at
+  `MAX_RELATED_CONTRACTS_PER_REQUEST = 10`), `RelatedStateAndDelta` is the
+  client-submittable UPDATE form while bare `RelatedState`/`RelatedDelta`
+  are runtime-internal, a related fetch that times out can wedge an UPDATE
+  merge (freenet-core#4077), related state resolved during *validation* is
+  never captured by the conformance system so such a contract is
+  unjudgeable and reads exactly like a clean one (freenet-core#5376), and
+  `freenet-scaffold`'s `#[composable]` has no inter-contract awareness
+  (freenet-core#2870).
+
+`references/state-authorization-patterns.md` already documented the mechanism
+and its limits, so SKILL.md was contradicting its own reference file; SKILL.md
+now points at it. That reference told authors to do cross-contract auth in
+`validate_state` because `update_state` has no `related` parameter. The
+premise is literally true and the conclusion is now the worse advice:
+`UpdateModification::requires(vec![...])` exists (stdlib
+`src/contract_interface/update.rs:51`) and the host re-invokes `update_state`
+with the results as `UpdateData::RelatedState`, and that is the path
+conformance can actually see. Section rewritten, with `validate_state` kept as
+the documented backstop.
+
+Also corrects two stale version claims found while checking the first:
+
+- "As of May 2026 — River pins `freenet-stdlib = "0.6.0"` but the upstream
+  crate is now `0.8`" is out of date in both halves. River's workspace
+  `Cargo.toml` pins `0.8.5`, which is the current crates.io release, so the
+  reference dApp and upstream no longer diverge. The "track this against
+  stdlib 0.8 once River bumps" conditional is dropped.
+- The security section attributed the `DEFAULT_CIPHER` / `DEFAULT_NONCE`
+  removal to stdlib v0.6.0. Both constants are still present in the
+  published 0.6.0 and 0.6.1 sources and gone by 0.8.2; freenet-stdlib PR #75
+  merged 2026-05-16T18:00Z and 0.8.0 was published four minutes later, so
+  the removal shipped in **0.8.0**. Code referencing them fails against 0.8
+  or newer, not 0.6 or newer. The upgrade note now says 0.6 → 0.8 rather
+  than stepping through 0.7, which was never published to crates.io.
+- The same sweep over `references/`: `build-system.md` carried a
+  "(0.6→0.7→0.8)" comment attributing changes to a release that never
+  shipped, and its workspace stanza plus `ui-patterns.md` pinned `0.8`,
+  `0.6.0` and `dioxus 0.7.3` while claiming to mirror River. River pins
+  `freenet-stdlib 0.8.5` (workspace) and `dioxus 0.7.9` (`ui/Cargo.toml`);
+  those four pins now say so. The `=0.8.0` pin in `build-system.md`'s
+  contract-crate example is deliberately left alone — that section teaches
+  pinning every WASM-affecting dependency with `=x.y.z` for contract-ID
+  reproducibility, and every dependency in the example is a frozen exact
+  pin, so the numbers illustrate the technique rather than tracking a
+  release.
+
+## 1.28.1 (2026-08-22)
+
+Corrects the TypeScript client docs' claim about `subscribe`/`disconnect`,
+and makes the claim version-explicit so it doesn't go wrong again as
+freenet-stdlib ships.
+
+`ui-patterns.md` and `SKILL.md` said stdlib TS made `subscribe` and
+`disconnect` promise-based the same way as `get`/`put`/`update` — resolving
+on the matching response, rejecting on timeout/close/host-error. Checked
+against freenet-stdlib's `typescript/src/websocket-interface.ts`: on every
+npm-published version through 0.3.0 (latest on the registry as of
+2026-08-22), `get`/`put`/`update` really do await a per-request
+pending-queue entry, but `subscribe()` and `disconnect()` just call the
+synchronous `sendRequest()` and return — the promise resolves on send, never
+on response, so it can't catch a subscribe failure (e.g. the per-client
+subscription cap). A developer hit exactly this: their subscribe failures
+were silently invisible because a `try/catch` around `await api.subscribe()`
+can never fire on those versions.
+
+While this fix was in flight, freenet-stdlib PR #94 landed on `main`
+(2026-08-22) making `subscribe()` genuinely correlate to its response —
+ships as TS package **0.4.0**, not yet published to npm. `disconnect()` is
+untouched by #94 and stays fire-and-forget in every version.
+
+- `ui-patterns.md` and `SKILL.md` now state both behaviors explicitly by
+  version: pre-0.4.0 (the callback-based workaround via
+  `onSubscribeResponse`/`onErr`) and 0.4.0+ (the `try/catch` pattern is
+  correct).
+- `disconnect` is documented as resolving on send in every version, with no
+  version caveat needed.
+
+## 1.28.0 (2026-08-21)
+
+The guide taught HOW to resolve a pointer but never WHO should, so a reader had
+no way to tell whether it applied to them. Adding resolution where it cannot help
+buys a network dependency and a new failure path in exchange for nothing.
+
+- **The pinned-in-time test.** You need a pointer if a copy of your code can still
+  be running long after the artifact it addresses has moved: anything installed,
+  vendored or bundled, and anything deployed on its own schedule. You do not, on
+  engineering grounds, if you are rebuilt and redelivered whenever that artifact
+  changes, which is the ordinary case for a Freenet web app served from a
+  container republished in place.
+- **Vendoring a copy is the same trap with an extra step**, and looks like a build
+  artifact rather than a stale reference. One app in this ecosystem vendored a
+  delegate six generations and three months stale and registered it on startup.
+- **A backward-searching recovery cannot rescue a stale anchor.** If your idea of
+  "current" is out of date, the live state is FORWARD of everywhere your probe
+  looks, and you may write an ancient copy onto a retired address. A build-time
+  assertion that your bundled hash is current protects the binary when built, not
+  when run.
+- **River's UI is documented as a deliberate exception rather than left as a
+  contradiction.** It resolves despite the test saying it need not, because it is
+  the reference people read when learning to build Freenet apps. Copying that
+  choice means copying its constraint: resolving forward inverts the
+  compatibility direction, so an old client can meet newer state, and the
+  dangerous half is WRITING, not reading. The bound to adopt is refusing to write
+  to an unrecognised generation and staying read-only until reloaded.
+
+## 1.27.0 (2026-08-19)
+
+Two additions to `building-on-other-apps.md`, both from the delegate-succession
+work, which is the first consumer to treat a pointer record as an authorization
+input rather than as an address. That raises the bar on two things the file
+previously stated too weakly.
+
+- **How durable the anti-rollback floor must be.** "Persist it" invites
+  `localStorage`, which an attacker can clear. The rule is now a test: the floor
+  must be at least as durable as whatever it guards, and stored beside it,
+  because clearing the floor is exactly as useful to an attacker as defeating
+  it. With the reassuring corollary, so nobody defends against it: a freshly
+  installed old version has an empty floor AND an empty store, so floor and data
+  are born together and the danger is only in separating them later.
+- **The scope note now names a failure that is silent on both sides.** Freenet's
+  host secret enumeration is best-effort by design: `list_secret_keys` calls
+  `unwrap_or_default()` on an unreadable registry and returns an EMPTY LIST
+  rather than an error, and `register_key` can store a value while declining to
+  register it, warning only on the node. So a handover can enumerate, ship what
+  it found, report an honest success, and still have moved a subset, with
+  nothing the user or the app can inspect. Verified in freenet-core's
+  `secrets_store/store.rs` (`list_secret_keys` at :1508, the cap
+  `MAX_REGISTERED_KEYS_PER_SCOPE = 4096` at :102), not taken from a summary.
+  The rule that falls out: treat "the data arrived" as a separate claim needing
+  its own evidence, and never infer it from the mover reporting success.
+
+## 1.26.0 (2026-08-19)
+
+Three gaps freenet-core#2776 lists as outstanding for this skill.
+
+**The `freenet-migrate` writer seam** (`delegate-patterns.md`). The crate decides
+what to migrate; the app supplies the write, and four constraints on that write
+are invisible to the crate. Never-clobber is the app's choice and
+`UnionAllGenerations` rests entirely on it, so an overwriting writer installs the
+*oldest* generation's value with a clean report. An aggregate secret is
+read-merge-write, where skipping hides entries and overwriting deletes them.
+Markers must be durable when `record_marker` returns, since the crate never
+flushes one. And the cross-generation policy is a deliberate choice with a cost
+either way, not a default to leave alone.
+
+**Two operational facts** (`build-system.md`). Build-caching bugs cannot be
+reproduced in a git worktree: `.git` is a file there, so a `build.rs` naming
+`../.git/HEAD` in `cargo:rerun-if-changed` makes the script always-dirty, which
+is why Delta's stale-table bug survived investigation. `cargo:` directives are
+also parsed from stdout only, so `eprintln!("cargo:warning=...")` renders nothing
+and a `cargo:warning` is never a gate. Separately, a publish gate must be wired
+into the publish task itself: ghostkeys' author-key check lived only in CI while
+the publish path depended on a different script.
+
+**Three review questions** (`upgrade-and-migration.md`). Does the guard at a seam
+check both sides of it? Is the test double above or below the bug you care about?
+Is the operation idempotent with respect to the UI as well as to stored data?
+The last one is Delta's editor bug, where a storage-idempotent no-op merge still
+wiped the user's unsaved typing.
+
+## 1.25.0 (2026-08-18)
+
+Summary SIZE guidance, alongside the determinism guidance that was already here.
+
+Summaries turn out to be ~23.7% of all outbound bytes on the network, with a
+fleet-mean summary of 16,675 bytes against a protocol digest-entry size of 21
+(freenet-core#5153). The skill told authors to make summaries deterministic and
+smaller than state, but gave them nothing to check against — so a summary could
+satisfy every stated rule and still be two orders of magnitude too big.
+
+Adds ten checkable rules under "Keep summaries small", each grounded in a
+measured finding from a River audit rather than general advice. The ones most
+likely to change what an agent writes:
+
+- A value only ever compared for equality must be a digest, not the thing it
+  fingerprints. River carried raw Ed25519 signatures to run `>` and `contains()`;
+  the digest form measured 135.27 -> 28.01 bytes/entry.
+- Assert the encoding, never derive it. The same 64 bytes cost 66 CBOR bytes as a
+  byte string and 119 as a derived tuple; a wrong figure survived an issue, a PR
+  body and a review.
+- A lossy bucketed summary is legal when apply_delta is idempotent, and makes the
+  summary constant-size (K=16 -> 145 bytes, independent of N).
+- A summary is a wire-format commitment: changing it re-keys the contract and
+  strands a generation that keeps failing anti-entropy forever.
+
+## 1.24.0 (2026-08-18)
+
+Pointer adoption went from two records to five, so the adoption table in
+`building-on-other-apps.md` was stale within a day of being written. That table
+is the one thing in this skill that goes wrong purely by the passage of time —
+it states which apps an integrator can rely on resolving *today*.
+
+- **Atlas and Delta have published.** The table now lists all five live records:
+  River's two, Atlas's `atlas.index-contract`, and Delta's `site-contract` and
+  `site-delegate`. All five were verified by resolving them from the live
+  network, not by reading the repos that generated them.
+- **Author keys are deliberately not listed here.** The table carries pointer
+  *addresses* only, which are public routing information, and sends the reader
+  to each app's own `FREENET.md` for the verifying key. Reading a trust anchor
+  out of a third-party table is the exact mistake the surrounding section warns
+  against, and listing them here invited it.
+- **Noted that the author-key encodings differ** — River's and Delta's are
+  `river:v1:vk:`-prefixed base58, Atlas's is bare hex, and both decode to the
+  same 32 raw bytes. An integrator who writes one parser and assumes will fail
+  on the second app they try.
+- **Called out that ghostkeys still has no record.** It is the app whose re-keys
+  motivated this file, so a reader is most likely to reach for a pointer exactly
+  where one does not yet exist; that reader needs the bundle-fetch fallback.
+
+## 1.23.0 (2026-08-17)
+
+> Updated 2026-08-18: the pointer contract is now LIVE. River published the
+> first two records (`river.room-contract`, `river.chat-delegate`), both
+> verified from the network and resolved through `resolve_app_pointer`. Adoption
+> is still thin — Atlas and Delta have records prepared but unpublished, and
+> everything else including ghostkeys has none — so the bundle-fetch fallback in
+> `building-on-other-apps.md` remains the right path for those apps.
+>
+> **Superseded by 1.24.0 (later on 2026-08-18):** Atlas and Delta have since published.
+> The adoption note above is kept as it stood on the 18th; the current list is
+> the table in `building-on-other-apps.md`.
+
+The skill covered how to survive *your own* re-keys and said nothing about
+surviving *someone else's*, which is the problem third-party integrators
+actually have.
+
+- **New `references/building-on-other-apps.md`** — the consumer side of
+  addressing. A backward probe searches backward from a key you already hold, so
+  it cannot help an integrator who is pinned to a key that has since moved;
+  neither can pinning a version of the author's crate, which pins you to their
+  view of the key as of their release. The answer is to resolve the author's
+  pointer at runtime. Covers the three things integrators get wrong (deriving
+  with the pointer's params instead of your own, not persisting the anti-rollback
+  floor — including after a withdrawal — and handling only the two `PointerOutcome`
+  arms that carry a record, which silently no-ops on the other five), and states
+  the scope boundary: the pointer solves **addressing only** and says nothing
+  about whether state or secrets under the old key survived.
+- **The resolver is published, and the skill said no resolver existed.**
+  `references/upgrade-and-migration.md` described the pointer contract as
+  "emerging, not yet consumable" with "no client resolver exists yet". A
+  resolver ships in `freenet-migrate` 0.6.0 (`freenet_migrate::pointer`), so
+  that text was out of date; corrected, with the author-side and consumer-side
+  halves cross-linked. Note this is a claim about the *resolver*, not about
+  adoption: pointer adoption is thin, so the new file and the SKILL.md callout
+  both say to expect the webapp-bundle fallback to be the working path for most
+  apps today.
+- **`delegate-patterns.md` → "Depending on Someone Else's Delegate"** now offers
+  the pointer as the principled mechanism alongside the existing webapp-bundle
+  fetch, and is explicit about what the bundle pattern does not give you: no
+  author signature over the answer, no rollback protection, no withdrawal signal.
+- **Skill description now names integration**, so the skill loads for "how do I
+  read another app's contract" and not only for building or upgrading your own.
+- **Version housekeeping:** `marketplace.json` was still at 1.20.0 while this
+  changelog had already published 1.21.0 and 1.22.0 — both landed directly on
+  main, and the version-bump workflow only triggers on `pull_request`, so it
+  never ran for them. Bumped straight to 1.23.0. The CI trigger gap is filed
+  separately; this entry only fixes the drift.
+
+## 1.22.0 (2026-08-17)
+
+Canonical serialization was documented for summaries only, and the commutativity
+example stored state in a `HashMap` — teaching the defect it warns about
+elsewhere.
+
+- **State must serialize canonically, stated as a requirement.** Peers decide they
+  have converged by comparing state *bytes*, so two peers holding the same logical
+  state in a different byte order heal forever without agreeing. A `HashMap`
+  anywhere in state serializes in insertion order, which depends on the order
+  updates happened to arrive.
+- **Fixed the "Set-Based Operations" example** to use `BTreeMap` rather than
+  `HashMap<VerifyingKey, SignedMember>` for state.
+- **`SKILL.md`: the rule now covers state as well as summaries**, and says why the
+  merge laws are checked on exact bytes — canonical encoding is a platform
+  requirement (freenet-core #5320), which is what makes exact comparison correct
+  rather than over-strict.
+
+## 1.21.0 (2026-08-17)
+
+The merge laws were stated as a commutative monoid: associativity, commutativity
+and identity. Idempotence was missing, which is the one Freenet's delivery model
+makes unavoidable and the one live contracts are actually breaking.
+
+- **`contract-patterns.md`: idempotence is now a stated law**, with its own
+  property test, and the section is framed as a join-semilattice rather than a
+  commutative monoid. Delivery is at-least-once, so the same state or delta
+  legitimately arrives more than once (a retry, a re-subscribe, anti-entropy
+  healing a divergence); a merge that changes the state on re-application never
+  settles, and gossips an endless stream of "new" states while doing it.
+- **Called out that identity does not imply idempotence.** `merge(A, I) == A`
+  and `merge(A, A) == A` are different requirements, and a merge that appends
+  rather than unions satisfies the first while failing the second — which is the
+  shape of the defects found in the wild.
+- **`SKILL.md`: the one-line summary named only commutativity**; it now names all
+  three laws and points at the detail.
+- **Renamed the section from "Commutative Monoid Requirement" to "Merge Law
+  Requirements"**, and updated every cross-reference. A heading naming three of
+  the four laws while the body named four is the same drift that lost idempotence
+  in the first place. The `update_state` doc comment in the trait example said
+  only "MUST be commutative"; it now names all three laws and points out that
+  merging IS `update_state`.
+
+Evidence: freenet-core #5153 attributed the largest single source of network
+traffic to contracts whose merges do not converge, and the #5320 conformance
+survey found a live contract whose `merge(A, A)` never reaches a fixpoint, plus
+three more breaking commutativity.
 
 ## 1.20.0 (2026-08-13)
 

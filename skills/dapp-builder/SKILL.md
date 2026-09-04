@@ -1,6 +1,6 @@
 ---
 name: dapp-builder
-description: Build and maintain decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI, and through upgrading a live dApp safely. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, build a Freenet-connected UI, OR upgrade an existing dApp — bump freenet-stdlib, ship a new contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state across a contract/delegate key change without breaking invites or losing data.
+description: Build and maintain decentralized applications on Freenet using river as a template. Guides through designing contracts (shared state), delegates (private state), and UI, and through upgrading a live dApp safely. Use when user wants to create a new Freenet dApp, design contract state, implement delegates, build a Freenet-connected UI, OR upgrade an existing dApp — bump freenet-stdlib, ship a new contract/delegate version (v2), fix a bug that re-keys the WASM, or migrate state across a contract/delegate key change without breaking invites or losing data. Also use when INTEGRATING with a contract or delegate published by another app — reading another project's contract state, depending on a platform delegate, or deciding how to address someone else's artifact so it survives their re-keys.
 license: LGPL-3.0
 ---
 
@@ -75,17 +75,28 @@ The key for a piece of data is derived from the **cryptographic hash of the cont
 
 Freenet solves "Eventual Consistency" using a specific mathematical requirement:
 
-**Commutative Monoid:** The function that merges updates must be a *commutative monoid*.
+**Join-semilattice:** The function that merges updates must be associative, commutative and *idempotent*.
 - Order Independent: It shouldn't matter what order updates arrive in
 - If Peer A merges Update X then Y, and Peer B merges Update Y then X, they must end up with the same result
+- Redelivery-safe: `merge(A, A) == A`. Delivery is at-least-once, so the same update *will* arrive twice — after a retry, a re-subscribe, or anti-entropy. A merge that changes the state on re-application never settles. This is the requirement most often missed; see `references/contract-patterns.md` → "Merge Law Requirements" for why identity is not the same thing, and for the property tests.
+
+**A contract must not read the host clock.** `freenet_stdlib::time::now()` is deprecated for contracts as of freenet-core **v0.2.132**. The merge has to be a function of its inputs — that requirement *is* why replicas converge — so a merge that reads the wall clock isn't merely breaking the laws above; they stop being well-formed statements about it. Two peers eleven minutes apart can produce different states from the same delta and neither is wrong. Today a node logs a warning on loading such a contract and `fdev verify-merge` reports a `host_clock_import` diagnostic; nothing traps *yet*, but the call is staged to **trap** (freenet-core#5465), and when it does the failure is per-call rather than a refusal to load, so no re-key is needed. Carry a client-signed timestamp in state and enforce only monotonicity instead — with clear eyes about what that costs, since a client timestamp is an untrusted hint and can't do anti-grief. **Delegates are unaffected.** See `references/state-authorization-patterns.md` → "Time Handling".
+
+**Check your contract against all of this rather than trusting it:**
+
+```bash
+fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin
+```
+
+It exercises the merge laws against a real corpus, and separately reports code diagnostics — `host_clock_import` being the one that exists today. A code diagnostic never fails the command: it describes the code, not a law the contract broke.
 
 **Efficiency:** Peers exchange **Summaries** (compact representations) and **Deltas** (patches/diffs) rather than re-downloading full state.
 
 **Requirement: `get_state_delta` must not ship state to a peer that already has it.** When the requester's summary shows it holds everything you have, the delta carries no information, so it must not contain the state or approach the state's size. It *should* be a literally empty `StateDelta` (`vec![]`), which is the unambiguous "converged" answer and what `freenet-scaffold` produces for you; a few tens of bytes of encoding framing from serializing an all-empty struct is acceptable. What matters is delta size relative to state size: 20 bytes against a 500 KB state is fine, a state-sized delta is a broken delta mechanism that re-ships everything on every reconciliation, forever. Your summary must likewise be far smaller than your state. Core is adding a probe for contracts that get this wrong, and it currently costs the network real bandwidth. Full detail, code shapes, and a test are in `references/contract-patterns.md` → "The Delta to an Up-to-Date Peer".
 
-### Summaries must serialize deterministically
+### State and summaries must serialize canonically
 
-**Use deterministic maps in your `Summary` type: `BTreeMap`, never `HashMap`.** A `HashMap` serializes in nondeterministic order (ciborium), so two identical states can summarize to different bytes and core's byte-level convergence check misfires — spurious heals, or missed ones. The same caution applies to any map inside whatever `summarize` returns.
+**Use deterministic maps everywhere in state AND summaries: `BTreeMap`/`BTreeSet`, never `HashMap`/`HashSet`.** Peers decide they have converged by comparing state bytes, so two peers holding the same logical state in a different byte order heal forever without ever agreeing. Canonical encoding is a platform requirement (freenet-core #5320), and the merge laws are checked on exact bytes because of it. A `HashMap` serializes in nondeterministic order (ciborium), so two identical states can summarize to different bytes and core's byte-level convergence check misfires — spurious heals, or missed ones. The same caution applies to any map inside whatever `summarize` returns.
 
 Beyond that, make sure your state genuinely converges through `summarize` / `delta` / `apply`, and test that it does, rather than assuming a live broadcast reaches every peer.
 
@@ -110,10 +121,79 @@ Beyond that, make sure your state genuinely converges through `summarize` / `del
 > do not treat a ban list or permission field as needing to ride alongside a
 > frequently-changing one. The earlier guidance to do so is retired.
 
+### Keep summaries small — it is measured, and it is expensive
+
+Summaries are **~23.7% of all outbound bytes on the Freenet network**, and the fleet-mean summary is **16,675 bytes** against a protocol digest-entry size of 21 bytes (freenet-core#5153). A fat summary is not a local inefficiency: it ships to every interested peer on every ~5-minute anti-entropy heartbeat whether or not anything changed, and it sets the floor for how cheaply a peer can be brought up to date.
+
+Every rule below is checkable in review and grounded in a measured finding from River.
+
+1. **Every summary field must be read by `delta()`.** Grep each field name against the `delta()` bodies. A field nothing reads is dead weight re-sent forever.
+
+2. **A value that is only ever compared for equality must be a fixed-width digest, never the thing it fingerprints.** River carried raw Ed25519 signatures in `member_info` purely to run `>`; replacing them with a 16-byte digest measured **135.27 → 28.01 bytes per entry**. The DM summary still does this for a bare `contains()` at 66 bytes/entry — 19,803 bytes at its cap, larger than the whole rest of the summary (freenet/river#596).
+
+3. **Size a digest by who controls the colliding inputs, not by taste.** If a party can grind *both* sides of the comparison, 64 bits is a ~2^32 birthday search — hours on commodity hardware — so use 128. If the attacker controls only one side, 64 may do. Write the threat model in the doc comment. A collision here is not a crash; it is a record that silently never propagates.
+
+4. **Assert the encoding; never derive it.** The *same* 64 bytes cost **66 CBOR bytes** as a byte string and **119** as a derived tuple — ciborium maps `serialize_tuple` to an array where every byte ≥ 24 costs two. River quoted 66 for a type that actually encoded at 119, and the wrong number survived an issue, a PR body, and a review. Hand-write `Serialize` with `serialize_bytes` for any fixed-size byte array, and pin it with a **golden vector**: one fixed input, one fixed expected digest, one fixed expected byte length. A randomised digest oracle misses byte-order bugs intermittently.
+
+5. **Measure size with realistic key values, not small integers.** A `FastHash(i)` for small `i` encodes in 1-3 CBOR bytes; a real key's encodes in 9. A test built from `0..N` understates the per-entry cost by ~30% and will pass review.
+
+6. **A summary should be O(1) or sub-linear in the collections it describes — or justify the linearity in writing.** A flat enumeration grows without bound as your app succeeds. If you keep it linear, state the element cap that bounds it and check `cap × per-entry` against your budget. River's is fully linear; at 200 members × 1000 messages it measures 16,723 bytes.
+
+7. **A lossy summary is legal when `apply_delta` is idempotent — exploit that.** K fixed buckets each holding an 8-byte digest of that bucket's contents makes the summary constant-size: measured **K=16 → 145 bytes, independent of N**, against 3,894 bytes for the flat form at 139 members. `get_state_delta` may then return a *superset* of the true delta, which is sound only if applying an already-held element is a no-op — verify that first. The trade is real: one changed element resends its whole bucket. It wins because summaries go out on every heartbeat while deltas fire only on change, so **measure your summary-broadcast : state-change ratio before committing.**
+
+8. **A capped or pruning collection needs a retention horizon in the summary.** Without one, `delta()` is a pure set difference: the receiver prunes what it just received, neither summary changes, and the pair re-sends forever. Publish the oldest key *held*, only at capacity, so it strictly increases each exchange and the loop provably terminates.
+
+9. **Nothing in a summary should reveal information the recipient is not entitled to.** A summary goes to more peers, more often, than state does. River's DM summary advertises every DM in the room to every member, participant or not, leaking exact DM volume.
+
+10. **A summary is a wire-format commitment: changing it re-keys the contract and strands every existing copy.** Which hash, how wide, which bytes in which order, and how it serializes are all frozen at publish. Keep a registry of past generations (River keeps `legacy_room_contracts.toml`, 31 entries) and expect every abandoned generation to keep costing anti-entropy bandwidth indefinitely — one stranded River generation is currently doing 3,829 failed summary comparisons against **zero** update events (freenet-core#5158). Batch summary changes rather than shipping them one at a time.
+
 ## Advanced Capabilities
 
 - **Subscriptions:** Clients can subscribe to contracts and get notified of changes immediately (real-time apps)
-- **Contract Interoperability:** Contracts reading other contracts' state is planned but not yet implemented
+- **Contract Interoperability:** Cross-contract reads are implemented and working.
+  `validate_state` can return `ValidateResult::RequestRelated(Vec<ContractInstanceId>)`;
+  the host fetches those contracts and re-invokes with `RelatedContracts` populated
+  (`fetch_related_for_validation_network` in
+  `crates/core/src/contract/executor/runtime/contract_ops.rs`, on both the PUT and
+  UPDATE paths). The machinery behind it is real: a related fetch that would block the
+  serial contract loop is deferred to an off-loop waiter, bounded by
+  `MAX_INFLIGHT_DEFERRALS = 256` with an RAII guard giving exactly-once resume, and an
+  over-cap op surfaces `MissingRelated` rather than growing unboundedly
+  (freenet-core#4391, `crates/core/src/contract.rs`). freenet-core#2870 ("Complete
+  related contract mechanism implementation") is still open but is itself partly stale —
+  the UPDATE-path `todo!()` it cites at runtime.rs:946 no longer exists.
+
+**The thing to get right is not whether it works, but what you are allowed to read.**
+A contract's verdict must be a function of its inputs, or replicas diverge. Reading
+another contract widens the input set to something that changes underneath you:
+
+- Reading an **immutable** fact (a certificate, a signed key) is safe — every peer gets
+  the same answer forever.
+- Reading a **monotonic** fact in the once-true-always-true direction is safe.
+- **Gating validity on mutable or growing state is not.** "Reject if the other party has
+  more than N entries" flips from valid to invalid as their state grows, so peers
+  validating at different moments disagree and never converge. That class of rule belongs
+  in client-side policy, not in `validate_state`.
+
+Practical limits:
+
+- **One round only.** A `RequestRelated` is fetched and retried **exactly once**; a
+  second is an error (`contract/executor/runtime/contract_ops.rs:431-432`), capped at
+  `MAX_RELATED_CONTRACTS_PER_REQUEST = 10` ids. No chained dependencies.
+- On the client-facing UPDATE surface, `UpdateData::RelatedStateAndDelta` is the form
+  you send; bare `UpdateData::RelatedState` / `RelatedDelta` are rejected from
+  `ContractRequest::Update` and reserved for the runtime's own request-related
+  orchestration, which surfaces `RelatedState` to your WASM itself.
+- A related fetch that times out can wedge an UPDATE merge (freenet-core#4077, open).
+- Related state resolved during *validation* is never captured by the conformance
+  system (freenet-core#5376, open), so a contract that depends on that path is
+  unjudgeable — and an unjudgeable contract reads exactly like a clean one.
+- `freenet-scaffold`'s `#[composable]` has no inter-contract awareness
+  (freenet-core#2870), so cross-contract dependencies are hand-rolled.
+
+The mechanism with code, and which of the two paths to request related state
+from, is in `references/state-authorization-patterns.md` →
+"Related-Contracts Mechanism".
 
 ---
 
@@ -121,6 +201,19 @@ Beyond that, make sure your state genuinely converges through `summarize` / `del
 
 Follow these phases in order.
 
+> **Building on an app you do NOT own** — reading River rooms, using the
+> ghostkeys delegate, indexing another project's contracts? Do not hardcode
+> their contract or delegate key. It is `BLAKE3(BLAKE3(wasm) ‖ params)`, so it
+> moves on every re-key of theirs, including a bare version bump, and the
+> failure is silent: every read comes back looking like "this user has nothing
+> stored". Pinning a version of their crate does not help — that pins you to
+> their view of the key as of their release, which is the thing that went stale.
+> Fetch their key at runtime instead: resolve their author-signed pointer if
+> they publish one, and otherwise read it from their webapp bundle, which is
+> what ghostkeys does today. Pointer adoption is thin, so expect the fallback to
+> be the path for most apps right now. Either beats a compiled-in constant. See
+> `references/building-on-other-apps.md`.
+>
 > **Working on an app that already exists?** Before anything else, check whether
 > it hardcodes a *delegate key* belonging to a platform delegate it does not own
 > (ghostkeys being the one in use today). That constant goes stale on every
@@ -161,19 +254,31 @@ Start by listing each *kind* of shared state your app needs — each kind become
 1. Define state structure using `#[composable]` macro from freenet-scaffold
 2. Implement `ComposableState` trait for each component
 3. Implement `ContractInterface` trait for the contract
-4. Ensure all state updates satisfy the commutative monoid requirement, and that `get_state_delta` returns a negligible delta (ideally zero bytes, never state-sized) when the requester's summary already matches your state (see `contract-patterns.md`)
+4. Ensure all state updates satisfy the merge laws (associative, commutative, idempotent), and that `get_state_delta` returns a negligible delta (ideally zero bytes, never state-sized) when the requester's summary already matches your state (see `contract-patterns.md`)
 5. **Every field in state must be covered by a cryptographic signature** -- contracts run on untrusted peers who can modify unsigned fields. Write a test for each signed field verifying that tampering causes verification failure. See contract-patterns.md for versioned signature patterns when adding fields later.
-6. **Plan contract upgrade from v1 — it's low-risk and mechanical when you design for it.** A WASM change moves the contract key, but if you anchor your app's durable references on a **stable identity anchor that is independent of the WASM** — never the raw contract key — the upgrade is transparent to users: state migrates itself on next load, and every reference derived from that anchor (invites, share links, membership, external services) survives the re-key because the client re-derives the new contract key from the *unchanged anchor*, not from a stored contract key. What the anchor *is* depends on the app (an owner/user key — e.g. River; a fixed namespace/singleton params; a DID; or an index contract mapping a stable name → current key); the options are in `upgrade-and-migration.md` step 1. Invites and links do **not** die on an upgrade — River's 0.6→0.8 re-key on the live network kept every room and invite. Recreation is only for deliberately changing the app's *identity anchor* (e.g. rotating a compromised owner key), never for a routine contract/stdlib bump. The shipped baseline (River #292, Delta) is a **backward probe from a committed legacy-code-hash registry**: reconstruct each predecessor key from `(stable params ‖ old code_hash)`, GET the old state, fold it forward, and re-PUT under the current key — permissionless because the successor's `validate_state` re-verifies every byte. The one required operational step is registering the *outgoing* code hash in the registry before the WASM changes, then republishing. An author-signed `OptionalUpgrade` pointer is an *optional* straggler courtesy on top, not the mechanism that moves state. The reusable `freenet-migrate` crate (0.6.0 on crates.io, with `freenet-migrate-build` 0.2.0) packages this baseline and owns the probe decisions in a sans-IO driver; it is what River's contract-migration path runs in production (browser UI and `riverctl`), and existing apps adopt it without a rewrite because its build codegen reads their existing `[[entry]]` registries and emits view consts matching the hand-rolled shapes (freenet/river#434, #436, #437). Two things about the probe that lose data silently if you get them wrong: **silence is not absence** (0.6.0's breaking change: a timeout is `Unknown`, never a miss, and no outcome certifies that the migration is safe to record as finished), and **nothing may write to the new key before the probe runs**, because the probe's trigger is "the new key has no real state yet" and an earlier write permanently suppresses it (freenet/river#621). For the procedure of swapping an existing hand-rolled sweep over to the crate, see the `freenet-migrate-adoption` skill. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration". For the cross-cutting operational discipline that keeps the migration itself from losing data (resumable, idempotent, non-destructive, regression-gated, observable), see `upgrade-and-migration.md`.
-7. **Read `state-authorization-patterns.md` before designing the second iteration.** It captures cross-cutting patterns (per-item vs bundled signatures, replay protection via monotonic counter / tombstones / cross-context binding, signed-payload hygiene, `time::now()` gotchas, related-contracts limits, wire-format stability) that bite on every contract beyond the trivial.
+6. **Plan contract upgrade from v1 — it's low-risk and mechanical when you design for it.** A WASM change moves the contract key, but if you anchor your app's durable references on a **stable identity anchor independent of the WASM** — an owner/user key, fixed singleton params, a DID, or an index contract mapping a stable name → current key (options in `upgrade-and-migration.md` step 1) — the upgrade is transparent: the client re-derives the new contract key from the *unchanged* anchor, so invites, share links and membership survive. River's 0.6→0.8 re-key on the live network kept every room and invite; recreation is only for deliberately rotating the anchor itself, never for a routine contract/stdlib bump. State is carried forward by a backward probe from a committed legacy-code-hash registry, packaged by the `freenet-migrate` crate (0.6.0, with `freenet-migrate-build` 0.2.0) — do not hand-roll it. **Read the `freenet-app-migration` skill before writing any of it, if you have it**: it owns the migration doctrine — when to probe, which probe outcomes may seal a completion marker, and the failure modes that lose data with a green build. It ships separately from this plugin, so if it is not installed, `contract-patterns.md` and `upgrade-and-migration.md` carry the same rules and are enough to build against. See `contract-patterns.md` → "Contract WASM Upgrade & State Migration" for the key-derivation mechanism, `upgrade-and-migration.md` for the operational discipline, and the `freenet-migrate-adoption` skill for swapping an existing hand-rolled sweep over to the crate.
+7. **Read `state-authorization-patterns.md` before designing the second iteration.** It captures cross-cutting patterns (per-item vs bundled signatures, replay protection via monotonic counter / tombstones / cross-context binding, signed-payload hygiene, why a contract must not read the host clock and what to carry instead, related-contracts limits, wire-format stability) that bite on every contract beyond the trivial.
 
 References:
-- `references/contract-patterns.md` — `ContractInterface`, commutative monoid, composable state, basic signatures.
-- `references/state-authorization-patterns.md` — authentication, replay protection, signed-payload hygiene, time, related-contracts, wire-format stability, common pitfalls.
+- `references/contract-patterns.md` — `ContractInterface`, the merge laws, composable state, basic signatures.
+- `references/state-authorization-patterns.md` — authentication, replay protection, signed-payload hygiene, time (contracts must not read the host clock), related-contracts, wire-format stability, common pitfalls.
 - `references/identity-and-addressing.md` — short self-certifying user-facing addresses, keeping large (post-quantum) keys out of identifiers, identity that survives WASM upgrades, and blocking bots without a server (ghost keys vs proof-of-work).
 
 ### Phase 2: Delegate Design (Private State)
 
 Determine what private data each user needs stored locally and split it across delegates by responsibility (e.g. one delegate per trust boundary or per long-running background task). Most apps need at least one delegate; many need several.
+
+> **Know the limits before you lean on a delegate for background work.** A
+> delegate runs only when something pokes it: there is no scheduled wakeup
+> (freenet-core#3972). Its contract GET reads the local store only, and its
+> contract subscribe registers no network demand, so subscribing does not keep a
+> contract alive in the network (freenet-core#4669). Both are open with no fix
+> merged as of 2026-08-30.
+> Test that work against a real node: `freenet local` never runs the loop that
+> services a delegate's contract requests, so a delegate's GET, PUT, UPDATE and
+> SUBSCRIBE all silently do nothing there (freenet-core#5273).
+> `references/delegate-patterns.md` → "Delegate Capabilities" has the verified
+> detail and the current state.
 
 **Key questions (per delegate):**
 - What user-specific data needs persistence? (keys, preferences, cached data)
@@ -324,6 +429,9 @@ References:
   contract/delegate upgrades: the five migration properties (idempotent,
   resumable, non-destructive, regression-gated, observable), enumerating
   dynamic key families, the upgrade test harness, and staged reversible rollout.
+- `references/building-on-other-apps.md` — the *consumer* side: integrating with
+  a contract or delegate you do not own, resolving the author's pointer instead
+  of pinning a key, the seven outcome arms, and what a pointer does not tell you.
 
 ## Project Structure Templates
 
@@ -400,18 +508,18 @@ deserialization failures, missing features, and "variant index out of range"
 errors. Check [River's workspace Cargo.toml](https://github.com/freenet/river/blob/main/Cargo.toml)
 before pinning.
 
-As of May 2026 — River pins `freenet-stdlib = "0.6.0"` but the upstream
-crate is now `0.8` (0.6 → 0.7 added Base58-stringified `contract_states`
-keys in `NodeDiagnosticsResponse`; 0.7 → 0.8 hardened wire-boundary enums
-with `#[non_exhaustive]` and removed the world-known `DEFAULT_CIPHER` /
-`DEFAULT_NONCE` constants). If you build only against River, mirror its
-pin; if your code links into stdlib 0.8 directly, you need the bumped
-version *and* the wildcard match arms / random cipher generation
-documented in `references/delegate-patterns.md`.
+As of August 2026 — River pins `freenet-stdlib = "0.8.5"`, which is the
+current crates.io release, so River and upstream no longer diverge. If you
+are moving code off an older pin, the step is 0.6 → 0.8 (no 0.7 was ever
+published to crates.io): it added Base58-stringified `contract_states` keys
+in `NodeDiagnosticsResponse`, hardened wire-boundary enums with
+`#[non_exhaustive]`, and removed the world-known `DEFAULT_CIPHER` /
+`DEFAULT_NONCE` constants, so you need the wildcard match arms / random
+cipher generation documented in `references/delegate-patterns.md`.
 
 ```toml
-# Workspace-wide (Cargo.toml) — track this against stdlib 0.8 once River bumps.
-freenet-stdlib = { version = "0.8", features = ["contract"] }
+# Workspace-wide (Cargo.toml) — matches River pin.
+freenet-stdlib = { version = "0.8.5", features = ["contract"] }
 freenet-scaffold = "0.2.2"
 freenet-scaffold-macro = "0.2.2"
 
@@ -419,7 +527,7 @@ freenet-scaffold-macro = "0.2.2"
 freenet-stdlib = { workspace = true, features = ["net"] }
 
 # UI framework
-dioxus = { version = "0.7.3", features = ["web"] }
+dioxus = { version = "0.7.9", features = ["web"] }
 ```
 
 The `contract` feature is required for contract crates targeting
@@ -445,25 +553,32 @@ matching `@freenetorg/freenet-stdlib` release:
 ```
 
 The TS package v0.2.0 brought the API to parity with the Rust client:
-`FreenetWsApi` with **promise-based** `get`/`put`/`update`/`subscribe`/
-`disconnect` (`await api.X(...)`), full `ResponseHandler` including
-`onContractNotFound`/`onSubscribeResponse`/`onClose`, inbound
-`ReassemblyBuffer`, and transparent outbound chunking for payloads
->512 KB. Callbacks still fire alongside promises for backward
-compatibility; the default request timeout is 30 s. See
-`references/ui-patterns.md` for the full pattern and a warning about the
+`FreenetWsApi` with **promise-based** `get`/`put`/`update`
+(`await api.X(...)`, resolves/rejects on the matching response), full
+`ResponseHandler` including `onContractNotFound`/`onSubscribeResponse`/
+`onClose`, inbound `ReassemblyBuffer`, and transparent outbound chunking
+for payloads >512 KB. Callbacks still fire alongside the promise-based
+calls for backward compatibility; the default request timeout is 30 s.
+`subscribe` is also promise-based **from TS package 0.4.0** (resolves/
+rejects on the matching `SubscribeResponse`); on the npm-published 0.3.0
+and earlier it resolves as soon as the request is sent, never on the
+host's response — use the `ResponseHandler` callbacks to detect a refused
+subscribe on those versions. `disconnect` resolves on send in every
+version. See `references/ui-patterns.md` for the full pattern (including
+which stdlib version you need for which behavior) and a warning about the
 private `sendRequest` cast used for delegate messages until a public
 builder lands.
 
 ### Security: removed encryption defaults
 
-stdlib v0.6.0 (PR #75) **removed** the public constants `DEFAULT_CIPHER`
+stdlib v0.8.0 (PR #75) **removed** the public constants `DEFAULT_CIPHER`
 and `DEFAULT_NONCE` to close a CVE-class issue (world-known keys leaked
-into any binary that imported them). Delegates that previously used these
+into any binary that imported them). They are still present in 0.6.0 and
+0.6.1. Delegates that previously used these
 must now generate random values per session — e.g.
 `let key: [u8; 32] = rand::random(); let nonce: [u8; 24] = rand::random();`.
 Code still referencing the old constants will fail to compile against
-stdlib 0.6 or newer.
+stdlib 0.8 or newer.
 
 ---
 

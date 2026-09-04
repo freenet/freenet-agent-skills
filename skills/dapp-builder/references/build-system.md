@@ -233,6 +233,13 @@ covered by the lockfile:
   container).
 - **The UI toolchain (`dx`) version.** For a UI compiled to WASM, the Dioxus CLI
   version affects the bytes just like rustc does. Pin it.
+- **`cargo fmt`.** Panic locations embed `file:line`, so reformatting a contract
+  crate moves the panic metadata and therefore the WASM bytes and the contract
+  address — with no semantic change and nothing in the diff that looks like a
+  re-key. Observed for real in the freenet-bitcoin bridge, where a `cargo fmt`
+  re-keyed the contracts and the successor came up with zero claims. Either treat a
+  contract crate's formatting as frozen between deliberate re-keys, or run `cargo
+  fmt` and re-key on purpose, registering the outgoing hash first.
 - **Absolute build-path embedding.** rustc bakes absolute paths (e.g.
   `/home/you/.cargo/registry/...`) into the WASM, so the *same* lock + toolchain
   on a different machine or username still produces different bytes. Strip them
@@ -316,8 +323,9 @@ resolver = "2"
 [workspace.dependencies]
 # Mirror River's pinned versions; bump together when upgrading. Check
 # https://github.com/freenet/river/blob/main/Cargo.toml before pinning.
-# stdlib bumped to 0.8 to track current freenet-stdlib release (0.6→0.7→0.8).
-freenet-stdlib = { version = "0.8", features = ["contract"] }
+# stdlib 0.8.5 tracks the current freenet-stdlib release (0.6 → 0.8; no 0.7
+# was ever published to crates.io).
+freenet-stdlib = { version = "0.8.5", features = ["contract"] }
 freenet-scaffold = "0.2.2"
 freenet-scaffold-macro = "0.2.2"
 serde = { version = "1", features = ["derive"] }
@@ -744,6 +752,26 @@ fn main() {
 }
 ```
 
+### Build-caching bugs are invisible from a git worktree
+
+**Reproduce any stale-artifact or build-caching bug in a real clone, never in a
+worktree.** In a worktree `.git` is a *file*, not a directory, so a `build.rs`
+line like `println!("cargo:rerun-if-changed=../.git/HEAD")` names a path that
+cannot resolve, and cargo treats an unresolvable `rerun-if-changed` as
+always-dirty. The build script then re-runs on every build and never caches,
+which is precisely the condition under which a stale-artifact bug cannot appear.
+Delta's stale legacy-delegate table (freenet/delta#52, #53) survived
+investigation for exactly this reason: every reproduction attempt happened in a
+worktree, while `cargo make publish-delta` runs in a real clone. The fix is to
+resolve git metadata paths with `git rev-parse --git-path <spec>` instead of
+hardcoding `../.git/...` (freenet/delta#58).
+
+**Related, and worth knowing in the same breath: `cargo:` directives are parsed
+from stdout only.** `eprintln!("cargo:warning=...")` renders nothing at all, so a
+build script that "warns" on stderr and continues is silent rather than loud. And
+a `cargo:warning` is not a gate even on stdout, because nothing fails on it: when
+a build script finds a condition that must stop the build, `panic!`.
+
 ## Testing with Local Mode
 
 Freenet's **local mode** runs a standalone executor without network connectivity. Use this for testing contract and delegate logic during development.
@@ -866,6 +894,18 @@ dependencies = ["build-tailwind", "preflight"]
 ```
 
 The `check-migration` task verifies that committed WASM files match what's built from source, and that delegate migration entries exist when the WASM has changed. See Delta's `scripts/check-migration.sh` for the full implementation.
+
+**Wire the gate into the publish task itself, not only into CI.** A check that
+runs in CI but not on the path `publish` actually takes does not gate the moment
+the mistake becomes permanent, and the two drift apart quietly because nothing
+fails when they do. ghostkeys hit this shape while adding its pointer record: the
+cross-check that the registry's author verifying key matches the one published in
+`FREENET.md` lived only in the CI freshness gate, while `sign-webapp` (which
+`publish-ghostkeys` depends on) depends on a *different* script, so a key mismatch
+had no backstop at the one moment it becomes permanent. It was caught in review
+and the check now runs on both paths (freenet/ghostkeys#37). The rule to keep:
+name the task your publish actually depends on and put the gate there, then let
+CI be the second copy.
 
 ## GitHub Actions CI
 

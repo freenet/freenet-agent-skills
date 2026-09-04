@@ -20,7 +20,10 @@ impl ContractInterface for MyContract {
         related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError>;
 
-    /// Update state with new data (MUST be commutative)
+    /// Update state with new data.
+    /// MUST be associative, commutative and idempotent — see "Merge Law
+    /// Requirements" below. Merging IS this function: core applies an incoming
+    /// full state as `update_state(current, [UpdateData::State(incoming)])`.
     fn update_state(
         parameters: Parameters<'static>,
         state: State<'static>,
@@ -265,15 +268,33 @@ February ([freenet/freenet-core#5056](https://github.com/freenet/freenet-core/is
 Core is adding a probe for this, so a contract that ships state to peers that
 already have it will end up suppressed rather than merely slow.
 
-## Commutative Monoid Requirement
+## Merge Law Requirements
 
-Contract state must form a **commutative monoid** under the merge operation. This means:
+Contract state must form a **join-semilattice** under the merge operation — in
+practice, a commutative monoid that is also **idempotent**. This means:
 
 1. **Associativity:** `merge(merge(A, B), C) == merge(A, merge(B, C))`
 2. **Commutativity:** `merge(A, B) == merge(B, A)`
-3. **Identity:** There exists an empty/initial state `I` where `merge(A, I) == A`
+3. **Idempotence:** `merge(A, A) == A`
+4. **Identity:** There exists an empty/initial state `I` where `merge(A, I) == A`
 
 This ensures that regardless of the order peers receive and apply updates, they all converge to the same final state.
+
+**Idempotence is the one most often missed, and the one the network gives you no
+way to avoid.** Delivery is at-least-once: the same state or delta legitimately
+arrives more than once, after a retry, a re-subscribe, or anti-entropy healing a
+divergence. A merge that changes the state when re-applied therefore never
+settles — each redelivery mutates it again, which produces an endless stream of
+"new" states to gossip and a contract that cannot converge no matter how healthy
+the network is.
+
+This is not hypothetical. Freenet telemetry attributed the largest single source
+of network traffic to contracts whose merges do not converge (freenet-core
+#5153), and a survey of live contracts found one whose `merge(A, A)` never reached
+a fixpoint at all (freenet-core #5320). Note that identity (`merge(A, I) == A`) does
+*not* imply idempotence (`merge(A, A) == A`): a merge that appends rather than
+unions satisfies the first and fails the second, which is exactly the shape of the
+defects found in the wild.
 
 ### Testing Commutativity
 
@@ -308,6 +329,18 @@ mod tests {
             let ab_c = a.clone().merge(&b).merge(&c);
             let a_bc = a.clone().merge(&b.clone().merge(&c));
             prop_assert_eq!(ab_c, a_bc);
+        }
+
+        /// Re-applying the same state changes nothing.
+        ///
+        /// Delivery is at-least-once, so this WILL happen in production. Merge
+        /// twice as well as once: a merge that only settles after one application
+        /// passes a naive test and still fails here.
+        #[test]
+        fn merge_is_idempotent(a in arb_state(), b in arb_state()) {
+            let once = a.clone().merge(&b);
+            let twice = once.clone().merge(&b);
+            prop_assert_eq!(once, twice);
         }
 
         /// Merging with empty state returns original
@@ -359,12 +392,46 @@ mod tests {
 
 ### Common Commutativity Bugs
 
-1. **Non-deterministic tie-breakers:** Using random values or timestamps captured at merge time
+1. **Non-deterministic tie-breakers:** Using random values, or a timestamp read
+   from the host clock at merge time. Reading the clock inside a merge is
+   deprecated outright as of freenet-core v0.2.132 — see "WASM Environment
+   Utilities" below and `state-authorization-patterns.md` → "Time Handling".
 2. **Order-dependent collections:** Using `Vec` where order matters instead of `HashMap`/`BTreeMap`
 3. **Mutation during iteration:** Modifying state while iterating can produce different results
 4. **Missing items in merge:** Only keeping "newer" items without proper conflict resolution
 
-> **Determinism matters in your `Summary` type too, for a separate reason.** A
+> **The same rule applies to your STATE, and it is a requirement rather than a
+> tip.** Freenet peers decide whether they have converged by comparing state
+> *bytes*, so two peers holding the same logical state in a different byte order
+> never recognise each other as converged and heal forever. A `HashMap` (or
+> `HashSet`) anywhere in your state type serializes in iteration order, which
+> depends on insertion history, which depends on the order updates happened to
+> arrive — so the same merge on two peers yields different bytes. **Use
+> `BTreeMap`/`BTreeSet`, or sort before serializing, everywhere in state and
+> summaries alike.**
+>
+> This is why the merge laws above are checked on exact bytes: canonical encoding
+> is a platform requirement (freenet-core #5320), not a nicety. A contract that
+> merges correctly but encodes non-canonically will be reported as breaking
+> commutativity, and the conformance checker will tell you which of the two it is —
+> the finding says so explicitly when both results hold the same bytes in a
+> different order.
+>
+> The checker is `fdev verify-merge`, and it is worth running before you believe
+> any of the claims in this section about your own contract:
+>
+> ```bash
+> fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin
+> ```
+>
+> Give it a corpus (`--state` samples, `--transition BASE RESULT` pairs, or a
+> `--bundle`) and it exercises the laws against real states. It also emits
+> **code diagnostics** that need no corpus at all — `host_clock_import` is the one
+> to watch for, reported when the module imports the host clock (see "WASM
+> Environment Utilities"). A code diagnostic never changes the exit status: it
+> describes the code, it is not a failing law.
+
+> **Determinism matters in your `Summary` type too, for the same reason.** A
 > `HashMap` inside a `Summary` (or anything `summarize` returns) serializes in
 > nondeterministic order, so two identical states can produce different summary
 > bytes. Core compares summaries byte-for-byte to decide whether two peers have
@@ -379,9 +446,13 @@ mod tests {
 ### 1. Set-Based Operations
 
 ```rust
-// Members stored as a set - adding/removing is commutative
+// Members stored as a set - adding/removing is commutative.
+// BTreeMap, not HashMap: state is compared byte-for-byte across peers, and a
+// HashMap serializes in insertion order, so two peers that received the same
+// members in a different order would encode the same set differently and never
+// converge.
 pub struct MembersV1 {
-    members: HashMap<VerifyingKey, SignedMember>,
+    members: BTreeMap<VerifyingKey, SignedMember>,
 }
 
 impl MembersV1 {
@@ -410,6 +481,10 @@ pub struct MessageId {
     sequence: u32,  // Tie-breaker
 }
 ```
+
+The timestamp here comes from the **author's signed payload**, carried in the
+state — never from `freenet_stdlib::time::now()` inside the merge. It orders and
+ranks; it is an untrusted hint, so don't build eviction or expiry on it.
 
 ### 3. Last-Writer-Wins with Version
 
@@ -507,6 +582,16 @@ pub struct RoomParameters {
 // Different parameters = different contract instance
 ```
 
+**A parameter you might want to set later cannot be set later — ever, for that
+instance.** Parameters are hashed into the address, so changing one produces a
+different contract with empty state; there is no "configure it after creation" for
+anything you put here. Shipping a parameter you intend to fill in afterwards is a
+permanent defect that is only discovered when someone tries. A marketplace shipped
+an empty trusted-bridge list meaning to configure it post-launch; every store
+created under it is permanently unable to accept payment. Anything mutable belongs
+in *state*, gated by a signature, with the parameter holding only the key that
+authorizes the change.
+
 **Keep parameters small.** Every client must carry the exact parameter bytes to
 GET/PUT/subscribe an instance, and the parameters often become the basis of a
 user-facing identifier. Embedding a full `VerifyingKey` is fine for 32-byte
@@ -525,9 +610,26 @@ freenet_stdlib::log::info(&format!("Processing update: {:?}", data));
 // Random numbers
 let bytes = freenet_stdlib::rand::rand_bytes(32);
 
-// Current time
+// Current time — DELEGATES ONLY.
+// Deprecated for contracts as of freenet-core v0.2.132, and staged to trap.
 let now: DateTime<Utc> = freenet_stdlib::time::now();
 ```
+
+**A contract must not call `freenet_stdlib::time::now()`.** `update_state` has to
+be a function of its inputs or replicas cannot be guaranteed to converge, so a
+merge that reads the wall clock isn't merely breaking the merge laws — they stop
+being well-formed statements about it. As of freenet-core v0.2.132 a node warns
+when it loads a contract importing the clock and `fdev verify-merge` reports a
+`host_clock_import` diagnostic; nothing traps *yet*, but the call is staged to
+**trap** (freenet-core#5465). Carry a client-signed timestamp in state and
+enforce only monotonicity instead. Delegates are unaffected — private per-node
+state, never replicated, no merge laws. Full treatment, including what the swap
+costs you, is in `state-authorization-patterns.md` → "Time Handling".
+
+The same determinism requirement applies to `rand_bytes` even though it is not
+deprecated: randomness drawn inside `update_state`, `summarize_state` or
+`get_state_delta` makes the result depend on which peer evaluated it. Use it for
+key generation and nonces on the client side, not inside a merge.
 
 ## Contract WASM Upgrade & State Migration
 
@@ -539,7 +641,12 @@ existing clients keep subscribing to a contract no one else is publishing to.
 
 Contract upgrade is a design concern you must address *before* the first release,
 just like delegate migration (see `delegate-patterns.md`). The rest of this
-section is the playbook River uses. Adapt it to your app.
+section is the key-derivation mechanism and the playbook River uses. **The
+`freenet-app-migration` skill owns the doctrine** — when to probe, what may seal a
+completion marker, and the failure modes that lose data silently. It is a separate
+skill and may not be installed: what follows here is enough to build against, so
+read it alongside this section if you have it, and treat a disagreement as a signal
+that this file has gone stale rather than as licence to ignore either.
 
 **A user's stable identity must never be a contract key.** Because the contract
 key moves on every WASM change, anything you hand users as a permanent handle —
@@ -573,7 +680,7 @@ to migrate.
 Permissionless contract migration only works if all of these hold:
 
 1. **State is mergeable / commutative.** Carrying old state into the new key is a
-   merge; if the merge isn't a commutative monoid (see above), concurrent old and
+   merge; if the merge doesn't obey the merge laws (see above), concurrent old and
    new writes during the rollout window won't converge.
 2. **Every field in state is self-authorizing.** See "Cryptographic Verification"
    above. The successor's `validate_state` must re-check *every* invariant on the
@@ -654,11 +761,29 @@ old contract's state and follow it.
 ### Register old WASM hashes in a migration file
 
 Maintain a file like `legacy_contracts.toml` (analogous to
-`legacy_delegates.toml` for delegates) at the repo root, listing every
-historical contract WASM hash plus the params bytes used to derive its key.
-The UI's `build.rs` generates a Rust `const` array from it; the runtime probes
-each old key at startup. River uses this pattern for delegates; apply the
-same idea to contracts.
+`legacy_delegates.toml` for delegates) listing every historical contract WASM hash
+plus the params bytes used to derive its key. The `build.rs` generates a Rust
+`const` array from it; the runtime probes each old key at startup.
+
+**Placement follows whoever runs the sweep. Ask "who probes?", not "where do
+registries go?"** Put the registry in whatever crate the probing code is built from.
+
+- **An outside integrator building from crates.io probes** → it must ship inside the
+  published crate. River's `common/legacy_room_contracts.toml` says why in its own
+  header: it "lives inside the `common` crate, not at the repo root, so it ships
+  inside the published `river-core` crate and riverctl built from crates.io still has
+  the full registry." At the repo root it would be invisible to that tool, which
+  derives only the current key.
+- **Only the app's own UI probes** → the repo root is correct, and publishing it just
+  adds a copy that can go stale. River's *delegate* registry sits at its repo root for
+  exactly this reason, in the same repo as the contract registry that does not.
+
+The two are not in tension; they answer different questions. The tell is whether a
+consumer *could* run the sweep at all. In ghostkeys it structurally cannot: third-party
+apps are granted `{ReadPublic, Sign}` and never `Export`
+(`delegates/ghostkey-delegate/src/permissions.rs:99`), so shipping them the registry
+would hand them a table they are incapable of using. `ghostkey-common 0.3.0` therefore
+ships no registry, and that is correct rather than a gap.
 
 ### Pre-publish check
 
@@ -836,9 +961,21 @@ require a connectivity witness (a GET for something you know exists succeeding i
 the same window), and never let a single all-`Absent` walk trigger an irreversible
 write.
 
-**Probe before anything writes to the new key.** The trigger is "the new key has no
-real state yet", so an earlier write can permanently suppress the migration,
-silently. See `upgrade-and-migration.md` → "Probe before you write to the new key".
+**If your app seals at all, only two outcomes may.** `Outcome` is `#[non_exhaustive]`
+(`freenet-migrate-0.6.0/src/driver.rs:354`, whose doc comment notes that this
+"protects exhaustive matches only"), so **a wildcard arm that defaults to "done"
+writes a permanent marker wrongly** — for today's non-definitive variants and for
+every variant added later. May seal: `Recovered` with no unresolved candidates and
+no truncated fold; `SeedLocal`. Must NOT seal: `Indeterminate`, `Recovered` with
+unresolved candidates or a truncated fold, any error, and any variant the `match`
+did not name. Name the sealing variants explicitly and let the wildcard fall
+through to "retry next run".
+
+**Probe unconditionally per `(instance, current_code_hash)`, before anything writes
+to the new key.** Gate only the repeat, on a durable marker; never gate the first run
+on the successor being empty, because any write to the new key then suppresses the
+migration permanently and silently. The doctrine and its failure cases live in the
+`freenet-app-migration` skill — read it before designing the trigger.
 
 `SelectionPolicy::NewestFirstWins` is the default and is safe for delete-by-absence
 states; `SelectionPolicy::FoldAll` folds every real generation and is only sound

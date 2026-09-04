@@ -48,23 +48,32 @@ The whole procedure, start to finish:
    - an **index/registry contract** mapping a stable name → the current contract
      key — a level of indirection. (The index contract itself needs this same
      treatment: its own address must be reachable via a stable anchor.)
-   - an **ecosystem-standard pointer contract** (emerging, not yet consumable) —
-     a shared, frozen "pointer" WASM at a derivable address `(author_vk,
-     app_id)`, whose state is an author-signed `{version, code_hash, sig}`
-     naming the current code hash of *some other* contract or delegate. The
-     record format is settled (freenet-core#5194; governance questions — author-key
-     rotation and recovery, whether adoption is mandatory — are still open), and
-     the contract is merged as an in-repo crate (freenet-migrate#9, deliberately
-     unpublished; the frozen, CI-hash-checked WASM artifact is the deliverable).
-     But **no client resolver exists yet** — as of this writing it is
-     unconsumed scaffolding, not an
-     adoptable mechanism, and it solves *addressing only* (it says nothing
-     about whether state or secrets held under the old key survived). It is
-     also a different thing from the in-state `OptionalUpgrade` pointer in
-     `contract-patterns.md`, which is per-instance and only findable by
-     clients that already hold a reference to *that* contract; the pointer
-     contract is for a third party with no prior reference at all. Check
-     freenet-core#2776 for current status before building on it.
+   - an **ecosystem-standard pointer contract** — a shared, frozen "pointer"
+     WASM at a derivable address `(author_vk, app_id)`, whose state is an
+     author-signed `{version, code_hash, sig}` naming the current code hash of
+     *some other* contract or delegate. The record format is settled
+     (freenet-core#5194; governance questions — author-key rotation and
+     recovery, whether adoption is mandatory — are still open), and the contract
+     is merged as an in-repo crate (freenet-migrate#9, deliberately unpublished
+     *as a crate*; the frozen, CI-hash-checked WASM artifact is the
+     deliverable). A client resolver ships in `freenet-migrate` 0.6.0
+     (`freenet_migrate::pointer`) — earlier revisions of this file said no
+     resolver existed, and that is out of date. Adoption is a separate question
+     from availability, and it is thin: publishing a pointer is worth doing for
+     your integrators, but do not assume the apps *you* depend on have one.
+
+     Two things to keep straight. It solves **addressing only**: it says nothing
+     about whether state or secrets held under the old key survived, and
+     assuming they did produces a bug shaped like "this user has no data". And
+     it is a different mechanism from the in-state `OptionalUpgrade` pointer in
+     `contract-patterns.md`, which is per-instance and only findable by clients
+     that already hold a reference to *that* contract; the pointer contract is
+     for a third party with no prior reference at all.
+
+     Publishing one is the author-side half. The consumer-side half — resolving
+     a pointer for an app you do **not** own, and the three things integrators
+     get wrong — is `building-on-other-apps.md`. Check freenet-core#2776 for
+     live adoption status.
 
    If v1 exposed a raw contract key as an identifier, fix *that* first — an upgrade
    cannot rescue an identifier that moves with the WASM. See
@@ -133,8 +142,10 @@ The whole procedure, start to finish:
    migrate** — that is normal, not a failure. Keep the migration itself safe
    (idempotent, resumable, non-destructive, regression-gated, observable) per "The
    five properties" below, and make sure nothing in your load path writes to the
-   new key before the probe runs. That is a silent way to disable your own
-   migration; see "Probe before you write to the new key".
+   new key before the probe runs — a placeholder or default seeded first is what
+   the fold then merges against, and any app that (wrongly) gates on the
+   destination being empty is silently disabled by it outright. See "Probe before
+   you write to the new key".
 
 6. **Do NOT recreate instances, rotate keys, or warn users their invites are
    dead.** None of that is part of a routine upgrade, and doing it *causes* the
@@ -224,13 +235,20 @@ properties below are the whole game.
    mark_migration_done();
    // On Err / interruption: leave the flag set -> next load re-runs and recovers.
 
-   // On load:
+   // On load, keyed per (instance, current_code_hash):
    if flag_set("migration_in_progress") {
-       // partial set -> do NOT mark done; re-run migration (idempotent) to fill gaps
-   } else if has_new_format_data() {
-       mark_migration_done();              // authoritative; never re-probe old (see #253)
+       run_migration();                    // partial set -> re-run (idempotent) to fill gaps
+   } else if !migration_done(instance, current_code_hash) {
+       run_migration();                    // UNCONDITIONAL. Not gated on whether the
+                                           // destination already holds data -- see
+                                           // property 4 and the trigger rule below.
    }
    ```
+
+   `mark_migration_done()` is reached only from the success path above, on a
+   definitive probe outcome. Never seal it because the destination *looks*
+   populated: that is the empty-destination gate in disguise, and any earlier
+   write then makes the migration permanently unreachable.
 
 3. **Non-destructive.** Never delete the source until the destination is
    confirmed complete. Keep the old blob/keys as a rollback fallback so an old or
@@ -239,8 +257,14 @@ properties below are the whole game.
 4. **Regression-gated.** Once the destination is populated it is authoritative;
    never let a stale *source* read overwrite newer *destination* data. River #253:
    firing the legacy probe unconditionally let an old delegate's stale snapshot
-   clobber rooms the user created after upgrading. Gate migration on
-   "destination is empty," and make conflict resolution merge, not replace.
+   clobber rooms the user created after upgrading. "Unconditionally" here means
+   *on every load, with nothing recording that it had already finished* — property
+   2's durable marker is what stops the repeat, and it is doing half this job. The
+   rest of the fix is in the *resolution*, not the trigger: make conflict resolution
+   merge rather than replace, and seed the probe from the client's own snapshot so a
+   stale source can only ever add. What #253 does **not** license is gating the
+   *first* run on "destination is empty" — that is the shape that lost River's rooms
+   in #621; see the `freenet-app-migration` skill for the rule.
 5. **Observable.** Emit migration telemetry — started / completed / recovered /
    failed counts. River found #352 only because a user reported a vanished room;
    there was no signal that real migrations were failing. A "publish succeeded"
@@ -249,35 +273,29 @@ properties below are the whole game.
 
 ## Probe before you write to the new key
 
-Property 4 gates migration on "the destination is still empty". That gate is also
-a hazard: **any write to the new key that happens before the probe can permanently
-suppress the migration.** The trigger condition is never met, the migration never
-runs, and the app looks healthy while the user's history stays stranded on the
-predecessor generation. Writes that do it: an optimistic PUT, a default or
-placeholder seed, a cached snapshot pushed forward, a subscribe-then-write path,
-anything that populates the new key so the UI has something to render.
+**Run the probe before anything writes to the new key**, and pin the *outcome* —
+did the predecessor's history arrive — never the presence of the call. A
+source-scrape pin asserting the probe "is called" was green for three months in
+River over a call that was unreachable for a whole class of room
+([freenet/river#621](https://github.com/freenet/river/issues/621)); existence is not
+reachability.
 
-**It is silent and it reads as success.** No error, no crash. The migration simply
-never fires.
+**Audit your own app for it.** Write down the exact condition under which your
+migration does *not* run, then grep every write to the new key that can execute
+before the probe and confirm none of them can make that condition true. River's
+probe fired only when a GET on the current key returned state whose configuration
+signature failed to verify — and an earlier block in the same pass PUT a
+delegate-cached snapshot exactly when that signature *verified*, so every state
+qualifying for the PUT was by construction one that suppressed the probe. Same
+predicate, same bytes, unreachable since it shipped, across seven room-contract
+re-keys.
 
-River shipped exactly this, and it took a rehearsal to find it
-([freenet/river#621](https://github.com/freenet/river/issues/621)). River's probe
-fires when a GET on the current key returns state whose configuration signature
-*fails* to verify. Earlier in the same pass, another block PUTs a delegate-cached
-room snapshot to that key, and that block is taken exactly when the same signature
-*verifies*. Same predicate, same bytes, so any state qualifying for the PUT is by
-construction a state that suppresses the probe. For rooms restored from the
-delegate the probe had been unable to fire since it shipped on 2026-05-20, across
-seven room-contract re-keys.
-
-**Audit your own app.** Name the exact predicate that triggers your migration, then
-grep for every write to the new key that can run before it, and confirm none of
-them can make that predicate false.
-
-**A source-scrape pin asserting the probe "is called" does not catch this.** River
-had one, green for three months, over a call that was unreachable for a whole class
-of room. Existence is not reachability. Pin the outcome (did the migration run,
-did the predecessor's history arrive), never the presence of the call.
+The trigger rule this discipline serves — probe unconditionally per
+`(instance, current_code_hash)`, gate only the repeat on a durable marker, never gate
+the first run on the successor being empty — belongs to the `freenet-app-migration`
+skill, along with the River #621 post-mortem and the reference implementation. Read
+it before designing the trigger; this file covers what the migration must do once
+it fires.
 
 ## Enumerate dynamic key families
 
@@ -316,6 +334,33 @@ than burying it in async load code. River's `decide_per_room_load_action(bool)` 
 this pattern; its earlier source-pin-only test had a false positive (it passed
 even with the recovery call deleted), so prefer a pure-function behavioral test
 and verify by mutation that removing the fix fails the test.
+
+**Three questions worth asking of any migration change in review.** Each names a
+failure a green test suite let through.
+
+1. **Does the guard at a seam check BOTH sides of the seam?** A guard that can
+   only see the side it lives on is not a guard. `freenet-migrate`'s newest-wins
+   guarantee is the canonical shape: the crate offers predecessors newest-first,
+   but only the app's writer can see whether the successor already holds a key, so
+   an overwriting writer inverts the guarantee and neither side reports it. When
+   you find a check at a boundary, name what the other side would have to do to
+   defeat it, then confirm something checks that too.
+2. **Is the test double above or below the bug you care about?** A double placed
+   above the layer that can fail proves only that the layers above it agree with
+   each other. `freenet-migrate`'s own tests all drive mocked I/O, with no
+   integration test against a real node or a real WASM delegate, which is why
+   ghostkeys and Delta each gated adoption on a differential test against their
+   prior hand-rolled sweep rather than on the crate's green suite. Put the double
+   below the code under test, or test against the real thing.
+3. **Is the operation idempotent with respect to the UI as well as to stored
+   data?** These are separate properties, and the second is the one that gets
+   missed. Delta's editor bug (freenet/delta#62, fixed in #64) is the shape: the
+   background migration sweep's merge was a genuine no-op for stored data, but it
+   still took the write guard, and Dioxus notifies subscribers on every `write()`
+   whether or not the value changed, so an effect subscribed to that signal
+   re-seeded the editor from persisted state and wiped the user's unsaved typing
+   about five seconds in. Storage idempotence did not save it. Ask what a re-run
+   *renders*, not only what it stores.
 
 ## Staged, reversible rollout
 
@@ -364,6 +409,12 @@ and verify by mutation that removing the fix fails the test.
   `cargo add --build freenet-migrate-build`). River's contract-migration path (UI
   and `riverctl`) runs it in production, and existing apps adopt it without a
   rewrite via the `[[entry]]`-registry build codegen (freenet/river#434, #436, #437).
+- The `freenet-app-migration` skill owns the migration *doctrine* — when to probe,
+  which probe outcomes may seal a completion marker, and the failure modes that lose
+  data with a green build. It is a separate skill and may not be installed alongside
+  this plugin; everything you need to act is reproduced here and in
+  `contract-patterns.md`, so treat it as the deeper reference rather than a
+  prerequisite.
 - The `freenet-migrate-adoption` skill: the procedure for swapping an app's
   existing hand-rolled sweep over to the crate (call-site swap, dual-running,
   the parity test, what rollback cannot undo).

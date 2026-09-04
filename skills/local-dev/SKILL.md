@@ -495,6 +495,42 @@ the WebSocket connection.
 | Blank page (cached old WASM) | Mobile browser caches aggressively | Clear cache, force close browser, or use `?_v=timestamp` |
 | `sed -i` fails on macOS | BSD sed requires backup extension | Use build tools directly instead of sed |
 | `cargo make` targets Linux | Cross-compilation for web-container-tool | Build natively: `cargo build --release -p web-container-tool` |
+| A delegate's contract GET/PUT/UPDATE/SUBSCRIBE silently does nothing | Node started with `freenet local` | Start with `freenet network` as every recipe here does. See [Delegates need network mode](#delegates-need-network-mode) |
+
+### Delegates need network mode
+
+Every node recipe in this skill uses `freenet network`, and delegates are one of
+the reasons to keep it that way. `freenet local` is the mode whose own help text
+calls it useful for development, so it is the natural thing to reach for, and it
+does not service a delegate's contract requests at all.
+
+The loop that handles `GetContractRequest`, `PutContractRequest`,
+`UpdateContractRequest` and `SubscribeContractRequest` from a delegate is
+`handle_delegate_with_contract_requests` (`crates/core/src/contract.rs:537`).
+Both of its call sites are reached from `contract_handling` (`:1268`), through
+`handle_delegate_notification` (`:2076`) and `handle_contract_event` (`:2209`),
+and `contract_handling` is spawned from one production site,
+`crates/core/src/node/p2p_impl.rs:948`, the network node. `run_local_node` (`crates/core/src/node.rs:5768`) handles
+`ClientRequest::DelegateOp` by calling `executor.delegate_request(...)` straight
+through (`:5851`), which runs the delegate's `process()` and hands back its
+outbound messages without acting on any of them. Nothing reports an error, so
+the delegate looks healthy and simply has no effect.
+
+Delegate notification is dead in local mode too, for the same reason:
+`send_delegate_contract_notifications` returns immediately when
+`delegate_notification_tx` is `None` (`executor_impl.rs:2169-2172`), and that
+field is set only by `RuntimePool`, which local mode does not build.
+`RequestUserInput` is lost the same way, which is freenet-core#5273.
+
+The V2 delegate host functions are the exception: `ctx.get_contract_state`,
+`ctx.put_contract_state` and `ctx.update_contract_state` are wasmtime imports
+resolved inside the delegate's own execution, so they do reach the local store
+under `freenet local`. `ctx.subscribe_contract` registers and can never fire.
+
+Verified against freenet-core `main` @ `b863ee7c6` on 2026-08-30. The
+`dapp-builder` skill's `references/delegate-patterns.md` has the full picture,
+including what a delegate's contract access does and does not reach on a real
+network node.
 
 ## Other Infrastructure
 

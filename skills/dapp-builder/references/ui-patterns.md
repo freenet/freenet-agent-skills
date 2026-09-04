@@ -127,10 +127,10 @@ edition = "2021"
 
 [dependencies]
 # Mirror River's pinned versions; see https://github.com/freenet/river/blob/main/ui/Cargo.toml
-# stdlib bumped to 0.8 to track current freenet-stdlib release.
-dioxus = { version = "0.7.3", features = ["web"] }
+# stdlib 0.8.5 tracks the current freenet-stdlib release.
+dioxus = { version = "0.7.9", features = ["web"] }
 dioxus-free-icons = { version = "0.10.0", features = ["font-awesome-solid"] }
-freenet-stdlib = { version = "0.8", features = ["net"] }
+freenet-stdlib = { version = "0.8.5", features = ["net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "Window", "Location"] }
@@ -235,7 +235,6 @@ breaks the moment the node serves the app on any other port — which is the
 exact case "works on any host/port" is there to protect. Derive
 unconditionally; handle the dev case in the dev server, not in app code.
 
-
 ```rust
 /// Get the WebSocket URL for connecting to the Freenet node.
 /// Derives from window.location so the app works on any host/port.
@@ -280,9 +279,15 @@ server: {
 },
 ```
 
-`changeOrigin: true` is required, not cosmetic: the node's `--allowed-host` is
-a Host-header allowlist. Without it the upgrade arrives claiming the dev port
-and the node rejects it.
+`changeOrigin: true` is not cosmetic: the node's `--allowed-host` is a
+**Host-header** allowlist (`is_allowed_host`, `crates/core/src/client_events/websocket.rs`),
+and without it the upgrade arrives claiming the dev port, which is not in that
+allowlist. On plain loopback you get away with it, because the node's upgrade
+guard short-circuits on a localhost `Origin` before it ever consults the Host
+allowlist. Set it anyway — the moment the dev server is reached by hostname or
+LAN address (`vite --host`, a phone on the same wifi) the `Origin` is no longer
+localhost, the Host check runs, and the same request is rejected with 403 and
+"possible DNS rebinding attack" in the node's log.
 
 Two things this buys: the node's address lives in one place that an env var can
 override (a node on another host or port needs no code change), and app code
@@ -291,9 +296,11 @@ code.
 
 What it does **not** change is auth. A proxy is transport only — no shell
 appears, so a page served from a dev port is still the "outside the gateway"
-row of the table above and still owns its own `Authenticate` (a local node in
-`network local` mode may accept an empty token, which is why this is easy to
-get wrong in dev and discover in production).
+row of the table above and still owns its own `Authenticate`. Be aware that the
+node treats a *missing* auth token on the upgrade as "not an error" — in every
+mode, not only a local one; it is an *invalid* token that closes the socket
+(code 4401). So a page that forgets to authenticate still opens its socket
+cleanly in dev, which is exactly how this gets discovered in production instead.
 
 Verify the proxy rather than assuming — a dev server that does not proxy
 returns its own 404/index for `/v1/...`, which surfaces as a hang, not an
@@ -352,14 +359,21 @@ asynchronously. Wait for the "connected" callback before sending requests.
 The UI crate needs these dependencies for WebSocket to work on `wasm32-unknown-unknown`:
 
 ```toml
-freenet-stdlib = { version = "0.6.0", features = ["net"] }
+freenet-stdlib = { version = "0.8.5", features = ["net"] }
 # Required for wasm32-unknown-unknown: use JS crypto.getRandomValues for RNG
 getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
 ```
 
-Pin `freenet-stdlib` to the same version as the rest of your workspace and the
-gateway you publish to. Mismatched stdlib versions between UI, CLI tools, and
-the gateway are the #1 cause of "variant index out of range" bincode errors.
+**Two `freenet-stdlib` versions cannot co-link.** `__frnt_set_id` is `#[no_mangle]`
+in every version, so a dependency graph that pulls in both 0.6 and 0.8 fails at link
+time with a duplicate-symbol error — cargo's usual "two semver-major versions side by
+side" escape hatch does not apply. The unit at risk is one **compiled artifact**, not
+the workspace: a contract crate that pulls an older stdlib through a helper library
+while depending on the current one directly will not link. Check transitive deps, not
+just your own `Cargo.toml`. Where versions differ across *separate* artifacts — your
+UI, your CLI, the gateway you publish to — they link fine and fail at runtime instead;
+mismatched stdlib is the #1 cause of "variant index out of range" bincode errors, so
+pin one version everywhere anyway.
 
 Without the `getrandom` js feature, `getrandom 0.2` emits a `compile_error!` on
 `wasm32-unknown-unknown`. River uses this exact pattern.
@@ -705,7 +719,11 @@ const handler: ResponseHandler = {
   onContractNotFound: (instanceId) => {
     console.warn("[freenet] Contract not found:", instanceId);
   },
-  // Added in stdlib v0.2.0: fired on SUBSCRIBE confirmation (subscribed flag = success)
+  // Added in stdlib v0.2.0: fired on SUBSCRIBE confirmation (subscribed flag = success).
+  // On stdlib TS >= 0.4.0 this fires alongside the api.subscribe() promise, which now
+  // also resolves/rejects on this same response. On older versions (0.3.0 and below,
+  // still the published npm version as of 2026-08-22) this callback is the only way
+  // to detect a refused subscribe. See "Contract Operations" below.
   onSubscribeResponse: (key, subscribed) => {
     console.log("[freenet] Subscribe:", key.encode(), "ok=", subscribed);
   },
@@ -745,7 +763,13 @@ const contractKey = new ContractKey(instanceBytes, instanceBytes);
 
 ### Contract Operations
 
-stdlib TS v0.2.0 made `get`, `put`, `update`, `subscribe`, and `disconnect` **promise-based**. They resolve with the typed response, reject on timeout (default 30s), connection close, or host error. The legacy callbacks in `ResponseHandler` still fire for the same response — both APIs coexist for backward compatibility.
+stdlib TS v0.2.0 made `get`, `put`, and `update` **promise-based**. They resolve with the typed response, reject on timeout (default 30s), connection close, or host error. The legacy callbacks in `ResponseHandler` still fire for the same response — both APIs coexist for backward compatibility.
+
+**`subscribe` is version-dependent — check which stdlib TS version you're on.** As of freenet-stdlib PR #94 (merged 2026-08-22, ships as TS package **0.4.0**), `subscribe()` correlates to its response the same way: it resolves on `SubscribeResponse{subscribed:true}` and rejects on `subscribed:false`, a host error naming the contract, connection close, or timeout — the `try/catch` pattern in the example below is correct from 0.4.0 on. **Before 0.4.0** (every version published to npm as of 2026-08-22 — the registry's latest is still 0.3.0), `subscribe()` just calls the synchronous `sendRequest()` and returns: the promise resolves as soon as the request is *sent*, never on the host's response, so it can't reject on a refused subscribe (e.g. hitting the node's per-client subscription cap of 50). On a pre-0.4.0 version, detect the real outcome via the `ResponseHandler` callbacks instead — `onSubscribeResponse` for success/failure the host reports back, `onErr` for a host-level error.
+
+`disconnect` is untouched by #94: in every version it resolves as soon as the request is sent, not on any response — there's no pending-request queue for it the way `pendingGets`/`pendingPuts`/`pendingUpdates`/`pendingSubscribes` back the others.
+
+#94 also narrowed host-error handling: from 0.4.0, a host error only rejects in-flight requests for the contract it names (previously any host error rejected every pending request on the connection), and concurrent requests for different contracts can no longer cross-resolve with each other's responses.
 
 ```typescript
 // GET — fetch current state (await + try/catch)
@@ -759,7 +783,16 @@ try {
   console.error("[freenet] GET failed:", err); // timeout / not-found / closed
 }
 
-// SUBSCRIBE — receive real-time updates (promise resolves on SubscribeResponse)
+// SUBSCRIBE — receive real-time updates.
+// stdlib TS >= 0.4.0: api.subscribe() resolves on SubscribeResponse{subscribed:true}
+// and rejects on subscribed:false / a host error / connection close / timeout —
+// this try/catch is correct.
+// stdlib TS < 0.4.0 (still the published npm version as of 2026-08-22): the
+// promise resolves as soon as the request is SENT and never rejects on a
+// refused subscribe (e.g. the per-client subscription cap). On that version,
+// detect failure via the ResponseHandler callbacks instead:
+//   onSubscribeResponse: (key, subscribed) => { if (!subscribed) { /* failed */ } }
+//   onErr: (err) => { /* host-level error, e.g. limit reached */ }
 try {
   await api.subscribe(new SubscribeRequest(contractKey, []));
 } catch (err) {

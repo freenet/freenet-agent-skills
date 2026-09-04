@@ -185,19 +185,78 @@ This catches accidental serde attribute drift, ciborium version bumps that chang
 
 ## Time Handling
 
-### `freenet_stdlib::time::now()` Exists
+### Contracts Must Not Read the Host Clock
 
-Contracts can read the host clock:
+`freenet_stdlib::time::now()` — the `freenet_time::__frnt__time__utc_now` import — is **deprecated for contracts** as of freenet-core **v0.2.132**. Do not call it from a contract.
+
+The reason is not stylistic. `update_state` has to be a function of its inputs, because that is what makes replicas converge: two peers given the same updates in any order must arrive at the same state, and the merge laws are the statement of that requirement. A merge that reads the wall clock is not a function of its inputs, so the merge laws are not merely *violated* by such a contract — they are not well-formed statements about it. Two peers whose clocks differ by eleven minutes can produce different states from the same delta, and neither of them is wrong.
+
+What v0.2.132 does, exactly:
+
+- A node logs a warning the first time it loads a contract whose WASM imports the clock, naming the contract key.
+- `fdev verify-merge` reports a `host_clock_import` code diagnostic.
+- **Nothing traps, nothing refuses to load, and no deployed contract broke.** The call still returns a real time.
+
+What comes next (freenet-core#5465): the call is staged to **trap** in a future release. The contract still loads; any actual *call* to the clock fails that operation. Trapping is per-call, so a contract that imports the symbol without ever reaching it keeps working and needs no rebuild or re-key — which matters, because a re-key moves the contract's address, and for a web container that is link rot rather than a republish.
+
+Both the warning and the diagnostic are **import**-level, so a module that links the symbol without calling it is reported too. That superset is deliberate: a call cannot happen without the import, so nothing will trap that was not warned about first.
+
+**Delegates are unaffected** and may keep reading the clock. A delegate holds private per-node state, is never replicated, and has no merge laws, so a clock read in one raises no convergence question at all. Hourly rate limiting inside a delegate is fine.
+
+### Instead: A Signed Timestamp in State, Checked Only for Monotonicity
+
+Put the timestamp **inside the state, in the client-signed payload**, and have the contract check only that it moves forward:
 
 ```rust
-use freenet_stdlib::time::now;
-let now_utc: chrono::DateTime<chrono::Utc> = now();
-let now_ts: u64 = now_utc.timestamp() as u64;
+// timestamp_ms is part of the signed payload, so every peer evaluating this
+// update sees the same value and reaches the same state.
+if new_beacon.timestamp_ms <= current.timestamp_ms {
+    return Err(/* not newer than what we hold */);
+}
 ```
 
-### Native Stub Has UB — Gate Calls
+`freenet-weather` is the worked example: `BeaconState.timestamp_ms` is signed by the announcing client, the contract's only check is `new > current`, and there is no clock call anywhere in it.
 
-The non-WASM stub at `freenet-stdlib/.../time.rs` reads `MaybeUninit::uninit().assume_init()` — undefined behavior on native targets. Gate calls behind `#[cfg(target_family = "wasm")]` and provide a thread-local override for native tests:
+**Be clear about what this loses.** A client-supplied timestamp is an *untrusted hint*. It is fine for ordering and ranking, and it cannot do the anti-grief job a host-clock skew check was doing, because the party asserting the time is the party being checked — set it far in the future and the check passes. Swapping in a client timestamp while still treating it as authoritative moves the bug rather than fixing it.
+
+The two shapes that show up in practice:
+
+- **Anti-grief on a per-author log** (the common case): cap the log by *count*, or key it on a monotonic counter. A client-supplied timestamp must not be an eviction key.
+- **Capability expiry** (rare, and the genuinely hard one): there is no clean in-contract substitute, because the party asserting the time is the party being checked. The available shapes are a sequence number plus a revocation record, or enforcing expiry outside the contract.
+
+**The sharp edge in the usual replacement.** The obvious substitute for a retention window is to derive it from the state's own newest timestamp — a logical clock. That has a real failure mode: one future-dated entry sets the reference permanently, degrading every peer's view from then on with nothing to heal it, where a wall-clock rule would have recovered on its own once real time caught up. If you take this route, bound how far the reference may advance in one update, or use a count cap instead. The migration off the clock is not free; budget for it.
+
+### Skew Checks Against the Host Clock Are Out, Both Directions
+
+An earlier version of this file blessed a **future-skew** check: reject a message timestamped more than K ahead of the host clock. That is exactly the pattern being removed — the #5465 census found it in every clock-importing contract measured on the network — and it is not rescuable by handing the contract the operation's timestamp instead, because an originator-supplied `now` is attacker-controlled: set it high and the check passes. Determinism and trustworthiness are in direct conflict for this check, and a contract needs the trustworthy one, which means the check does not belong inside the merge at all.
+
+```rust
+// DON'T DO THIS — the host clock makes the result a function of which peer
+// evaluated the update:
+if message.timestamp > host_now() + MAX_FUTURE_SKEW_SECS {
+    return Invalid;
+}
+```
+
+Rejecting is the mild version. Of the deployed contracts measured for #5465, 11 silently **prune** future-dated entries inside `update_state`, so the resulting state is a function of the evaluating peer's clock — the exact defect class conformance exists to detect, produced by the capability rather than caught by it.
+
+A **past-skew** check on stored state was always worse, for a reason independent of clocks that still applies to any time-derived rejection in `validate_state`: that function runs on every state load, including state that's been in storage for months. If the contract rejects state with any message older than `MAX_PAST_SKEW_SECS`, then 30 days after an inbox's oldest message arrives, the entire inbox spontaneously becomes invalid. Permanent state destruction.
+
+Replay protection for old messages should use signature-based dedup (signatures are unique per message) and tombstones — never a time window on `validate_state`.
+
+### Checking a Contract
+
+```bash
+fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin
+```
+
+It reports a `host_clock_import` **code diagnostic** when the module imports the clock. That is a diagnostic about the code, not a law the contract broke: it does not fail the command, and it is never grounds for removing a contract from the network. The node's warning and this diagnostic come from the same detector, so the developer-facing answer and the node-facing answer cannot disagree.
+
+The bare form — `fdev verify-merge --wasm your_contract.wasm`, no corpus — still prints the clock diagnostic (on stderr), then exits non-zero asking for at least one `--state` or `--transition`. That failure is about the missing corpus, not about the clock.
+
+### The Native Stub Is UB — Now a Delegate Concern
+
+A contract should not be calling `time::now()` at all, which makes this moot there. For **delegate** code, which may still read the clock: the non-WASM stub at `freenet-stdlib/rust/src/time.rs` leaves a `MaybeUninit<DateTime<Utc>>` unwritten and then `assume_init()`s it — undefined behavior on native targets. A host-side test that compiles your delegate for the native target and calls `now()` is reading uninitialized memory. Gate the call and give native tests an override:
 
 ```rust
 fn host_now_ts() -> u64 {
@@ -212,31 +271,7 @@ fn host_now_ts() -> u64 {
 }
 ```
 
-### Future-Skew Check Yes, Past-Skew Check No
-
-A **future-skew** check rejects messages timestamped further than some window ahead of the host clock. This is correct — prevents an attacker from poisoning state with a far-future entry that crowds out legitimate messages.
-
-```rust
-const MAX_FUTURE_SKEW_SECS: u64 = 5 * 60;
-if message.timestamp > host_now_ts() + MAX_FUTURE_SKEW_SECS {
-    return Invalid;  // far-future, reject
-}
-```
-
-A **past-skew** check on stored state is **a self-DoS**. `validate_state` runs on every state load, including state that's been in storage for months. If the contract rejects state with any message older than `MAX_PAST_SKEW_SECS`, then 30 days after an inbox's oldest message arrives, the entire inbox spontaneously becomes invalid. Permanent state destruction.
-
-```rust
-// DON'T DO THIS:
-if message.timestamp < host_now_ts() - MAX_PAST_SKEW_SECS {
-    return Invalid;  // self-DoS over time
-}
-```
-
-Replay protection for old messages should use signature-based dedup (signatures are unique per message) and tombstones, not past-skew on `validate_state`.
-
-### Clock Determinism Across Peers
-
-Two peers' clocks can disagree by seconds-to-minutes. If your contract's validity is a function of `time::now()`, those peers can disagree on whether a given state is valid. Use generous skew windows (minutes, not seconds) so disagreement is bounded.
+The contract deprecation is enforced entirely node-side; nothing in stdlib changed, so there is no compiler warning to catch a contract that still calls the clock. `fdev verify-merge` is the check.
 
 ## Related-Contracts Mechanism
 
@@ -265,15 +300,40 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 - **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Cap your state's distinct related references at validation time so you can't produce a state needing more than 10.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
-### Validate-After-Update Pattern
+### Requesting Related State From `update_state`
 
-`update_state` does **not** currently have a `related` parameter (as of writing). If your auth needs to consult another contract, do it in `validate_state` — the host runs `validate_state` after every successful `update_state` and rolls back on `Invalid`.
+`update_state` takes no `related` parameter, but it is not confined to `validate_state` for cross-contract reads: return `UpdateModification::requires(vec![...])` and the host resolves those contracts — local state store first, network only as fallback — and re-invokes `update_state` with the results supplied as `UpdateData::RelatedState` entries. The host also runs `validate_state` after every successful `update_state` and rolls back on `Invalid`, so validate remains the backstop.
 
-This pattern means `update_state` does cheap checks only (signature, size, format); cross-contract auth happens in the validate pass that the host runs immediately after.
+**Prefer the `update_state` route where either would work.** Related state resolved during *validation* is never captured by the conformance system (freenet-core#5376), so a contract whose validity depends on that path can never be judged — and an unjudgeable contract reads exactly like a clean one. The update path is captured today.
 
 ### Production Track Record
 
 The related-contracts mechanism shipped in freenet-core PR #3650 (March 2026). Comprehensive unit-test suite. Plan for surprises — discovering edge cases in production is what first-users do. Add an explicit local-node smoke test (`e2e-test/`-style) before declaring your dApp production-ready, and consider feature-flagging the dependent UI flow until you've seen the mechanism work in real network conditions.
+
+### Never Gate an Item's Validity on a Value That Can Decrease
+
+`validate_state` must reach the same verdict on the same bytes forever. That is
+automatic for a check confined to the bytes in front of it — `balance >= 0`, "every
+entry carries a valid signature", "the counter never goes backwards" are all fine,
+and a balance being *spendable* does not make it unusable as a well-formedness
+check. The hazard is narrower and easy to miss: **an already-accepted item whose
+validity depends on a quantity that can later shrink.** Two shapes do it.
+
+1. **A value read live from another contract** (the `RelatedContracts` mechanism
+   above). A listing gated on the seller's reputation "standing" is accepted at
+   standing 80 and rejected once complaints drive standing to 40 — the listing's
+   own bytes never changed. Peers that validate at different times reach different
+   verdicts, permanently, and no merge reconciles them.
+2. **A mutable aggregate elsewhere in the same state.** "This entry is valid
+   because `total_stake >= X`" has the same defect if a later merge can reduce
+   `total_stake`: the entry was valid when merged and is not any more.
+
+The fix in both cases is to move the shrinking quantity out of the validity rule,
+not to bound it. Compute standing in *readers* — the UI ranks, filters or warns on
+it — and leave the contract's validity rule to signatures and monotonic facts. If
+the check must be in the contract, bind it at write time to something immutable:
+have the reputation contract's owner sign a "standing was >= 50 on <nonce>"
+attestation and validate *that signature*, which stays true forever.
 
 ## Wire-Format Stability
 
@@ -312,6 +372,29 @@ pub struct InboxMessage {
 
 These fields must be required; a state lacking them should fail to decode.
 
+### Never Ship a State Version That Skips Verification
+
+Same class as the above, one step more severe. A defaulted auth field weakens one
+check; a *version* whose decode path does not verify signatures removes the check
+entirely, and the version tag is attacker-chosen. Anything that can write the
+unverified version — a legacy `V0` kept "for old data", a `Draft` variant, an
+`Unsigned` shape used by a test fixture or a migration — bypasses verification for
+every field at once, because verification is now conditional on a byte the writer
+supplies.
+
+```rust
+// BAD: the writer picks the arm that verifies nothing.
+enum Item {
+    V0(UnsignedItem),   // "legacy, we'll drop it later"  <-- attacker's choice
+    V1(SignedItem),
+}
+```
+
+If old unsigned data genuinely exists, migrate it *behind* a verified wrapper — the
+migrating writer signs it, so the unverified shape never appears on the wire — and
+delete the variant. Never leave a decode path in which "which checks run" depends on
+untrusted input. A test asserting `V1` rejects tampering says nothing about `V0`.
+
 ## State Size Budget
 
 The host enforces `MAX_STATE_SIZE = 50 MiB` as a hard correctness backstop — a PUT/UPDATE that would exceed it is rejected outright. Plan caps so worst-case state fits with margin:
@@ -319,6 +402,15 @@ The host enforces `MAX_STATE_SIZE = 50 MiB` as a hard correctness backstop — a
 - Per-item cap × max-items + envelope overhead ≤ 50 MiB.
 - Including auth metadata (signatures are 64 bytes, VKs 32 bytes, etc.).
 - Including any tombstone/log structures.
+
+**A count cap is not a size bound.** `MAX_ITEMS = 1000` bounds nothing on its own if
+an item can be any size — the real bound is 1000 × *the largest item the other side
+may send*, and the other side chooses. A cap that reads like a memory limit and is not
+one is how a contract-controlled value becomes an out-of-memory. Whenever you write a
+count over variable-size values, multiply it by that worst case and check the product;
+better, budget the **bytes** directly (a running total enforced in `update_state`) and
+let the count fall out of it. The arithmetic below is exactly that multiplication —
+note that it is the per-item cap, not the count, that makes it come out finite.
 
 Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32 KiB` = 32 MiB messages, plus ~140 bytes/message metadata = ~32.1 MiB, plus a few KB of recipient_state. Well under the 50 MiB cap — though, per the design target below, `MAX_INBOX_MESSAGES` is a candidate to tune down or to shard further (e.g. archiving older messages into per-time-window contracts) rather than a bound to treat as settled.
 
@@ -350,7 +442,9 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Cross-instance signature replay | Same signed bytes work on different inbox/room | Bind context (recipient_vk, contract_id) in signed bytes |
 | Default-deserialized auth field | Zero-value message passes a sloppy check | Remove `#[serde(default)]` from signature/sender fields |
 | Truncation/extension on variable-length signed field | Attacker submits N-1 bytes of an N-byte ciphertext | Length-prefix every variable-length field in signed bytes |
-| Native-target `time::now()` | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
+| Any `time::now()` call in a *contract* | Replicas can diverge, and the merge laws aren't well-formed statements about the contract; a node warns on load today and the call is staged to trap | Carry a client-signed timestamp in state, check monotonicity only; `fdev verify-merge --wasm` reports the import |
+| Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
+| Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
 | Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Cap distinct references in `update_state` (defense in depth in `validate_state` too) |
 
 ## Reference: River Inbox Contract
