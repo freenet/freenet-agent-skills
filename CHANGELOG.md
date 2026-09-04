@@ -49,9 +49,13 @@ New material:
 - **Two `freenet-stdlib` versions cannot co-link** (`ui-patterns.md`) —
   `__frnt_set_id` is `#[no_mangle]` in both, so it is a link-time
   impossibility, not a tidiness preference.
-- **Never gate contract validity on a value that can decrease**
-  (`state-authorization-patterns.md`) — a shrinking gate flips valid to
-  invalid over time and peers permanently disagree.
+- **Never gate an *item's* validity on a value that can decrease**
+  (`state-authorization-patterns.md`, under "Related-Contracts Mechanism") — an
+  already-accepted item whose validity rests on a live cross-contract read, or
+  on a mutable aggregate elsewhere in the same state, flips valid to invalid
+  over time and peers permanently disagree. Scoped deliberately: a check
+  confined to the bytes in front of `validate_state`, `balance >= 0` included,
+  is deterministic and fine.
 - **Delegate-secret migration must precede contract migration** when a secret
   is an input to the contract's parameters — lose the secret and predecessor
   ids are underivable, and the probe may seal on `SeedLocal`.

@@ -643,8 +643,10 @@ Contract upgrade is a design concern you must address *before* the first release
 just like delegate migration (see `delegate-patterns.md`). The rest of this
 section is the key-derivation mechanism and the playbook River uses. **The
 `freenet-app-migration` skill owns the doctrine** — when to probe, what may seal a
-completion marker, and the failure modes that lose data silently. Read it alongside
-this section; if the two disagree, it wins.
+completion marker, and the failure modes that lose data silently. It is a separate
+skill and may not be installed: what follows here is enough to build against, so
+read it alongside this section if you have it, and treat a disagreement as a signal
+that this file has gone stale rather than as licence to ignore either.
 
 **A user's stable identity must never be a contract key.** Because the contract
 key moves on every WASM change, anything you hand users as a permanent handle —

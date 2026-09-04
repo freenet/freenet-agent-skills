@@ -307,12 +307,13 @@ getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], defa
 **Two `freenet-stdlib` versions cannot co-link.** `__frnt_set_id` is `#[no_mangle]`
 in every version, so a dependency graph that pulls in both 0.6 and 0.8 fails at link
 time with a duplicate-symbol error — cargo's usual "two semver-major versions side by
-side" escape hatch does not apply. This is not tidiness: pin `freenet-stdlib` to one
-version across the whole workspace, and check transitive deps (a contract crate or a
-helper library pinning an older stdlib will break the link). Where versions merely
-*differ* across process boundaries — UI, CLI tools, and the gateway you publish to —
-the failure is at runtime instead, and mismatched stdlib is the #1 cause of "variant
-index out of range" bincode errors.
+side" escape hatch does not apply. The unit at risk is one **compiled artifact**, not
+the workspace: a contract crate that pulls an older stdlib through a helper library
+while depending on the current one directly will not link. Check transitive deps, not
+just your own `Cargo.toml`. Where versions differ across *separate* artifacts — your
+UI, your CLI, the gateway you publish to — they link fine and fail at runtime instead;
+mismatched stdlib is the #1 cause of "variant index out of range" bincode errors, so
+pin one version everywhere anyway.
 
 Without the `getrandom` js feature, `getrandom 0.2` emits a `compile_error!` on
 `wasm32-unknown-unknown`. River uses this exact pattern.

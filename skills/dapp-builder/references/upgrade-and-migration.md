@@ -257,11 +257,14 @@ properties below are the whole game.
 4. **Regression-gated.** Once the destination is populated it is authoritative;
    never let a stale *source* read overwrite newer *destination* data. River #253:
    firing the legacy probe unconditionally let an old delegate's stale snapshot
-   clobber rooms the user created after upgrading. The fix is in the *resolution*,
-   not the trigger: make conflict resolution merge rather than replace, and seed the
-   probe from the client's own snapshot so a stale source can only ever add. **Do
-   not gate the probe on "destination is empty"** — that is the shape that lost
-   River's rooms; see the `freenet-app-migration` skill for the rule.
+   clobber rooms the user created after upgrading. "Unconditionally" here means
+   *on every load, with nothing recording that it had already finished* — property
+   2's durable marker is what stops the repeat, and it is doing half this job. The
+   rest of the fix is in the *resolution*, not the trigger: make conflict resolution
+   merge rather than replace, and seed the probe from the client's own snapshot so a
+   stale source can only ever add. What #253 does **not** license is gating the
+   *first* run on "destination is empty" — that is the shape that lost River's rooms
+   in #621; see the `freenet-app-migration` skill for the rule.
 5. **Observable.** Emit migration telemetry — started / completed / recovered /
    failed counts. River found #352 only because a user reported a vanished room;
    there was no signal that real migrations were failing. A "publish succeeded"
@@ -406,6 +409,12 @@ failure a green test suite let through.
   `cargo add --build freenet-migrate-build`). River's contract-migration path (UI
   and `riverctl`) runs it in production, and existing apps adopt it without a
   rewrite via the `[[entry]]`-registry build codegen (freenet/river#434, #436, #437).
+- The `freenet-app-migration` skill owns the migration *doctrine* — when to probe,
+  which probe outcomes may seal a completion marker, and the failure modes that lose
+  data with a green build. It is a separate skill and may not be installed alongside
+  this plugin; everything you need to act is reproduced here and in
+  `contract-patterns.md`, so treat it as the deeper reference rather than a
+  prerequisite.
 - The `freenet-migrate-adoption` skill: the procedure for swapping an app's
   existing hand-rolled sweep over to the crate (call-site swap, dual-running,
   the parity test, what rollback cannot undo).

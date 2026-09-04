@@ -310,6 +310,31 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 
 The related-contracts mechanism shipped in freenet-core PR #3650 (March 2026). Comprehensive unit-test suite. Plan for surprises — discovering edge cases in production is what first-users do. Add an explicit local-node smoke test (`e2e-test/`-style) before declaring your dApp production-ready, and consider feature-flagging the dependent UI flow until you've seen the mechanism work in real network conditions.
 
+### Never Gate an Item's Validity on a Value That Can Decrease
+
+`validate_state` must reach the same verdict on the same bytes forever. That is
+automatic for a check confined to the bytes in front of it — `balance >= 0`, "every
+entry carries a valid signature", "the counter never goes backwards" are all fine,
+and a balance being *spendable* does not make it unusable as a well-formedness
+check. The hazard is narrower and easy to miss: **an already-accepted item whose
+validity depends on a quantity that can later shrink.** Two shapes do it.
+
+1. **A value read live from another contract** (the `RelatedContracts` mechanism
+   above). A listing gated on the seller's reputation "standing" is accepted at
+   standing 80 and rejected once complaints drive standing to 40 — the listing's
+   own bytes never changed. Peers that validate at different times reach different
+   verdicts, permanently, and no merge reconciles them.
+2. **A mutable aggregate elsewhere in the same state.** "This entry is valid
+   because `total_stake >= X`" has the same defect if a later merge can reduce
+   `total_stake`: the entry was valid when merged and is not any more.
+
+The fix in both cases is to move the shrinking quantity out of the validity rule,
+not to bound it. Compute standing in *readers* — the UI ranks, filters or warns on
+it — and leave the contract's validity rule to signatures and monotonic facts. If
+the check must be in the contract, bind it at write time to something immutable:
+have the reputation contract's owner sign a "standing was >= 50 on <nonce>"
+attestation and validate *that signature*, which stays true forever.
+
 ## Wire-Format Stability
 
 ### Forever-Compat Once Shipped
@@ -369,22 +394,6 @@ If old unsigned data genuinely exists, migrate it *behind* a verified wrapper �
 migrating writer signs it, so the unverified shape never appears on the wire — and
 delete the variant. Never leave a decode path in which "which checks run" depends on
 untrusted input. A test asserting `V1` rejects tampering says nothing about `V0`.
-
-### Never Gate Validity on a Value That Can Decrease
-
-`validate_state` must reach the same verdict on the same bytes forever. A gate on a
-quantity that only grows (a monotonic counter, an accumulated stake, a tombstone
-set) keeps that property; a gate on one that can *shrink* does not. State that was
-valid when written becomes invalid later, peers that evaluate it at different times
-permanently disagree, and there is no merge that reconciles them.
-
-The concrete case: a seller's reputation "standing" goes **down** when complaints
-land, so no contract may gate on it — a listing accepted at standing 80 would be
-rejected once standing fell to 40, retroactively invalidating state already merged
-elsewhere. Compute standing in *readers* (the UI ranks, filters or warns on it) and
-leave the contract's validity rule to signatures and monotonic facts. The same
-applies to balances that can be spent down, quotas that refill, membership counts,
-and any "score" with a subtract path.
 
 ## State Size Budget
 
