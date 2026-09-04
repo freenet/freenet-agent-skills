@@ -823,8 +823,13 @@ loads and runs that old WASM, and whatever handler it shipped with answers.
 **"Whatever handler it shipped with" is the whole constraint, and it is easy to
 read past.** River's predecessors need no *special* export handler only because
 River's chat delegate already answered a general-purpose `GetRequest` /
-`ListRequest` over its own secret namespace, so a successor can enumerate through
-the app's ordinary protocol. A delegate whose `handle_request` accepts only its
+`ListRequest` over its own secret namespace, so the new generation can enumerate
+through the app's ordinary protocol. Note who is calling: the crate is sans-IO
+and the *app* owns both ends of the round-trip, so it is River's UI that
+addresses the predecessor's key while presenting `MessageOrigin::WebApp` — which
+is stable across a delegate re-key. Do not reach for `OriginPolicy::FromDelegate`
+by analogy; River's own `check_origin` rejects delegate-to-delegate calls
+outright. A delegate whose `handle_request` accepts only its
 app's typed requests — the common case — can answer nothing a successor asks, and
 no client-side change alters that, because the old WASM is already deployed. Read
 "A delegate migration is forward-only" below **before** you plan a migration; it
@@ -889,14 +894,20 @@ load-bearing at the call site:
 
 - **Fail closed on an unattested caller.** `OriginPolicy::authorize` rejects
   `origin: None` — which the runtime supplies when it cannot attest who is
-  asking. These are private keys; guessing is not an option.
+  asking — under every policy *except* `OriginPolicy::Any`, which accepts it and
+  is documented as unsafe / local-testing only. Never ship `Any`. These are
+  private keys; guessing is not an option.
 - **Export by prefix unless the delegate genuinely serves one web app.** A
   delegate's secret namespace is shared by every app using it and the host does
   not slice it per origin, so a whole-scope export hands the requester
   everything. The crate gates that behind
   `SingleAppDelegateAck::i_certify_this_delegate_serves_a_single_web_app()`.
-  `ExportScope::Prefix` costs nothing and stays correct if the delegate later
-  serves more than one app.
+  `ExportScope::Prefix` narrows what you hand over and stays correct if the
+  delegate later serves more than one app. It does not, however, buy you a
+  smaller enumeration: `export_scoped` calls `list_secrets(b"")` on every
+  export, prefix or not, because cap saturation is a whole-scope property — so a
+  prefix export is refused by the truncation check below on exactly the same
+  terms as a whole-scope one.
 
 Two residual limits no handler fixes, worth knowing before you rely on an
 export. The host caps key enumeration per scope (`HOST_ENUMERATION_CAP`, 4096)
@@ -978,7 +989,8 @@ see the next section for the full history and current guidance.
 **Adopting them is not retroactive.** The walk can only recover from a
 predecessor whose deployed WASM answers — see "A delegate migration is
 forward-only" above. That is an argument for adopting the crate *before* you
-need it, and the reason it appears above the mechanics rather than below them.
+need it: the handler does nothing on the day it lands, and everything for the
+re-key after that.
 
 For the call-site swap itself in an app that already hand-rolls a sweep, see the
 `freenet-migrate-adoption` skill.

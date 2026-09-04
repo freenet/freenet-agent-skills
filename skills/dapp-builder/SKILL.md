@@ -291,7 +291,7 @@ Determine what private data each user needs stored locally and split it across d
 2. Implement `DelegateInterface` trait
 3. Handle secret storage operations (Store, Get, Delete, List)
 4. Implement cryptographic operations (signing, encryption)
-5. **Design for secret migration from v1** -- when delegate WASM changes, the delegate key changes and all stored secrets become inaccessible. There is **no `ExportSecrets` handler** (an earlier misconception): River's real mechanism messages each old delegate key via `DelegateRequest::ApplicationMessages`, re-running the old WASM to read its secrets, and folds the signing keys forward (encryption secrets are re-derived). Keep a committed registry of old delegate keys and migrate promptly — the re-run breaks after a stdlib/ABI bump (freenet/river#204). See delegate-patterns.md for the mechanism; `freenet-migrate` codifies the delegate registry and build codegen, but delegate secret carry-forward has no core mechanism and never will — a node-level attempt (`RegisterDelegateWithPredecessors`) was built, shipped, then found forgeable and disabled as a security fix (freenet-core#5199), and after three rejected trust-model designs, app-level migration is settled standing policy, not an interim measure. App-level does not mean bespoke: `freenet-migrate` ships the delegate-side entry points (`migrate_delegate_secrets`, `register_delegate_with_migration`, unchanged since 0.5.0; crates.io is now 0.6.0, whose break is contract-half only), and River, Delta and ghostkeys all drive them on `main` at 0.5.0. Note that River and Delta run the crate's walk *alongside* their existing hand-rolled sweep, which stays authoritative for now; retiring the sweep is a later release, after the walk field-validates. See delegate-patterns.md → "Delegate secret migration: no core mechanism, and why" for the full history, the `freenet-migrate-adoption` skill for the swap procedure, and freenet-core#2776 for live status. See `upgrade-and-migration.md` for the operational discipline (resumable/interrupted-migration recovery, migration telemetry, and the upgrade test harness).
+5. **Design for secret migration from v1** -- when delegate WASM changes, the delegate key changes and all stored secrets become inaccessible. There is **no `ExportSecrets` request in the stdlib wire protocol** and no node-level copy-forward. The mechanism messages each old delegate key via `DelegateRequest::ApplicationMessages`, re-running the old WASM to read its secrets, and folds the signing keys forward (encryption secrets are re-derived) — so **only a predecessor whose already-deployed WASM answers can be recovered from**, which makes this forward-only. `freenet-migrate` ships that answer as `handle_export_request` (since 0.3.0) for you to call from your delegate; River needs no *special* handler only because its chat delegate already answered a general-purpose `GetRequest`/`ListRequest` over its own secret namespace, which most delegates do not. Every release shipped without an export answer adds one permanently unrecoverable generation — see delegate-patterns.md → "A delegate migration is forward-only". Keep a committed registry of old delegate keys and migrate promptly — the re-run breaks after a stdlib/ABI bump (freenet/river#204). See delegate-patterns.md for the mechanism; `freenet-migrate` codifies the delegate registry and build codegen, but delegate secret carry-forward has no core mechanism and never will — a node-level attempt (`RegisterDelegateWithPredecessors`) was built, shipped, then found forgeable and disabled as a security fix (freenet-core#5199), and after three rejected trust-model designs, app-level migration is settled standing policy, not an interim measure. App-level does not mean bespoke: `freenet-migrate` ships the delegate-side entry points (`migrate_delegate_secrets`, `register_delegate_with_migration`, unchanged since 0.5.0; crates.io is now 0.6.0, whose break is contract-half only), and River, Delta and ghostkeys all drive them on `main` at 0.5.0. Note that River and Delta run the crate's walk *alongside* their existing hand-rolled sweep, which stays authoritative for now; retiring the sweep is a later release, after the walk field-validates. See delegate-patterns.md → "Delegate secret migration: no core mechanism, and why" for the full history, the `freenet-migrate-adoption` skill for the swap procedure, and freenet-core#2776 for live status. See `upgrade-and-migration.md` for the operational discipline (resumable/interrupted-migration recovery, migration telemetry, and the upgrade test harness).
 
 Reference: `references/delegate-patterns.md`
 
@@ -518,9 +518,12 @@ in `NodeDiagnosticsResponse`, hardened wire-boundary enums with
 cipher generation documented in `references/delegate-patterns.md`.
 
 `DEFAULT_CIPHER`/`DEFAULT_NONCE` is the break that gets quoted, but it is
-**not the only one**. `ContractInstanceId::from_bytes` is deprecated in
-0.8 in favour of `from_base58` — it is a delegating alias, so it still
-compiles, but a crate built with `-D warnings` (most CI) fails on it. Note
+**not the only one**. `ContractInstanceId::from_bytes` is deprecated as of
+**0.8.5** in favour of `from_base58` — it is a delegating alias, so it still
+compiles, but a crate built with `-D warnings` (most CI) fails on it. Check
+the version before acting on this: `from_base58` does not exist in 0.8.2,
+0.8.3 or 0.8.4, so a port that stops short of 0.8.5 sees no warning and has
+nothing to change. Note
 what the rename is telling you: it parses base58 **text**, not raw bytes.
 If you were passing it a raw 32-byte id it was already wrong; the
 replacement there is `ContractInstanceId::new([u8; 32])`, not
@@ -591,10 +594,10 @@ must now generate random values per session — e.g.
 Code still referencing the old constants will fail to compile against
 stdlib 0.8 or newer.
 
-It is not the only 0.6→0.8 break, and treating it as the whole list is how
-a `-D warnings` build fails after the port looks finished — see the
-version-pinning section above for `ContractInstanceId::from_bytes` →
-`from_base58`.
+It is not the only break on the way to current stdlib, and treating it as the
+whole list is how a `-D warnings` build fails after the port looks finished —
+see "Key Dependencies" above for `ContractInstanceId::from_bytes` →
+`from_base58` (0.8.5).
 
 ---
 

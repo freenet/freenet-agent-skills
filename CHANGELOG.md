@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## 1.34.0 (2026-09-04)
 
-Six corrections from actually adopting `freenet-migrate` in a live app
+Seven corrections from actually adopting `freenet-migrate` in a live app
 (Harvest, `feat/bitcoin-payments`). These are field findings, not review
 speculation — each one is something the skill as written would have led an
 engineer into.
@@ -13,8 +13,8 @@ engineer into.
   `delegate-patterns.md` read as though adopting the crate carries an app's
   existing delegate secrets forward. It does not: the successor *asks*, and only
   a predecessor whose already-deployed WASM can answer will. New section, "A
-  delegate migration is forward-only", placed ahead of the mechanics because it
-  is a scheduling decision: **every release shipped without an export handler
+  delegate migration is forward-only", because this is a scheduling decision
+  before it is a coding one: **every release shipped without an export handler
   adds one permanently unrecoverable generation**, which makes "we have no
   migration to do yet" the argument for adopting sooner rather than a reason to
   defer. Covers `handle_export_request`, fail-closed origin policy, prefix vs.
@@ -23,22 +23,27 @@ engineer into.
   `upgrade-and-migration.md` step 4.
 - **"There is no export handler" was stale and read as a general claim.** True
   of the stdlib wire protocol; false of `freenet-migrate`, which has shipped
-  `handle_export_request` since 0.5.0. River's predecessors need no *special*
-  handler only because its chat delegate already answered a general-purpose
-  `GetRequest`/`ListRequest` over its own secret namespace — which most
-  delegates do not.
+  `handle_export_request` since 0.3.0. Corrected in all three places it appeared
+  (`SKILL.md`, `delegate-patterns.md`, `upgrade-and-migration.md`). River's
+  predecessors need no *special* handler only because its chat delegate already
+  answered a general-purpose `GetRequest`/`ListRequest` over its own secret
+  namespace — which most delegates do not. Note the caller is the app, not the
+  successor delegate: River's `check_origin` rejects delegate-to-delegate calls
+  outright, and the UI bridges the two generations under a stable WebApp
+  origin.
 - **Registry placement gets the constraint that actually forbids the wrong
   choice.** "Placement follows who probes" (added in 1.33.0) is right, but does
-  not rule anything out on its own. Added: **never code-generate a registry from
-  a crate inside the contract build graph** — if the shared crate compiles into
-  the contracts, editing the registry re-keys every contract that registry
-  describes, so you have built a registry that causes the migration it records.
-  Decide from the dependency direction, not from which crate is called
-  "common": in Harvest, `harvest-common` compiles into all three contracts and
-  the delegate while `harvest-ui` compiles into none.
+  not rule anything out on its own. Added the invariant that does: **a one-line
+  registry edit must not change the contract WASM bytes**, or the registry
+  causes the migration it exists to record. Two shapes satisfy it — the registry
+  outside the contract build graph (Harvest: `harvest-common` compiles into all
+  three contracts and the delegate, `harvest-ui` into none), or inside it but
+  `#[cfg]`-gated off the contract builds (River's `river-core`, which an outside
+  integrator needs). Verify with a WASM hash check, not `cargo tree`, which
+  reports crate edges rather than whether bytes moved.
 - **`ProbeDriver`, not `migrate_contract`, in shared-handler environments.**
   `migrate_contract` needs awaitable request/response correlation; a browser
-  app has none, because `WebApi` delivers every response to a single
+  app on stdlib's Rust `WebApi` has none, because it delivers every response to a single
   app-registered handler. `contract-patterns.md` now says which entry point
   suits which environment and gives the hand-pump sequence.
 - **A guard that provably cannot fail needs a source-scrape pin, not a
@@ -54,9 +59,10 @@ engineer into.
   re-keyed too. Browser `localStorage`, hex-encoded, keyed by artifact +
   instance + current code hash; unreadable storage must report "not migrated"
   so the probe repeats.
-- **`DEFAULT_CIPHER`/`DEFAULT_NONCE` is not the only stdlib 0.6→0.8 break.**
-  `ContractInstanceId::from_bytes` is deprecated in favour of `from_base58`,
-  which fails a build under `-D warnings`. Also notes what the rename reveals:
+- **`DEFAULT_CIPHER`/`DEFAULT_NONCE` is not the only stdlib break on the way to
+  current.** `ContractInstanceId::from_bytes` is deprecated in favour of
+  `from_base58` as of **0.8.5** (it does not exist in 0.8.2–0.8.4), which fails a
+  build under `-D warnings`. Also notes what the rename reveals:
   it parses base58 *text*, so code passing it a raw 32-byte id was already
   wrong and wants `ContractInstanceId::new`.
 

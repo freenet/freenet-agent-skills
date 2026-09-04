@@ -785,24 +785,36 @@ apps are granted `{ReadPublic, Sign}` and never `Export`
 would hand them a table they are incapable of using. `ghostkey-common 0.3.0` therefore
 ships no registry, and that is correct rather than a gap.
 
-**"Who probes?" orients the choice; this constraint vetoes it. Never
-code-generate a registry from a crate that is inside the contract build graph.**
-If the crate holding the registry compiles into the contracts, then editing the
-registry changes the contract WASM — so recording a migration re-keys every
-contract that registry describes, and you have built a registry that *causes*
-the migration it exists to record. Decide it from the dependency direction, not
-from which crate is named "common" or "shared": in the Harvest marketplace
-`harvest-common` compiles into all three contracts and the delegate while
-`harvest-ui` compiles into none, so the UI crate is the only safe home for the
-codegen even though both are shared crates. Check by asking what a one-line
-registry edit rebuilds — `cargo tree --invert` from the candidate crate answers
-it — before you put a `build.rs` there.
+**"Who probes?" orients the choice; this invariant constrains it. A one-line
+registry edit must not change the contract WASM bytes.** Otherwise recording a
+migration re-keys the very contracts the registry describes, and you have built
+a registry that *causes* the migration it exists to record. The hazard is real
+and easy to walk into, because the registry's natural home — the shared "common"
+crate — is usually the one that compiles into the contracts.
 
-When the two pull in different directions (an outside integrator needs the table,
-but the crate they build from is in the contract graph) the constraint wins: it
-is a correctness property, while placement is a convenience. Split the registry
-into a crate the contracts do not depend on, or publish it as data the consumer
-reads at their own build time.
+Two shapes satisfy the invariant, and which one you want depends on who needs
+the table:
+
+- **Registry in a crate outside the contract build graph.** Simplest, and right
+  when only your own UI probes. In the Harvest marketplace `harvest-common`
+  compiles into all three contracts and the delegate while `harvest-ui` compiles
+  into none, so the codegen lives in `harvest-ui/build.rs` even though both are
+  shared crates. Decide from the dependency direction, not from which crate is
+  named "common".
+- **Registry inside the graph, but `#[cfg]`-gated off the contract builds.**
+  Right when an outside integrator builds against the crate and needs the table
+  (the case above, where placement and the invariant pull apart). River does
+  this: `river-core` code-generates `legacy_room_contracts.toml` and the
+  room-contract depends on `river-core`, but the generated module sits behind
+  `#[cfg(feature = "migration")]`, which the contract and delegate WASM builds
+  do not enable — so the registry is reachable from crates.io and `riverctl`
+  while the contract bytes never see it.
+
+**Verify it, don't infer it.** `cargo tree --invert` tells you crate edges, not
+whether bytes moved, and it would wrongly condemn River's arrangement. The test
+is the artifact: edit the registry, rebuild, and `b3sum` the contract and
+delegate WASM against the pre-edit hashes. That is the property you actually
+need, and it is the same pre-publish hash check the next section describes.
 
 ### Pre-publish check
 
@@ -950,10 +962,12 @@ bounds the walk.
 **Which entry point you use is an environment question, and a browser app needs
 the driver.** `migrate_contract` is a thin async wrapper that awaits a
 `ProbeIo::get` per candidate — right for a CLI, a bridge, a test harness, or
-anything with awaitable request/response correlation. A browser app has none:
-`WebApi` delivers every response to a single app-registered handler, so a request
-and its answer are not connected by anything the language can await, and
-correlation is the app's job. There, construct `ProbeDriver` directly and pump it
+anything with awaitable request/response correlation. A Rust browser app on
+stdlib's `WebApi` has none: it delivers every response to a single
+app-registered handler, so a request and its answer are not connected by
+anything the language can await, and correlation is the app's job. (Check your
+client before assuming: the TypeScript `FreenetWsApi` is promise-based per
+request, so a TS UI *does* have the correlation and can use the wrapper.) There, construct `ProbeDriver` directly and pump it
 by hand: `next_action()` → send the GET and arm a timeout → feed the result back
 through `on_response` / `on_absent` / `on_unknown` (an expired timer is
 `on_unknown`) → `take_outcome()` at `Step::Done`. The crate documents this on

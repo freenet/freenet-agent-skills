@@ -131,9 +131,10 @@ The whole procedure, start to finish:
    enumerate its own secret namespace) can be recovered from. Every release
    shipped without that handler adds one permanently unrecoverable generation,
    which makes "we have no migration to do yet" the argument for adopting
-   sooner, not later. See `delegate-patterns.md` →
-   "Delegate secret migration: no core mechanism, and why" for the full history
-   and current guidance, and `contract-patterns.md` for the contract-side
+   sooner, not later. See `delegate-patterns.md` → "A delegate migration is
+   forward-only" for what the handler must get right and the limits no handler
+   fixes, and → "Delegate secret migration: no core mechanism, and why" for the
+   full history. See `contract-patterns.md` for the contract-side
    mechanics. For the procedure of swapping an existing hand-rolled sweep over
    to the crate, see the `freenet-migrate-adoption` skill.
 
@@ -435,7 +436,9 @@ failure a green test suite let through.
   the optional in-state `OptionalUpgrade` straggler pointer, and the preconditions.
 - `references/delegate-patterns.md` — delegate migration mechanics: the backward
   probe that re-runs the old delegate's WASM via `DelegateRequest::ApplicationMessages`
-  (there is **no `ExportSecrets` handler**), `legacy_delegates.toml`, the fragility
+  (there is **no `ExportSecrets` request in the stdlib wire protocol**, so the
+  predecessor answers with whatever handler it shipped with — see "A delegate
+  migration is forward-only" there), `legacy_delegates.toml`, the fragility
   when an stdlib/ABI bump strands old WASM, and the double-hashing bug.
 - `references/build-system.md` — byte-reproducibility (commit `Cargo.lock`, pin the
   toolchain, build `--locked`; and the `wasm-opt`/`dx`/path-embedding and
