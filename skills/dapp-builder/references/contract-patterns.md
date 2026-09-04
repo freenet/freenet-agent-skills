@@ -763,13 +763,25 @@ Maintain a file like `legacy_contracts.toml` (analogous to
 plus the params bytes used to derive its key. The `build.rs` generates a Rust
 `const` array from it; the runtime probes each old key at startup.
 
-**Put it inside the crate that ships the registry, not at the repo root.** River's
-`common/legacy_room_contracts.toml` says why in its own header: it "lives inside the
-`common` crate, not at the repo root, so it ships inside the published `river-core`
-crate and riverctl built from crates.io still has the full registry." A registry at
-the repo root is invisible to anyone who depends on your published crate — their
-tool derives one key, the current one, and every predecessor generation is
-unreachable to it.
+**Placement follows whoever runs the sweep. Ask "who probes?", not "where do
+registries go?"** Put the registry in whatever crate the probing code is built from.
+
+- **An outside integrator building from crates.io probes** → it must ship inside the
+  published crate. River's `common/legacy_room_contracts.toml` says why in its own
+  header: it "lives inside the `common` crate, not at the repo root, so it ships
+  inside the published `river-core` crate and riverctl built from crates.io still has
+  the full registry." At the repo root it would be invisible to that tool, which
+  derives only the current key.
+- **Only the app's own UI probes** → the repo root is correct, and publishing it just
+  adds a copy that can go stale. River's *delegate* registry sits at its repo root for
+  exactly this reason, in the same repo as the contract registry that does not.
+
+The two are not in tension; they answer different questions. The tell is whether a
+consumer *could* run the sweep at all. In ghostkeys it structurally cannot: third-party
+apps are granted `{ReadPublic, Sign}` and never `Export`
+(`delegates/ghostkey-delegate/src/permissions.rs:99`), so shipping them the registry
+would hand them a table they are incapable of using. `ghostkey-common 0.3.0` therefore
+ships no registry, and that is correct rather than a gap.
 
 ### Pre-publish check
 
