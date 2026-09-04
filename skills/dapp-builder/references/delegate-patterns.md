@@ -927,7 +927,7 @@ The forward-only case above is the *benign* one: a predecessor that cannot
 answer is classified `Unresponsive`, earns no marker, and is re-walked next
 load. The damaging case is the successor's own adapter answering on its behalf.
 
-`SecretsMigrationIo::fetch_secrets` is three-valued in effect, and only two of
+`PredecessorSecretsIo::fetch_secrets` is three-valued in effect, and only two of
 the three are visible in the type. `Ok(pairs)` and `Ok(vec![])` both mean **"I
 asked, and this is what it has"** — an empty vector seals the predecessor with a
 `Done { had_data: false }` marker that is never revisited. Return it for a
@@ -945,22 +945,21 @@ an undecodable reply, an answered error. It is not an abort: the driver records
 `PredecessorMigration::Unresponsive`, the walk continues or stops per
 `SecretSelectionPolicy`, and `migrate_delegate_secrets` still returns a report.
 
-The rule generalises past this one call. Wherever a migration adapter converts
-an I/O result into an answer, **silence and absence must stay distinguishable at
-the type level**, because only one of them may seal:
+This is one instance of the general rule stated under `upgrade-and-migration.md`
+property 2 and applied to `ProbeAnswer` in `contract-patterns.md`: **silence and
+absence must stay distinguishable at the type level, because only one of them may
+seal.** Make the third value an explicit variant rather than an `Option` that
+collapses two of them, route "no usable answer" to retry, and do the reduction in
+a pure function so each arm can be mutated red in a test.
 
-- Make the third value explicit — a three-variant enum (present / definitively
-  absent / no usable answer), not an `Option` that collapses two of them.
-- Route "no usable answer" to the retry path, never the seal path. Only a
-  *definitive* answer may write a durable marker.
-- Do the reduction in a pure function so it is testable without the I/O, and
-  mutate each arm to confirm the test is actually red.
-
-River's adapter overrides the crate's own recommended semantics for exactly this
-reason (`delegate_migration.rs`, constraint 1: "a timeout is not an absence"),
-and Harvest's `migrate::probe_gate` is the same shape on the client side.
-ghostkeys went further and made its markers page-lifetime only, because in its
-case even a definitive-looking answer could be invalidated by a late arrival.
+A definitive answer is *necessary* to seal and not *sufficient*. The prior
+question is whether the predecessor store is genuinely frozen after the re-key —
+if anything can still write to a predecessor, a durable marker strands whatever
+arrives after it. River seals because its legacy delegates are frozen and
+overrides the crate's recommended semantics to do so safely
+(`delegate_migration.rs`, constraint 1: "a timeout is not an absence"); ghostkeys
+bans durable markers outright. Harvest's `migrate::probe_gate` is the same shape
+on the client side.
 
 ### Preconditions
 

@@ -709,7 +709,10 @@ contract, or the merge won't converge, and migration silently fails.
 The mechanism River (freenet/river#292) and Delta actually ship — and the one to
 build by default — is a **backward probe from a committed registry of past code
 hashes**. For each predecessor generation you reconstruct its key from
-`BLAKE3(BLAKE3(old_wasm) || stable_params)`, GET the old state, fold it forward,
+`BLAKE3(BLAKE3(old_wasm) || params)` — where `params` must be the bytes **that
+generation was published under**, which is not automatically today's encoding;
+see `upgrade-and-migration.md` → "A parameter-struct change is a migration too".
+GET the old state, fold it forward,
 and re-PUT it under the current key (the successor's `validate_state` re-verifies
 every byte, so any client may do it — the owner need not be online). The registry
 is a committed TOML walked newest→oldest; this is written up in full under "the
@@ -761,9 +764,21 @@ old contract's state and follow it.
 ### Register old WASM hashes in a migration file
 
 Maintain a file like `legacy_contracts.toml` (analogous to
-`legacy_delegates.toml` for delegates) listing every historical contract WASM hash
-plus the params bytes used to derive its key. The `build.rs` generates a Rust
-`const` array from it; the runtime probes each old key at startup.
+`legacy_delegates.toml` for delegates) listing every historical contract WASM
+hash. The `build.rs` generates a Rust `const` array from it; the runtime probes
+each old key at startup.
+
+**A contract row records the code hash and nothing else** — `freenet-migrate`'s
+`ContractLineageEntry` is `{ generation, code_hash, note }`, and
+`predecessor_ids(params, lineage)` maps *one* set of parameter bytes over every
+row. So the registry cannot express a parameter change, and a parameter edit
+orphans every published instance while the probe reports a clean "nothing to
+migrate". If your parameters have ever changed shape, you must derive each
+generation under its own encoding yourself — see `upgrade-and-migration.md` → "A
+parameter-struct change is a migration too". (The delegate rows do not have this
+problem: `DelegateLineageEntry` stores the full `delegate_key`, the walk never
+re-derives it, and the registry row carries an optional `params_hex` that the
+build-time cross-check honours.)
 
 **Placement follows whoever runs the sweep. Ask "who probes?", not "where do
 registries go?"** Put the registry in whatever crate the probing code is built from.
@@ -1022,9 +1037,15 @@ write.
 "protects exhaustive matches only"), so **a wildcard arm that defaults to "done"
 writes a permanent marker wrongly** — for today's non-definitive variants and for
 every variant added later. May seal: `Recovered` with no unresolved candidates and
-no truncated fold; `SeedLocal`. Must NOT seal: `Indeterminate`, `Recovered` with
-unresolved candidates or a truncated fold, any error, and any variant the `match`
-did not name. Name the sealing variants explicitly and let the wildcard fall
+no truncated fold — that is the one *positive* result, where you found the data
+and know the search was complete. Must NOT seal: `Indeterminate`, `Recovered`
+with unresolved candidates or a truncated fold, any error, and any variant the
+`match` did not name. **`SeedLocal` must not seal either**, however conclusive an
+all-`Absent` walk looks. The crate says so itself: *"`Outcome::SeedLocal`
+deliberately does not claim to be sealable"*
+(`freenet-migrate-0.6.0/src/driver.rs:160`), because `Absent` is unauthenticated
+— see the paragraph above. Seeding your local snapshot forward on `SeedLocal` is
+still fine; that is not the same act as sealing. Name the sealing variants explicitly and let the wildcard fall
 through to "retry next run".
 
 **Probe unconditionally per `(instance, current_code_hash)`, before anything writes

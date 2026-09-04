@@ -187,11 +187,18 @@ first-class upgrade path, not a loophole:
 - **This whole document is about the other case** — your data contracts and
   delegates, where the WASM itself changes and state has to be carried forward.
 
-Everything below applies to the WASM-change case.
+Everything below applies to the case where the artifact's **address moves**:
+a WASM change, or the parameter change covered just below.
+
+Therefore **the entire risk surface of an upgrade is the migration.** Don't aim
+for "risk-free upgrades" (impossible); aim for migrations that are *idempotent,
+resumable, non-destructive, regression-gated, and observable*. The five
+properties below are the whole game.
 
 ### A parameter-struct change is a migration too, and the lineage cannot express it
 
-The key is `BLAKE3(code_hash ‖ params)`, so **editing a contract's parameter
+The formula at the top of this section has two halves, and only one of them is
+about WASM. `BLAKE3(code_hash || params)` means **editing a contract's parameter
 struct re-keys every instance exactly as surely as editing the WASM does** —
 even when the WASM is byte-identical. That half of the formula is easy to forget
 because a parameter struct looks like an ordinary type.
@@ -238,8 +245,11 @@ including a test that pins the boundary.
 have it: `DelegateLineageEntry` stores the full `delegate_key` per row and the
 walk uses it verbatim, never re-deriving it (`delegate_migrate.rs:1547`), and
 the registry row carries an optional `params_hex` that the build-time
-cross-check honours. So a delegate parameter change is recorded correctly by
-construction; a contract parameter change is not recorded at all.
+cross-check honours — and if you change a delegate's parameters and forget to
+record them, `Registry::validate()` re-derives `blake3(code_hash ‖ params)`,
+finds a mismatch, and **fails the build**. That is the contrast worth holding
+on to: a delegate parameter change is either recorded or loud, while a contract
+parameter change is neither.
 
 Practical rules:
 
@@ -247,15 +257,11 @@ Practical rules:
   procedure as a WASM change: record the outgoing generation before rebuilding.
 - **Prefer moving the field elsewhere.** Parameters are the address; state is
   not. Harvest's two fields moved onto `Order` (state) rather than staying in
-  parameters, which is the change that caused this — but a field that lives in
-  state can be edited freely forever after.
+  parameters, which is the change that caused this. A state field can then be
+  *extended* without re-keying anything — subject to architecture invariant 2
+  below, which still forbids removing, renaming or repurposing one.
 - **Say where the boundary falls in the registry file itself**, next to the rows
   it splits, so the next person appending a row sees it.
-
-Therefore **the entire risk surface of an upgrade is the migration.** Don't aim
-for "risk-free upgrades" (impossible); aim for migrations that are *idempotent,
-resumable, non-destructive, regression-gated, and observable*. The five
-properties below are the whole game.
 
 ## Architecture invariants (decide these before v1 — you cannot bolt them on)
 
@@ -334,29 +340,58 @@ properties below are the whole game.
    does have storage, but that is the node's origin, shared by every app on it,
    and your app frame cannot reach it — `path_handlers.rs:1672-1676`.)
 
-   The delegate's KV store is therefore the only durable client-side store you
-   have. Keeping a *contract* marker there costs one extra probe when the
-   **delegate** re-keys, and that is not the defect it looks like: the fold only
-   ever adds, and a delegate re-key is the moment your secrets moved too, so
-   re-probing then is the honest answer.
+   For a **browser** app the delegate's KV store is therefore the only durable
+   client-local store left. (A non-browser client has its own filesystem and
+   should use it — the freenet-bitcoin bridge keeps its markers in SQLite,
+   `bridge/src/store.rs:145`. A per-user contract keyed on the user's own
+   verifying key is also durable and survives a delegate re-key, at the cost of a
+   network round trip on every page load.)
 
-   **The question that actually varies is whether the marker travels with a
-   delegate export.** The store must outlive every artifact whose migration the
-   marker records, *and* the marker must not survive into a context where its
-   claim has stopped being true. Those two pull in opposite directions, and which
-   one wins depends on what the marker names:
+   Keeping a *contract* marker in the delegate costs one extra probe when the
+   **delegate** re-keys. That is not the defect it looks like **provided your fold
+   only ever adds** — check that it does, because a fold that can overwrite makes
+   the re-probe a regression rather than waste — and a delegate re-key is the
+   moment your secrets moved too, so re-probing then is the honest answer.
 
-   | The marker names… | Carried forward on export? | Why |
+   **Before making it durable at all, ask whether the predecessor store is
+   genuinely frozen after the re-key.** A durable marker is what makes a wrong
+   "nothing there" verdict permanent, so it is only safe when nothing can write
+   to a predecessor after you have declared it done. River's legacy delegates are
+   frozen — only the current delegate is ever written — so it seals. ghostkeys
+   **bans** durable markers for the opposite reason: a contrast test showed one
+   there resurrects a data-loss scenario verbatim. Decide per app, write down
+   which way and why, and never port one app's answer to another.
+
+   **If you do make it durable, the next question is whether it must be kept out
+   of a delegate export.** The store has to outlive every artifact whose
+   migration the marker records, *and* the marker must not survive into a context
+   where its claim has stopped being true. Those pull in opposite directions, and
+   which wins depends on what the marker names:
+
+   | The marker names… | Keep it out of the export? | Why |
    |---|---|---|
-   | a predecessor **delegate** (River) | **No** — keep it outside the exported prefix | Copying it forward asserts the successor already imported that predecessor. It has not — the marker would forge migration state. |
-   | a **contract** generation (Harvest) | **Yes** — put it inside the exported prefix | "Store contract X's predecessors were folded into it" is a fact about contracts. A delegate re-key does not change it, so carrying it is accurate and saves the re-probe above. |
-   | anything a late arrival could still invalidate (ghostkeys) | Not durable at all — page-lifetime only | Sealing a predecessor durably strands data that arrives after the seal. |
+   | a predecessor **delegate** (River) | **Yes** | When the current delegate later becomes a predecessor itself, its store holds these keys; copying them forward asserts the successor already imported that predecessor. It has not — the marker would forge migration state. |
+   | a **contract** generation (Harvest) | **No** — put it inside the exported prefix on purpose | "Store contract X's predecessors were folded into it" is a fact about contracts. A delegate re-key does not change it, so carrying it forward is accurate and saves the re-probe above. |
 
    River and Harvest made opposite choices here and both are right; copy the
-   reasoning, never the choice. The crate's own `PRED_DONE_MARKER_KEY_PREFIX`
-   markers are not a fourth option: they seal *delegate* predecessors, live in
-   the successor's store under a `\0`-prefixed reserved namespace, and the driver
-   filters them out of exports. Contract markers are yours to place.
+   reasoning, never the choice.
+
+   **Excluding a marker is an explicit predicate, not just a placement.** River
+   keeps its markers in the *ordinary* key space and filters them by prefix on
+   **both** sides — the fetch path (`candidate_keys`) and the import path
+   (`classify_recovered`), via `is_migration_marker_key` — precisely because a
+   predecessor read by key enumeration has no prefix boundary to hide behind.
+   Placing the marker outside an `ExportScope::Prefix` is a cheap extra guard when
+   your export is prefix-scoped; it is not sufficient on its own. The crate's own
+   `PRED_DONE_MARKER_KEY_PREFIX` markers are not a third option here: they seal
+   *delegate* predecessors, live under a `\0`-prefixed reserved namespace, and
+   the driver strips them from exports — but it strips only its own namespace, so
+   app-chosen markers stay the app's problem.
+
+   Markers carried inside an export also **consume the export's enumeration
+   budget**: `export_scoped` enumerates the whole scope regardless of prefix and
+   refuses at `HOST_ENUMERATION_CAP` (4096). Keep the marker key space bounded by
+   `(artifact, instance, code_hash)` rather than letting it grow per attempt.
 
    **The client must not supply a raw storage key.** Take a marker *id* and
    prepend the namespace inside the delegate (`harvest:migrate:` ++ id). The same
@@ -366,9 +401,9 @@ properties below are the whole game.
    sends the marker id `"harvest:rsa_sk:fp1"` and asserts the private key survives
    (`delegates/harvest-delegate/src/markers.rs`).
 
-   **Key it by `(artifact, instance, current_code_hash)`, and require the id to be
-   ASCII at the delegate boundary.** Raw bytes in a storage key alias under any
-   lossy UTF-8 conversion: River's chat delegate builds its key with
+   **Key it by `(artifact, instance, current_code_hash)`, mint the ids as hex, and
+   require ASCII at the delegate boundary.** Raw bytes in a storage key alias under
+   any lossy UTF-8 conversion: River's chat delegate builds its key with
    `String::from_utf8_lossy` (`delegates/chat-delegate/src/utils.rs:9`), which maps
    every invalid byte to U+FFFD, so two distinct 32-byte ids collapse onto one
    marker slot and one gets sealed having never been migrated. Enforcing ASCII in

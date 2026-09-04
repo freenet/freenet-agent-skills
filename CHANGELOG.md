@@ -42,6 +42,26 @@ pieces of doctrine that came out of the same app.
   predecessor under the encoding it was published with. Scoped to contracts —
   `DelegateLineageEntry` stores the full `delegate_key` and the walk never
   re-derives it, so the delegate registry does not have this hazard.
+- **Excluding a marker from an export is an explicit predicate, not a
+  placement.** River keeps its markers in the ordinary key space and filters
+  them on both the fetch and the import path, because a predecessor read by key
+  enumeration has no export prefix to hide behind. Also notes that markers
+  carried inside an export consume `HOST_ENUMERATION_CAP`, and restores the
+  "mint the ids as hex" instruction that the rewrite had reduced to "ASCII at
+  the boundary".
+- **Sealing needs a precondition the skill only stated in one of its two
+  homes.** A definitive answer is necessary and not sufficient: the prior
+  question is whether the predecessor store is genuinely frozen after the
+  re-key. Added beside the placement material and beside `fetch_secrets`.
+- **`SeedLocal` no longer appears in `contract-patterns.md`'s "may seal"
+  list.** It contradicted a paragraph twelve lines above it in the same file,
+  and the `freenet-app-migration` skill that owns the rule. `freenet-migrate`
+  0.6.0 settles it: *"`Outcome::SeedLocal` deliberately does not claim to be
+  sealable"* (`src/driver.rs:160`). Pre-existing since 1.33.0.
+- **`contract-patterns.md`'s registry description said contract rows carry
+  "the params bytes used to derive the key".** They do not, which is the whole
+  premise of the new parameter rule. Corrected, with the warning placed on the
+  backward-probe recipe itself rather than only in `upgrade-and-migration.md`.
 - **NEW: `Ok(vec![])` is a positive claim and seals a predecessor
   permanently.** An empty-success answer from `fetch_secrets` is
   indistinguishable from "nothing was there" and writes a
