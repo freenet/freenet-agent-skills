@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.33.0 (2026-09-04)
+
+Makes the `freenet-app-migration` skill the single owner of migration
+doctrine and fixes two things `dapp-builder` was teaching wrongly.
+
+**The probe-trigger doctrine was backwards.** `upgrade-and-migration.md`
+recommended gating migration on "destination is empty," which is exactly the
+shape that lost River's rooms (freenet/river#621): any write to the successor
+satisfies the gate first and the probe never fires, silently. `SKILL.md` and
+`contract-patterns.md` paraphrased the same framing. The rule is now: probe
+unconditionally per `(instance, current_code_hash)`, seeded from the client's
+own snapshot; gate only the REPEAT, on a durable marker. The working
+reference is the freenet-bitcoin bridge (`bridge/src/freenet.rs:92`,
+`bridge/src/store.rs:145`).
+
+**Legacy-registry placement was wrong.** `contract-patterns.md` said to keep
+`legacy_contracts.toml` at the repo root. River's own
+`common/legacy_room_contracts.toml` header says the opposite and explains
+why: it lives inside the `common` crate so it ships inside the published
+`river-core` crate, and a tool built from crates.io still has the full
+registry. A root registry is invisible to anyone depending on your crate.
+
+The three duplicated copies of the doctrine are reduced to orientation plus a
+pointer — that duplication is *why* the two errors survived, since no file
+owned the rule and nobody reconciling one copy saw the others. The two skills
+also contradicted each other on River's delegate status; both now say
+hand-rolled (authoritative) with the crate walk dual-running.
+
+New material:
+
+- **Which `Outcome`s may seal a completion marker.** `Outcome` is
+  `#[non_exhaustive]`, so a wildcard arm defaulting to "done" writes a
+  permanent marker wrongly. May seal: `Recovered` with no unresolved
+  candidates and no truncated fold; `SeedLocal`. Must not: `Indeterminate`,
+  `Recovered` with unresolved or truncated, any error, any unmatched variant.
+- **`cargo fmt` re-keys contracts** (`build-system.md`) — panic locations
+  embed `file:line`, so reformatting moves the WASM bytes and the address.
+- **Two `freenet-stdlib` versions cannot co-link** (`ui-patterns.md`) —
+  `__frnt_set_id` is `#[no_mangle]` in both, so it is a link-time
+  impossibility, not a tidiness preference.
+- **Never gate contract validity on a value that can decrease**
+  (`state-authorization-patterns.md`) — a shrinking gate flips valid to
+  invalid over time and peers permanently disagree.
+- **Delegate-secret migration must precede contract migration** when a secret
+  is an input to the contract's parameters — lose the secret and predecessor
+  ids are underivable, and the probe may seal on `SeedLocal`.
+- **A state version that skips signature verification is a footgun**
+  (`state-authorization-patterns.md`) — the version tag is attacker-chosen.
+
+Consequences added to sections that were otherwise correct:
+
+- Contract parameters: a parameter you might want to set later cannot be set
+  later, ever, for that instance.
+- State size budget: a count cap over variable-size values bounds nothing;
+  multiply by the largest value the other side may send.
+
 ## 1.32.0 (2026-08-31)
 
 `dapp-builder` taught contract authors to read the host clock, and freenet-core

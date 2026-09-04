@@ -248,8 +248,11 @@ properties below are the whole game.
 4. **Regression-gated.** Once the destination is populated it is authoritative;
    never let a stale *source* read overwrite newer *destination* data. River #253:
    firing the legacy probe unconditionally let an old delegate's stale snapshot
-   clobber rooms the user created after upgrading. Gate migration on
-   "destination is empty," and make conflict resolution merge, not replace.
+   clobber rooms the user created after upgrading. The fix is in the *resolution*,
+   not the trigger: make conflict resolution merge rather than replace, and seed the
+   probe from the client's own snapshot so a stale source can only ever add. **Do
+   not gate the probe on "destination is empty"** — that is the shape that lost
+   River's rooms; see the `freenet-app-migration` skill for the rule.
 5. **Observable.** Emit migration telemetry — started / completed / recovered /
    failed counts. River found #352 only because a user reported a vanished room;
    there was no signal that real migrations were failing. A "publish succeeded"
@@ -258,35 +261,19 @@ properties below are the whole game.
 
 ## Probe before you write to the new key
 
-Property 4 gates migration on "the destination is still empty". That gate is also
-a hazard: **any write to the new key that happens before the probe can permanently
-suppress the migration.** The trigger condition is never met, the migration never
-runs, and the app looks healthy while the user's history stays stranded on the
-predecessor generation. Writes that do it: an optimistic PUT, a default or
-placeholder seed, a cached snapshot pushed forward, a subscribe-then-write path,
-anything that populates the new key so the UI has something to render.
+**Run the probe before anything writes to the new key**, and pin the *outcome* —
+did the predecessor's history arrive — never the presence of the call. A
+source-scrape pin asserting the probe "is called" was green for three months in
+River over a call that was unreachable for a whole class of room
+([freenet/river#621](https://github.com/freenet/river/issues/621)); existence is not
+reachability.
 
-**It is silent and it reads as success.** No error, no crash. The migration simply
-never fires.
-
-River shipped exactly this, and it took a rehearsal to find it
-([freenet/river#621](https://github.com/freenet/river/issues/621)). River's probe
-fires when a GET on the current key returns state whose configuration signature
-*fails* to verify. Earlier in the same pass, another block PUTs a delegate-cached
-room snapshot to that key, and that block is taken exactly when the same signature
-*verifies*. Same predicate, same bytes, so any state qualifying for the PUT is by
-construction a state that suppresses the probe. For rooms restored from the
-delegate the probe had been unable to fire since it shipped on 2026-05-20, across
-seven room-contract re-keys.
-
-**Audit your own app.** Name the exact predicate that triggers your migration, then
-grep for every write to the new key that can run before it, and confirm none of
-them can make that predicate false.
-
-**A source-scrape pin asserting the probe "is called" does not catch this.** River
-had one, green for three months, over a call that was unreachable for a whole class
-of room. Existence is not reachability. Pin the outcome (did the migration run,
-did the predecessor's history arrive), never the presence of the call.
+The trigger rule this discipline serves — probe unconditionally per
+`(instance, current_code_hash)`, gate only the repeat on a durable marker, never gate
+the first run on the successor being empty — belongs to the `freenet-app-migration`
+skill, along with the River #621 post-mortem and the reference implementation. Read
+it before designing the trigger; this file covers what the migration must do once
+it fires.
 
 ## Enumerate dynamic key families
 

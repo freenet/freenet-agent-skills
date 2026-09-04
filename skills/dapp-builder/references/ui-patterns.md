@@ -304,9 +304,15 @@ freenet-stdlib = { version = "0.8.5", features = ["net"] }
 getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
 ```
 
-Pin `freenet-stdlib` to the same version as the rest of your workspace and the
-gateway you publish to. Mismatched stdlib versions between UI, CLI tools, and
-the gateway are the #1 cause of "variant index out of range" bincode errors.
+**Two `freenet-stdlib` versions cannot co-link.** `__frnt_set_id` is `#[no_mangle]`
+in every version, so a dependency graph that pulls in both 0.6 and 0.8 fails at link
+time with a duplicate-symbol error — cargo's usual "two semver-major versions side by
+side" escape hatch does not apply. This is not tidiness: pin `freenet-stdlib` to one
+version across the whole workspace, and check transitive deps (a contract crate or a
+helper library pinning an older stdlib will break the link). Where versions merely
+*differ* across process boundaries — UI, CLI tools, and the gateway you publish to —
+the failure is at runtime instead, and mismatched stdlib is the #1 cause of "variant
+index out of range" bincode errors.
 
 Without the `getrandom` js feature, `getrandom 0.2` emits a `compile_error!` on
 `wasm32-unknown-unknown`. River uses this exact pattern.

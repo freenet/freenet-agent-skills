@@ -233,6 +233,13 @@ covered by the lockfile:
   container).
 - **The UI toolchain (`dx`) version.** For a UI compiled to WASM, the Dioxus CLI
   version affects the bytes just like rustc does. Pin it.
+- **`cargo fmt`.** Panic locations embed `file:line`, so reformatting a contract
+  crate moves the panic metadata and therefore the WASM bytes and the contract
+  address — with no semantic change and nothing in the diff that looks like a
+  re-key. Observed for real in the freenet-bitcoin bridge, where a `cargo fmt`
+  re-keyed the contracts and the successor came up with zero claims. Either treat a
+  contract crate's formatting as frozen between deliberate re-keys, or run `cargo
+  fmt` and re-key on purpose, registering the outgoing hash first.
 - **Absolute build-path embedding.** rustc bakes absolute paths (e.g.
   `/home/you/.cargo/registry/...`) into the WASM, so the *same* lock + toolchain
   on a different machine or username still produces different bytes. Strip them

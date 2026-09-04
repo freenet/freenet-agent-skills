@@ -582,6 +582,16 @@ pub struct RoomParameters {
 // Different parameters = different contract instance
 ```
 
+**A parameter you might want to set later cannot be set later — ever, for that
+instance.** Parameters are hashed into the address, so changing one produces a
+different contract with empty state; there is no "configure it after creation" for
+anything you put here. Shipping a parameter you intend to fill in afterwards is a
+permanent defect that is only discovered when someone tries. A marketplace shipped
+an empty trusted-bridge list meaning to configure it post-launch; every store
+created under it is permanently unable to accept payment. Anything mutable belongs
+in *state*, gated by a signature, with the parameter holding only the key that
+authorizes the change.
+
 **Keep parameters small.** Every client must carry the exact parameter bytes to
 GET/PUT/subscribe an instance, and the parameters often become the basis of a
 user-facing identifier. Embedding a full `VerifyingKey` is fine for 32-byte
@@ -631,7 +641,10 @@ existing clients keep subscribing to a contract no one else is publishing to.
 
 Contract upgrade is a design concern you must address *before* the first release,
 just like delegate migration (see `delegate-patterns.md`). The rest of this
-section is the playbook River uses. Adapt it to your app.
+section is the key-derivation mechanism and the playbook River uses. **The
+`freenet-app-migration` skill owns the doctrine** — when to probe, what may seal a
+completion marker, and the failure modes that lose data silently. Read it alongside
+this section; if the two disagree, it wins.
 
 **A user's stable identity must never be a contract key.** Because the contract
 key moves on every WASM change, anything you hand users as a permanent handle —
@@ -746,11 +759,17 @@ old contract's state and follow it.
 ### Register old WASM hashes in a migration file
 
 Maintain a file like `legacy_contracts.toml` (analogous to
-`legacy_delegates.toml` for delegates) at the repo root, listing every
-historical contract WASM hash plus the params bytes used to derive its key.
-The UI's `build.rs` generates a Rust `const` array from it; the runtime probes
-each old key at startup. River uses this pattern for delegates; apply the
-same idea to contracts.
+`legacy_delegates.toml` for delegates) listing every historical contract WASM hash
+plus the params bytes used to derive its key. The `build.rs` generates a Rust
+`const` array from it; the runtime probes each old key at startup.
+
+**Put it inside the crate that ships the registry, not at the repo root.** River's
+`common/legacy_room_contracts.toml` says why in its own header: it "lives inside the
+`common` crate, not at the repo root, so it ships inside the published `river-core`
+crate and riverctl built from crates.io still has the full registry." A registry at
+the repo root is invisible to anyone who depends on your published crate — their
+tool derives one key, the current one, and every predecessor generation is
+unreachable to it.
 
 ### Pre-publish check
 
@@ -928,9 +947,21 @@ require a connectivity witness (a GET for something you know exists succeeding i
 the same window), and never let a single all-`Absent` walk trigger an irreversible
 write.
 
-**Probe before anything writes to the new key.** The trigger is "the new key has no
-real state yet", so an earlier write can permanently suppress the migration,
-silently. See `upgrade-and-migration.md` → "Probe before you write to the new key".
+**If your app seals at all, only two outcomes may.** `Outcome` is `#[non_exhaustive]`
+(`freenet-migrate-0.6.0/src/driver.rs:354`, whose doc comment notes that this
+"protects exhaustive matches only"), so **a wildcard arm that defaults to "done"
+writes a permanent marker wrongly** — for today's non-definitive variants and for
+every variant added later. May seal: `Recovered` with no unresolved candidates and
+no truncated fold; `SeedLocal`. Must NOT seal: `Indeterminate`, `Recovered` with
+unresolved candidates or a truncated fold, any error, and any variant the `match`
+did not name. Name the sealing variants explicitly and let the wildcard fall
+through to "retry next run".
+
+**Probe unconditionally per `(instance, current_code_hash)`, before anything writes
+to the new key.** Gate only the repeat, on a durable marker; never gate the first run
+on the successor being empty, because any write to the new key then suppresses the
+migration permanently and silently. The doctrine and its failure cases live in the
+`freenet-app-migration` skill — read it before designing the trigger.
 
 `SelectionPolicy::NewestFirstWins` is the default and is safe for delete-by-absence
 states; `SelectionPolicy::FoldAll` folds every real generation and is only sound
