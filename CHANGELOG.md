@@ -24,6 +24,13 @@ why: it lives inside the `common` crate so it ships inside the published
 `river-core` crate, and a tool built from crates.io still has the full
 registry. A root registry is invisible to anyone depending on your crate.
 
+The worked example under "Resumable / self-healing" sealed the completion
+marker on `has_new_format_data()` — the empty-destination gate in disguise,
+fifteen lines above the property that now forbids it. It seals on a definitive
+probe outcome instead, and the "audit your own app" procedure (name the
+condition under which your migration does *not* run, then grep every write that
+can make it true) is kept here rather than moved out with the doctrine.
+
 The three duplicated copies of the doctrine are reduced to orientation plus a
 pointer — that duplication is *why* the two errors survived, since no file
 owned the rule and nobody reconciling one copy saw the others. The two skills

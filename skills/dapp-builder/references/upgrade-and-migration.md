@@ -142,8 +142,10 @@ The whole procedure, start to finish:
    migrate** — that is normal, not a failure. Keep the migration itself safe
    (idempotent, resumable, non-destructive, regression-gated, observable) per "The
    five properties" below, and make sure nothing in your load path writes to the
-   new key before the probe runs. That is a silent way to disable your own
-   migration; see "Probe before you write to the new key".
+   new key before the probe runs — a placeholder or default seeded first is what
+   the fold then merges against, and any app that (wrongly) gates on the
+   destination being empty is silently disabled by it outright. See "Probe before
+   you write to the new key".
 
 6. **Do NOT recreate instances, rotate keys, or warn users their invites are
    dead.** None of that is part of a routine upgrade, and doing it *causes* the
@@ -233,13 +235,20 @@ properties below are the whole game.
    mark_migration_done();
    // On Err / interruption: leave the flag set -> next load re-runs and recovers.
 
-   // On load:
+   // On load, keyed per (instance, current_code_hash):
    if flag_set("migration_in_progress") {
-       // partial set -> do NOT mark done; re-run migration (idempotent) to fill gaps
-   } else if has_new_format_data() {
-       mark_migration_done();              // authoritative; never re-probe old (see #253)
+       run_migration();                    // partial set -> re-run (idempotent) to fill gaps
+   } else if !migration_done(instance, current_code_hash) {
+       run_migration();                    // UNCONDITIONAL. Not gated on whether the
+                                           // destination already holds data -- see
+                                           // property 4 and the trigger rule below.
    }
    ```
+
+   `mark_migration_done()` is reached only from the success path above, on a
+   definitive probe outcome. Never seal it because the destination *looks*
+   populated: that is the empty-destination gate in disguise, and any earlier
+   write then makes the migration permanently unreachable.
 
 3. **Non-destructive.** Never delete the source until the destination is
    confirmed complete. Keep the old blob/keys as a rollback fallback so an old or
@@ -267,6 +276,16 @@ source-scrape pin asserting the probe "is called" was green for three months in
 River over a call that was unreachable for a whole class of room
 ([freenet/river#621](https://github.com/freenet/river/issues/621)); existence is not
 reachability.
+
+**Audit your own app for it.** Write down the exact condition under which your
+migration does *not* run, then grep every write to the new key that can execute
+before the probe and confirm none of them can make that condition true. River's
+probe fired only when a GET on the current key returned state whose configuration
+signature failed to verify — and an earlier block in the same pass PUT a
+delegate-cached snapshot exactly when that signature *verified*, so every state
+qualifying for the PUT was by construction one that suppressed the probe. Same
+predicate, same bytes, unreachable since it shipped, across seven room-contract
+re-keys.
 
 The trigger rule this discipline serves — probe unconditionally per
 `(instance, current_code_hash)`, gate only the repeat on a durable marker, never gate
