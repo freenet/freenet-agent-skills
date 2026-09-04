@@ -132,7 +132,10 @@ engineer into.
   (Harvest's `seal_decision`). The remedy is a source pin kept *alongside* the
   behavioural test — otherwise the general warning about source pins gets
   applied to the one case where a source pin is correct.
-- **Never put a contract migration marker in the delegate.** It is the obvious
+- **Never put a contract migration marker in the delegate.**
+  **(SUPERSEDED in 1.35.0 — this rule was wrong. `localStorage` throws at
+  the opaque origin a published webapp runs at; the delegate's secret store
+  is the right home. See the 1.35.0 entry.)** It is the obvious
   home and it is wrong: the marker is lost when the *delegate* re-keys, which
   silently resets every contract marker at exactly the moment the contracts
   re-keyed too. Browser `localStorage`, hex-encoded, keyed by artifact +

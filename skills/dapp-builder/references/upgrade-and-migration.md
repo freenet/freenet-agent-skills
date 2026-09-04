@@ -229,12 +229,22 @@ pub const LAST_LEGACY_STORE_PARAM_GENERATION: u32 = 5;
 struct LegacyStoreParameters { /* ...the fields as they were, with the values
                                   the publishing code actually supplied... */ }
 
-let params = if entry.generation <= LAST_LEGACY_STORE_PARAM_GENERATION {
-    &legacy
-} else {
-    &current
-};
-contract_id_from_code_hash(&entry.code_hash, params)
+let mut by_generation: Vec<(u32, ContractInstanceId)> = lineage
+    .iter()
+    .map(|e| {
+        let params = if e.generation <= LAST_LEGACY_STORE_PARAM_GENERATION {
+            &legacy
+        } else {
+            &current
+        };
+        (e.generation, contract_id_from_code_hash(&e.code_hash, params))
+    })
+    .collect();
+// Newest-first, by the registry's DECLARED generation and never by slice
+// order. `NewestFirst::from_lineage` does this for you; a hand-derived list
+// handed to `assume_ordered` must do it itself, or a generation appended out
+// of order silently loses the anti-rollback guarantee.
+by_generation.sort_by_key(|(generation, _)| core::cmp::Reverse(*generation));
 ```
 
 Harvest's `ui/src/migrate.rs` (`store_candidate_ids`,

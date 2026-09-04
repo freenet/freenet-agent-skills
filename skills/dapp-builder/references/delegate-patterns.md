@@ -882,8 +882,11 @@ answer will.** The crate ships that answer as `handle_export_request`, called
 from your delegate: it authorizes the caller's origin, enumerates the requested
 secret scope generically via `SecretStore::list_secrets`, and packages the result
 into an outbound `ApplicationMessage`. A predecessor built before you added it
-rejects the request, so the walk records `PredecessorMigration::Unresponsive` —
-forever. Those secrets are then **permanently unrecoverable**: delegate secrets
+rejects the request, so the walk records `PredecessorMigration::Unresponsive`
+every time it runs. That record is not itself permanent — an unresponsive
+predecessor earns no marker and is re-walked on the next load, which is the
+correct behaviour. What is permanent is that the re-walk can never succeed, so
+those secrets are **unrecoverable**: delegate secrets
 are node-local (`secrets_dir/<delegate-key>/`, encrypted under the node's own
 KEK, never replicated), so there is no second copy to recover from, and nothing
 you write on the client reaches WASM that is already published.

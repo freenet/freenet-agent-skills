@@ -819,7 +819,8 @@ the table:
 - **Registry inside the graph, but `#[cfg]`-gated off the contract builds.**
   Right when an outside integrator builds against the crate and needs the table
   (the case above, where placement and the invariant pull apart). River does
-  this: `river-core` code-generates `legacy_room_contracts.toml` and the
+  this: `river-core` code-generates `legacy_room_contracts.rs` from the
+  checked-in `legacy_room_contracts.toml`, and the
   room-contract depends on `river-core`, but the generated module sits behind
   `#[cfg(feature = "migration")]`, which the contract and delegate WASM builds
   do not enable — so the registry is reachable from crates.io and `riverctl`
@@ -987,11 +988,18 @@ the driver.** `migrate_contract` is a thin async wrapper that awaits a
 anything with awaitable request/response correlation. A Rust browser app on
 stdlib's `WebApi` has none: it delivers every response to a single
 app-registered handler, so a request and its answer are not connected by
-anything the language can await, and correlation is the app's job. (Check your
-client before assuming: the TypeScript `FreenetWsApi` is promise-based per
-request, so a TS UI does not face the *correlation* problem — though
-`migrate_contract` is a Rust crate function with no JavaScript binding, so a
-plain TS app writes the same loop itself either way.) There, construct
+anything the language can await, and correlation is the app's job. (A TS UI is not simply
+exempt. The TypeScript `FreenetWsApi` returns a promise per request, but it
+correlates by **FIFO queue position, not contract id** — `resolveNext` is a
+`queue.shift()` (`websocket-interface.ts:899-905`) — so it is only correct with
+one GET outstanding. And it **rejects** on `NotFound`
+(`new Error("Contract not found")`, `:769`) exactly as it rejects on a deadline
+(`new Error("Request timeout")`, `:890`), so `Absent` and `Unknown` arrive in the
+same shape, separable only by matching an error string. The idiomatic
+`try { await get() } catch { /* nothing there */ }` is the data-loss default the
+next section forbids. A TS app must rebuild that distinction itself before it can
+decide anything — and `migrate_contract` is a Rust crate function with no
+JavaScript binding, so it writes the loop either way.) There, construct
 `ProbeDriver` directly and pump it
 by hand: `next_action()` → send the GET and arm a timeout → feed the result back
 through `on_response` / `on_absent` / `on_unknown` (an expired timer is
