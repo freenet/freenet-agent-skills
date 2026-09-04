@@ -989,7 +989,10 @@ stdlib's `WebApi` has none: it delivers every response to a single
 app-registered handler, so a request and its answer are not connected by
 anything the language can await, and correlation is the app's job. (Check your
 client before assuming: the TypeScript `FreenetWsApi` is promise-based per
-request, so a TS UI *does* have the correlation and can use the wrapper.) There, construct `ProbeDriver` directly and pump it
+request, so a TS UI does not face the *correlation* problem — though
+`migrate_contract` is a Rust crate function with no JavaScript binding, so a
+plain TS app writes the same loop itself either way.) There, construct
+`ProbeDriver` directly and pump it
 by hand: `next_action()` → send the GET and arm a timeout → feed the result back
 through `on_response` / `on_absent` / `on_unknown` (an expired timer is
 `on_unknown`) → `take_outcome()` at `Step::Done`. The crate documents this on

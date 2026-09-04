@@ -833,8 +833,13 @@ addresses the predecessor's key while presenting `MessageOrigin::WebApp` — whi
 is stable across a delegate re-key. Do not reach for `OriginPolicy::FromDelegate`
 by analogy; River's own `check_origin` rejects delegate-to-delegate calls
 outright. A delegate whose `handle_request` accepts only its
-app's typed requests — the common case — can answer nothing a successor asks, and
-no client-side change alters that, because the old WASM is already deployed. Read
+app's typed requests — the common case — can answer only those, and no
+client-side change alters that, because the old WASM is already deployed. That
+is sometimes enough: if the typed protocol exposes every key you need and the
+key set is fixed, the successor's UI can send the predecessor's own requests to
+the old key and recover the lot. It is not enough the moment a key family is
+dynamic and unguessable, which is what an enumeration or export handler is for —
+and you cannot add one retroactively. Read
 "A delegate migration is forward-only" below **before** you plan a migration; it
 changes when you adopt, not just how.
 

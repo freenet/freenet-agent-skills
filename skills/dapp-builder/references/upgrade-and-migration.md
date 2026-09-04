@@ -241,15 +241,36 @@ Harvest's `ui/src/migrate.rs` (`store_candidate_ids`,
 `legacy_store_params_cbor`) and `legacy/README.md` are the worked shape,
 including a test that pins the boundary.
 
-**This is a contract-side hazard specifically.** The delegate registry does not
-have it: `DelegateLineageEntry` stores the full `delegate_key` per row and the
+**A generation boundary only works while each historical encoding maps onto a
+distinct code hash.** If the *same* WASM was ever published under two parameter
+shapes, the registry cannot even hold both rows —
+`freenet-migrate-build`'s `validate()` rejects a duplicate contract code hash
+(`BuildError::DuplicateCodeHash`) — and the branch above picks one encoding per
+row regardless, so one historical address is never probed. The general answer is
+to keep the historical `(code_hash, parameter_bytes)` **pairs** and derive a
+candidate id from each, rather than a boundary over a code-hash-only lineage.
+The crate supports it: `NewestFirst::assume_ordered` takes a candidate list the
+app derived itself, which `ProbeDriver::new` accepts in place of
+`NewestFirst::from_lineage`. (Harvest wraps that as its own
+`ProbeSession::start_with_candidates`; the crate has no such constructor.) A
+boundary constant is the simple case of deriving your own candidates, not a
+substitute for it.
+
+**The *registry-format* half of this is contract-side specifically.** The
+delegate registry can say what the contract registry cannot: `DelegateLineageEntry` stores the full `delegate_key` per row and the
 walk uses it verbatim, never re-deriving it (`delegate_migrate.rs:1547`), and
 the registry row carries an optional `params_hex` that the build-time
-cross-check honours — and if you change a delegate's parameters and forget to
-record them, `Registry::validate()` re-derives `blake3(code_hash ‖ params)`,
-finds a mismatch, and **fails the build**. That is the contrast worth holding
-on to: a delegate parameter change is either recorded or loud, while a contract
-parameter change is neither.
+cross-check honours. So the delegate registry *format* can express a parameter
+change, where the contract format cannot express one at all.
+
+**Noticing that you need a row is silent on both sides, though**, and this is
+the part to guard yourself. A parameters-only re-key leaves the WASM
+byte-identical, so a pre-publish check that compares code hashes reports
+"unchanged" and you never append a row — and `Registry::validate()` only
+cross-checks the rows that are *present*, so it cannot object to the row you
+did not write. Make your publish guard compare the **derived address**
+— `blake3(code_hash ‖ params)`, the thing that actually moved — rather than the
+code hash alone, or a parameters-only re-key ships with green CI on both sides.
 
 Practical rules:
 

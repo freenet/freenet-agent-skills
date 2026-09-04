@@ -62,6 +62,16 @@ pieces of doctrine that came out of the same app.
   "the params bytes used to derive the key".** They do not, which is the whole
   premise of the new parameter rule. Corrected, with the warning placed on the
   backward-probe recipe itself rather than only in `upgrade-and-migration.md`.
+- **The parameter rule got two limits from the external review pass.** A
+  generation boundary only works while each historical encoding maps onto a
+  distinct code hash — `freenet-migrate-build` rejects a duplicate contract code
+  hash, so two parameter-only re-keys on byte-identical WASM cannot both be
+  rows; the general answer is an app-derived `(code_hash, params)` candidate
+  list. And *noticing* you need a row is silent on the delegate side too: a
+  parameters-only re-key leaves the WASM unchanged, so a code-hash-comparing
+  publish guard says "unchanged" and `validate()` cannot object to a row nobody
+  wrote. An earlier draft of this entry claimed the delegate side "fails the
+  build"; only the registry *format* differs, not the detection.
 - **NEW: `Ok(vec![])` is a positive claim and seals a predecessor
   permanently.** An empty-success answer from `fetch_secrets` is
   indistinguishable from "nothing was there" and writes a
