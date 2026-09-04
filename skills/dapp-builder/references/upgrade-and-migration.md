@@ -125,7 +125,13 @@ The whole procedure, start to finish:
    `freenet-migrate` ships the delegate-side entry points
    (`migrate_delegate_secrets`, `register_delegate_with_migration`, unchanged
    since 0.5.0), and River, Delta and ghostkeys all drive them on `main` at
-   0.5.0. See `delegate-patterns.md` →
+   0.5.0. **A delegate migration is forward-only**: the successor asks, and only
+   a predecessor whose already-deployed WASM answers (in practice, one that
+   shipped `handle_export_request`, or an app protocol general enough to
+   enumerate its own secret namespace) can be recovered from. Every release
+   shipped without that handler adds one permanently unrecoverable generation,
+   which makes "we have no migration to do yet" the argument for adopting
+   sooner, not later. See `delegate-patterns.md` →
    "Delegate secret migration: no core mechanism, and why" for the full history
    and current guidance, and `contract-patterns.md` for the contract-side
    mechanics. For the procedure of swapping an existing hand-rolled sweep over
@@ -227,8 +233,9 @@ properties below are the whole game.
 
    ```rust
    // On migration start (before the first per-entity write):
-   set_flag("migration_in_progress");      // a localStorage / delegate key,
-                                           // namespaced per source-version set
+   set_flag("migration_in_progress");      // browser localStorage, NOT the
+                                           // delegate -- see below; namespaced
+                                           // per source-version set
    // ... write each entity via CAS ...
    // ONLY after every entity is written:
    clear_flag("migration_in_progress");
@@ -249,6 +256,23 @@ properties below are the whole game.
    definitive probe outcome. Never seal it because the destination *looks*
    populated: that is the empty-destination gate in disguise, and any earlier
    write then makes the migration permanently unreachable.
+
+   **Never keep a *contract* migration marker in the delegate.** The delegate is
+   the obvious home — it is already your durable client store, holding keys and
+   registries — and it is the wrong one, because a marker there is lost when the
+   **delegate** re-keys. That silently resets every contract marker at exactly the
+   moment the contracts re-keyed too, so the two failures arrive together and the
+   second one is invisible. Use browser `localStorage`, whose origin derives from
+   the web-container contract id and does not move when a data contract or a
+   delegate is rebuilt. Key it by `(artifact, instance, current_code_hash)` and
+   **hex-encode both ids**: raw bytes in a storage key alias under any lossy UTF-8
+   conversion, which is how two distinct 32-byte ids collapse onto one marker slot
+   and one of them gets sealed having never been migrated (River hit exactly that).
+   Make unreadable storage report **"not migrated"** — a private window, disabled
+   storage, or an embedding that denies access then costs one extra walk per page
+   load, which is wasteful and safe; reading it as "already done" skips the
+   migration entirely. Harvest's `ui/src/migrate.rs` (`marker_key` /
+   `migration_done`) is the worked shape.
 
 3. **Non-destructive.** Never delete the source until the destination is
    confirmed complete. Keep the old blob/keys as a rollback fallback so an old or
@@ -334,6 +358,21 @@ than burying it in async load code. River's `decide_per_room_load_action(bool)` 
 this pattern; its earlier source-pin-only test had a false positive (it passed
 even with the recovery call deleted), so prefer a pure-function behavioral test
 and verify by mutation that removing the fix fails the test.
+
+**When a guard provably cannot fail, a source-scrape pin is the right tool —
+and the only one.** Mutation testing asks you to name an input that turns the
+test red; some guards have none, and they are exactly the guards worth keeping.
+The canonical shape is the wildcard arm of a `match` over a `#[non_exhaustive]`
+enum: while every variant defined today is named explicitly, the wildcard is
+unreachable, so inverting it to the unsafe default leaves every behavioural test
+green. It is protecting against a variant a *future* release adds, which no input
+you can construct today reaches. Harvest hit this in `seal_decision`: inverting
+`_ => Seal::Retry` to `Seal::Seal` broke nothing. The remedy is not a better
+behavioural test — it is a test that reads the source and asserts the arm exists
+and returns the safe value, kept **alongside** the behavioural test rather than
+instead of it, with a comment saying why this one guard is pinned that way.
+Otherwise the earlier rule (a source pin is a false positive waiting to happen)
+gets applied to the one case where it is correct, and the pin is deleted.
 
 **Three questions worth asking of any migration change in review.** Each names a
 failure a green test suite let through.

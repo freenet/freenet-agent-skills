@@ -517,6 +517,17 @@ in `NodeDiagnosticsResponse`, hardened wire-boundary enums with
 `DEFAULT_NONCE` constants, so you need the wildcard match arms / random
 cipher generation documented in `references/delegate-patterns.md`.
 
+`DEFAULT_CIPHER`/`DEFAULT_NONCE` is the break that gets quoted, but it is
+**not the only one**. `ContractInstanceId::from_bytes` is deprecated in
+0.8 in favour of `from_base58` — it is a delegating alias, so it still
+compiles, but a crate built with `-D warnings` (most CI) fails on it. Note
+what the rename is telling you: it parses base58 **text**, not raw bytes.
+If you were passing it a raw 32-byte id it was already wrong; the
+replacement there is `ContractInstanceId::new([u8; 32])`, not
+`from_base58`. Budget a compile-and-read pass over the deprecation
+warnings rather than assuming a single documented break is the whole
+list.
+
 ```toml
 # Workspace-wide (Cargo.toml) — matches River pin.
 freenet-stdlib = { version = "0.8.5", features = ["contract"] }
@@ -579,6 +590,11 @@ must now generate random values per session — e.g.
 `let key: [u8; 32] = rand::random(); let nonce: [u8; 24] = rand::random();`.
 Code still referencing the old constants will fail to compile against
 stdlib 0.8 or newer.
+
+It is not the only 0.6→0.8 break, and treating it as the whole list is how
+a `-D warnings` build fails after the port looks finished — see the
+version-pinning section above for `ContractInstanceId::from_bytes` →
+`from_base58`.
 
 ---
 

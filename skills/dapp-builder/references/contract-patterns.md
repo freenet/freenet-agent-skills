@@ -785,6 +785,25 @@ apps are granted `{ReadPublic, Sign}` and never `Export`
 would hand them a table they are incapable of using. `ghostkey-common 0.3.0` therefore
 ships no registry, and that is correct rather than a gap.
 
+**"Who probes?" orients the choice; this constraint vetoes it. Never
+code-generate a registry from a crate that is inside the contract build graph.**
+If the crate holding the registry compiles into the contracts, then editing the
+registry changes the contract WASM — so recording a migration re-keys every
+contract that registry describes, and you have built a registry that *causes*
+the migration it exists to record. Decide it from the dependency direction, not
+from which crate is named "common" or "shared": in the Harvest marketplace
+`harvest-common` compiles into all three contracts and the delegate while
+`harvest-ui` compiles into none, so the UI crate is the only safe home for the
+codegen even though both are shared crates. Check by asking what a one-line
+registry edit rebuilds — `cargo tree --invert` from the candidate crate answers
+it — before you put a `build.rs` there.
+
+When the two pull in different directions (an outside integrator needs the table,
+but the crate they build from is in the contract graph) the constraint wins: it
+is a correctness property, while placement is a convenience. Split the registry
+into a crate the contracts do not depend on, or publish it as data the consumer
+reads at their own build time.
+
 ### Pre-publish check
 
 Add a preflight task that fails if the contract WASM hash has changed from the
@@ -927,6 +946,22 @@ freenet/river#427). The decisions: newest generation first by the registry
 generation field, first real state wins, an undecodable or placeholder response is
 a miss and advances the walk, late responses are single-shot ignored, and a hop cap
 bounds the walk.
+
+**Which entry point you use is an environment question, and a browser app needs
+the driver.** `migrate_contract` is a thin async wrapper that awaits a
+`ProbeIo::get` per candidate — right for a CLI, a bridge, a test harness, or
+anything with awaitable request/response correlation. A browser app has none:
+`WebApi` delivers every response to a single app-registered handler, so a request
+and its answer are not connected by anything the language can await, and
+correlation is the app's job. There, construct `ProbeDriver` directly and pump it
+by hand: `next_action()` → send the GET and arm a timeout → feed the result back
+through `on_response` / `on_absent` / `on_unknown` (an expired timer is
+`on_unknown`) → `take_outcome()` at `Step::Done`. The crate documents this on
+`migrate_contract` itself, and the two make identical decisions by construction —
+the wrapper is a loop over the same machine. Hand-pumping earns its keep even
+where a wrapper would compile: it puts the sequencing in code `cargo test` runs
+on the host, leaving only "send a GET, arm a timer, route a response" behind the
+wasm gate.
 
 **Silence is not absence.** This is the 0.6.0 break (freenet-migrate#19), and it is
 the whole reason to be on 0.6.0. Your adapter's `ProbeIo::get` returns a three-way

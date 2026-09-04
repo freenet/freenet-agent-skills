@@ -2,6 +2,64 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.34.0 (2026-09-04)
+
+Six corrections from actually adopting `freenet-migrate` in a live app
+(Harvest, `feat/bitcoin-payments`). These are field findings, not review
+speculation — each one is something the skill as written would have led an
+engineer into.
+
+- **A delegate migration is FORWARD-ONLY, and that changes when you adopt.**
+  `delegate-patterns.md` read as though adopting the crate carries an app's
+  existing delegate secrets forward. It does not: the successor *asks*, and only
+  a predecessor whose already-deployed WASM can answer will. New section, "A
+  delegate migration is forward-only", placed ahead of the mechanics because it
+  is a scheduling decision: **every release shipped without an export handler
+  adds one permanently unrecoverable generation**, which makes "we have no
+  migration to do yet" the argument for adopting sooner rather than a reason to
+  defer. Covers `handle_export_request`, fail-closed origin policy, prefix vs.
+  whole-scope export, and the two residual limits (`HOST_ENUMERATION_CAP`
+  truncation refusal, pre-registry keys). Cross-linked from
+  `upgrade-and-migration.md` step 4.
+- **"There is no export handler" was stale and read as a general claim.** True
+  of the stdlib wire protocol; false of `freenet-migrate`, which has shipped
+  `handle_export_request` since 0.5.0. River's predecessors need no *special*
+  handler only because its chat delegate already answered a general-purpose
+  `GetRequest`/`ListRequest` over its own secret namespace — which most
+  delegates do not.
+- **Registry placement gets the constraint that actually forbids the wrong
+  choice.** "Placement follows who probes" (added in 1.33.0) is right, but does
+  not rule anything out on its own. Added: **never code-generate a registry from
+  a crate inside the contract build graph** — if the shared crate compiles into
+  the contracts, editing the registry re-keys every contract that registry
+  describes, so you have built a registry that causes the migration it records.
+  Decide from the dependency direction, not from which crate is called
+  "common": in Harvest, `harvest-common` compiles into all three contracts and
+  the delegate while `harvest-ui` compiles into none.
+- **`ProbeDriver`, not `migrate_contract`, in shared-handler environments.**
+  `migrate_contract` needs awaitable request/response correlation; a browser
+  app has none, because `WebApi` delivers every response to a single
+  app-registered handler. `contract-patterns.md` now says which entry point
+  suits which environment and gives the hand-pump sequence.
+- **A guard that provably cannot fail needs a source-scrape pin, not a
+  behavioural test.** "Verify by mutation" has no answer for a wildcard arm over
+  a `#[non_exhaustive]` enum: while every variant is named, the arm is
+  unreachable, so inverting it to the unsafe default leaves the suite green
+  (Harvest's `seal_decision`). The remedy is a source pin kept *alongside* the
+  behavioural test — otherwise the general warning about source pins gets
+  applied to the one case where a source pin is correct.
+- **Never put a contract migration marker in the delegate.** It is the obvious
+  home and it is wrong: the marker is lost when the *delegate* re-keys, which
+  silently resets every contract marker at exactly the moment the contracts
+  re-keyed too. Browser `localStorage`, hex-encoded, keyed by artifact +
+  instance + current code hash; unreadable storage must report "not migrated"
+  so the probe repeats.
+- **`DEFAULT_CIPHER`/`DEFAULT_NONCE` is not the only stdlib 0.6→0.8 break.**
+  `ContractInstanceId::from_bytes` is deprecated in favour of `from_base58`,
+  which fails a build under `-D warnings`. Also notes what the rename reveals:
+  it parses base58 *text*, so code passing it a raw 32-byte id was already
+  wrong and wants `ContractInstanceId::new`.
+
 ## 1.33.1 (2026-09-04)
 
 `ui-patterns.md` told you to derive the WebSocket URL and, 30 lines earlier,
