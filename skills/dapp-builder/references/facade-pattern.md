@@ -294,6 +294,11 @@ Failure here is a release blocker. Possible causes:
 3. **A workspace dep leaked in** because the facade isn't actually in
    `[workspace.exclude]` or doesn't have its own `Cargo.lock`. See
    `build-system.md` → "Per-contract lockfile isolation".
+4. **The build embedded a machine-specific path, or reused a stale
+   `target/`.** Both move the bytes without any source change, and both
+   make the snapshot reproducible only on the host that produced it —
+   which looks exactly like a real drift. Check these before concluding
+   a dependency moved: `build-system.md` → "Byte-reproducibility".
 
 ### Regenerating the facade snapshot from a non-Linux host
 

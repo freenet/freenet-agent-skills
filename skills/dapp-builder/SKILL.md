@@ -378,18 +378,20 @@ Set up the build system, CI, and deployment pipeline.
    browser console is clean catches CSP blocks, iframe-shell mistakes, and
    broken archives that no unit test reaches. See
    `references/production-smoke-testing.md`.
-6. **Check the gateway port and (optionally) tar reproducibility.** The
+6. **Check the gateway port, and make the build reproducible.** The
    gateway runs on `7509` — older docs and scripts still reference `50509`.
    For byte-reproducible webapp archives across build hosts, invoke `tar`
    with the GNU flags listed under "Tooling Preflight" in
    `references/build-system.md`.
 
-   **Contracts need more than reproducible tars.** Build them through one
-   canonical script that remaps `CARGO_HOME`, `RUSTUP_HOME` and the repo root,
-   refuses if any build-machine path survives into the WASM, and builds into a
-   throwaway target dir. Remapping only your own source path leaves the cargo
-   registry's absolute paths in the bytes, which binds every contract to the
-   machine that built it. See "Byte-reproducibility" in
+   **Contracts need more than reproducible tars, and this part is not
+   optional** — the WASM bytes *are* the contract's address. Build them through
+   one canonical script that remaps `CARGO_HOME`, `RUSTUP_HOME` **and** the repo
+   root, and that refuses the build if any build-machine path survives into the
+   WASM. Remapping only your own source path leaves the cargo registry's absolute
+   paths in the bytes, which binds every contract to the machine that built it.
+   Have the script take its target dir as an argument, so any build whose hash you
+   record or pin can go into a throwaway one. See "Byte-reproducibility" in
    `references/build-system.md`.
 
 7. **Publish the UI as a web container contract — its URL is permanent, and

@@ -48,6 +48,32 @@ corrections to text that was already here.
   contract, `OptionalUpgrade` and `FacadePointer`. Importing the wrong one
   compiles.
 
+Review of the above turned up four more corrections to existing text, all of the
+"doctrine changed here, the worked example still teaches the old thing" kind:
+
+- **`-Ctrim-paths` does not exist.** The byte-reproducibility section offered it
+  as an equivalent alternative to `--remap-path-prefix`. `rustc -Ctrim-paths=all`
+  is an "unknown codegen option", and Cargo's `trim-paths = "all"` profile
+  setting is still unstable on Rust 1.96.0, which is what the exemplar project
+  pins. `--remap-path-prefix` is the option that works today.
+- **The canonical `Makefile.toml` example built the contract and the delegate in
+  two separate bare `cargo build -p` invocations** — simultaneously the
+  feature-unification footgun the same file warns about three sections later, and
+  an unremapped build. It now calls one script that co-builds both.
+- **Two more places recorded a hash out of a long-lived shared `target/`** (the
+  plain-Makefile delegate recipe and the `ui-patterns.md` constant injection),
+  and `facade-pattern.md`'s list of reasons a byte-equality check fails did not
+  include either new cause. All three now cross-reference the rule.
+- **The withdrawal-floor exception was missing from the doctrine-owning skill.**
+  "Keep the key you last resolved" inverts under a withdrawal floor — following
+  it there resurrects code the author retired. `freenet-app-migration` declares
+  itself the winner in a disagreement, so the exception had to be in it.
+
+Also corrected in the new text itself: a miscounted number of embedded registry
+roots, an overstated claim about wall-clock timestamps landing at `u32::MAX`, and
+an attribution of the throwaway target dir to the build script rather than to its
+callers.
+
 ## 1.35.0 (2026-09-04)
 
 Resolves the blocking review finding on 1.34.0's marker rule, and adds two

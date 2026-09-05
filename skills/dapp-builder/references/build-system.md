@@ -248,7 +248,7 @@ covered by the lockfile:
   enough.** Release binaries embed panic locations as `file:line`, and for
   dependencies cargo passes **absolute** paths, so the registry root lands in the
   bytes. Measured in a real contract: `/home/ian/.cargo/registry/.../blake3-1.8.7/`
-  plus eleven other registry roots, 21 occurrences in one WASM. Because the address
+  and thirteen other crate roots, 21 occurrences in one WASM. Because the address
   is `BLAKE3(BLAKE3(wasm) ‖ params)`, **every contract that project had built was
   bound to the machine that built it** — a GitHub runner and the dev box produced
   different contracts from one commit, so nobody could reproduce what was deployed.
@@ -256,10 +256,14 @@ covered by the lockfile:
   contract and see nothing wrong.
 
   Remap all three varying roots — `CARGO_HOME`, `RUSTUP_HOME`, and the repo — or
-  use `-Ctrim-paths` (`trim-paths = "all"` in the release profile), which covers
-  dependency and sysroot paths too, or build in a pinned container. (River verified
-  this and is adopting `trim-paths` on its next deliberate re-key —
-  freenet/river#393.) The working example is
+  build in a pinned container. **`--remap-path-prefix` is the option that works
+  today.** Cargo's `trim-paths = "all"` profile setting covers dependency and
+  sysroot paths more thoroughly, but it is still unstable: on Rust 1.96.0 it fails
+  with *"the package requires the Cargo feature called `trim-paths`, but that
+  feature is not stabilized in this version of Cargo"*, and there is no
+  `-Ctrim-paths` codegen flag at all (`rustc -Ctrim-paths=all` → *"unknown codegen
+  option"*). Check stabilization before reaching for it; River intends to adopt it
+  on its next deliberate re-key (freenet/river#393). The working example is
   `freenet-bitcoin/scripts/build-contracts.sh`:
 
   ```bash
@@ -394,19 +398,21 @@ default_to_workspace = false
 # CONTRACT BUILD
 # ============================================
 
-[tasks.build-contract]
-description = "Build the contract to WASM"
-command = "cargo"
-args = [
-    "build",
-    "--release",
-    "--target", "wasm32-unknown-unknown",
-    "-p", "my-contract",
-]
+# One task builds BOTH wasm crates, through the one script that sets the
+# --remap-path-prefix flags and runs the fail-closed path check. Two separate
+# `cargo build -p` tasks would be two bugs at once: each crate would be built
+# without the sibling, changing the feature unification and therefore the key
+# (see "Build-command footgun"), and neither would be remapped, binding both
+# contracts to this machine (see "Byte-reproducibility").
+[tasks.build-contracts]
+description = "Build contract + delegate to WASM, reproducibly"
+script = '''
+./scripts/build-contracts.sh
+'''
 
 [tasks.copy-contract]
 description = "Copy contract WASM to UI public folder"
-dependencies = ["build-contract"]
+dependencies = ["build-contracts"]
 script = '''
 mkdir -p ui/public/contracts
 cp target/wasm32-unknown-unknown/release/my_contract.wasm ui/public/contracts/
@@ -416,19 +422,9 @@ cp target/wasm32-unknown-unknown/release/my_contract.wasm ui/public/contracts/
 # DELEGATE BUILD
 # ============================================
 
-[tasks.build-delegate]
-description = "Build the delegate to WASM"
-command = "cargo"
-args = [
-    "build",
-    "--release",
-    "--target", "wasm32-unknown-unknown",
-    "-p", "my-delegate",
-]
-
 [tasks.copy-delegate]
 description = "Copy delegate WASM to UI public folder"
-dependencies = ["build-delegate"]
+dependencies = ["build-contracts"]
 script = '''
 mkdir -p ui/public/contracts
 cp target/wasm32-unknown-unknown/release/my_delegate.wasm ui/public/contracts/
@@ -691,7 +687,11 @@ publish-delegate:
 	    node -e "const bs58=require('bs58'); \
 	        console.log(JSON.stringify(Array.from(bs58.default.decode('$$key'))))" \
 	        > $(WEB_DIR)/delegate_key_bytes.json
-	# 2. Compute code_hash from raw WASM (BLAKE3)
+	# 2. Compute code_hash from raw WASM (BLAKE3).
+	#    This value is baked into the UI, so it must come from a build you
+	#    trust: a reused CARGO_TARGET_DIR can change the bytes (see
+	#    "Byte-reproducibility"). Point CARGO_TARGET_DIR at a fresh dir for
+	#    any build whose hash you record.
 	code_hash_hex=$$(b3sum --no-names \
 	    $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/my_delegate.wasm) && \
 	    node -e "console.log(JSON.stringify(Array.from( \
@@ -1024,6 +1024,8 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Check WASM builds
+        # Compile check only — nothing here is hashed, committed or published.
+        # Bytes destined for publication come from scripts/build-contracts.sh.
         run: cargo build --release --target wasm32-unknown-unknown -p my-contract -p my-delegate
       - name: Check UI builds
         run: cargo check -p my-ui --target wasm32-unknown-unknown
@@ -1049,10 +1051,14 @@ jobs:
           [ "$COMMITTED" = "$BUILT" ] || { echo "::error::WASM stale"; exit 1; }
 ```
 
-Note this job deliberately does **not** restore the `target` cache the `test` job
+Note this job deliberately does **not** restore the `target` cache the `check` job
 above uses. It builds into a fresh `mktemp -d`, because a hash recorded from a
 reused `target/` is not trustworthy (see "Byte-reproducibility"). Caching the
 registry is fine; caching `target` for a job whose entire output is a hash is not.
+This is stricter than most projects currently manage — freenet-bitcoin's own CI
+still uses `Swatinem/rust-cache` and the default `target/` for its hash-reporting
+steps — so treat it as the bar to move towards, and be aware that a pinned-vector
+test running out of a cached tree is weaker evidence than it looks.
 
 ## Resilience Patterns
 

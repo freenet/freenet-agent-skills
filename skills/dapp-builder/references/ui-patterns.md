@@ -927,7 +927,10 @@ key=$(fdev publish --code ... delegate 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -
 # 2. Decode base58 → JSON byte array (requires bs58 npm package)
 node -e "const bs58=require('bs58');console.log(JSON.stringify(Array.from(bs58.default.decode('$key'))))" > delegate_key_bytes.json
 
-# 3. Compute code_hash from raw WASM (BLAKE3)
+# 3. Compute code_hash from raw WASM (BLAKE3).
+#    Build this through the project's canonical build script into a throwaway
+#    target dir -- a reused target/ can silently change the bytes, and this hash
+#    is compiled into the UI. See build-system.md -> "Byte-reproducibility".
 code_hash_hex=$(b3sum --no-names target/wasm32-unknown-unknown/release/my_delegate.wasm)
 node -e "const h='$code_hash_hex'.trim();console.log(JSON.stringify(Array.from(Buffer.from(h,'hex'))))" > delegate_code_hash_bytes.json
 ```

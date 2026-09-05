@@ -83,8 +83,14 @@ The whole procedure, start to finish:
    Commit `Cargo.lock`, pin the toolchain (`rust-toolchain.toml`), build
    `--locked`. Otherwise a stray `cargo update` or a different rustc silently
    re-keys the contract and orphans data with no upgrade in sight (River's
-   `Cargo.lock` was gitignored — freenet/river#393). See `build-system.md` →
-   "Byte-reproducibility" and "Hash + artifact hygiene" below.
+   `Cargo.lock` was gitignored — freenet/river#393).
+
+   **Those three are the minimum, not the whole job.** They do not stop the
+   build machine's absolute paths being compiled into the WASM (which binds the
+   contract to whoever built it) or a stale `target/` changing the bytes. Build
+   through one canonical script that remaps `CARGO_HOME`, `RUSTUP_HOME` and the
+   repo root and refuses if a build-machine path survives. See `build-system.md`
+   → "Byte-reproducibility" and "Hash + artifact hygiene" below.
 
 3. **BEFORE you change the WASM, register the *outgoing* code hash in the legacy
    registry.** This is the one required operational step and the single most

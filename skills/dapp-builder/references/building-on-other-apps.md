@@ -32,10 +32,13 @@ one does not solve yours.
 > same 32 raw bytes, and it is those 32 bytes the resolver wants.
 >
 > Everything else, including ghostkeys, has no record — so for those your
-> resolve returns `NeverPublished` (a real "not found"), and the baked-in
-> fallback is legitimately what you use. **`Unavailable` is not that case**: it
-> means your transport could not tell, and it never licenses the fallback, on an
-> unpublished app or any other. Retry instead. (An earlier version of this
+> resolve returns `NeverPublished` (a real "not found"), the one outcome that
+> *permits* a baked-in key. For these apps the **bundle fetch** at the end of this
+> file is still the better answer, and is what ghostkeys itself does; the
+> permission matters because it is what makes a fallback legitimate at all.
+> **`Unavailable` is not that case**: it means your transport could not tell, and
+> it never licenses the *baked-in* fallback, on an unpublished app or any other.
+> Retry instead. (An earlier version of this
 > paragraph named the two outcomes together, which contradicted both the outcome
 > table below and `may_use_baked_in_fallback`; treating "could not reach it" as
 > "it does not exist" is a free downgrade for anyone who can drop your GET.)
@@ -198,8 +201,11 @@ never a timeout, a send failure, or a malformed reply, all of which are
 means you can never reach `NeverPublished` and have silently deleted the only
 outcome that unlocks your fallback. This is the same mistake as `ProbeAnswer`'s
 on the backward side (freenet-migrate#19), in the same crate, for the same
-reason. An empty response body is `Unreachable` too, not `Absent`: those bytes
-came from a peer, and the contract rejects empty state as invalid.
+reason. An empty response body must never reach `Absent` either: those bytes came from a
+peer, and the contract rejects empty state as invalid. The crate enforces this
+itself — an empty `State(vec![])` is turned into `PointerOutcome::Unavailable`
+rather than `NeverPublished` — so the rule to keep is that only a real
+"not found" may ever be reported as `Absent`.
 
 **The GET must not request the contract code.** The 100-byte record is the whole
 answer; the pointer's own WASM is around 130 KB, and fetching it on every
@@ -395,9 +401,13 @@ your own re-keys, and it costs one signed 100-byte record per release.
 - **The author key is a long-lived identity.** Keep it offline; it is not a
   per-release key and there is deliberately no delegated signing.
 - **Gate `version` on a single committed monotonic counter**, the way a
-  web-container version counter works — never a wall-clock timestamp. A
-  timestamp lands near `u32::MAX`, and `MAX_POINTER_VERSION` is `u32::MAX - 1`
-  precisely because a record at the ceiling could never be superseded.
+  web-container version counter works — never a wall-clock timestamp. The
+  contract's own docs give burning the version space as the reason ("an author
+  deriving `version` from a timestamp would land there", i.e. at the reserved
+  `u32::MAX`); a Unix *seconds* timestamp is only about 42% of `u32::MAX` today,
+  so the immediate harm is less that you hit the ceiling than that you can never
+  go back down and have thrown away most of the range. Either way a counter is
+  the answer.
 - **Re-read the pointer after publishing and confirm the version and code hash
   are the ones you meant.** A publish at an already-used version is a silent
   no-op *success* — the contract deliberately does not error on a stale update,
@@ -410,7 +420,9 @@ your own re-keys, and it costs one signed 100-byte record per release.
   the opposite failure and is worse: nobody else can move your pointer, since
   only your key signs a record the contract accepts, so a peer that answers with
   a forged high version simply gets **you** to sign the next one just below the
-  unsupersedable ceiling. Monotonicity means you cannot walk it back down.
+  ceiling. `MAX_POINTER_VERSION` is `u32::MAX - 1` because `u32::MAX` itself is
+  reserved: a record there could never be superseded. Monotonicity means you
+  cannot walk a version back down.
 - **PUT the committed, published WASM artifact; never a local rebuild.** A local
   rebuild puts your pointer at an address nobody else derives: invisible to every
   consumer, and indistinguishable from success on your side.
