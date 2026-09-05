@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.36.0 (2026-09-04)
+
+Field findings from a night of building and deploying a Freenet app. Two are
+corrections to text that was already here.
+
+- **The fallback rule, corrected.** `building-on-other-apps.md` opened by saying
+  that for an app with no pointer, a resolve returns `NeverPublished` **or**
+  `Unavailable` "and the baked-in fallback is legitimately what you use". That
+  licensed the fallback on `Unavailable`, contradicting the same file's own
+  outcome table, its "true for `NeverPublished` and nothing else" line, and
+  `PointerOutcome::may_use_baked_in_fallback`. Treating "could not reach it" as
+  "it does not exist" is a free downgrade for anyone who can drop a GET, and the
+  wrong sentence was in the opening call-out, aimed at first-run readers.
+- **`--remap-path-prefix` on your own source is not enough.** Release binaries
+  embed panic locations as `file:line`, and cargo passes absolute paths for
+  dependencies, so the cargo registry root lands in the WASM. Measured in a real
+  contract: twelve registry roots, 21 occurrences. Since the address is
+  `BLAKE3(BLAKE3(wasm) ‖ params)`, every contract built was bound to its build
+  machine, and a runner and a dev box produced different contracts from one
+  commit. `CARGO_HOME` and `RUSTUP_HOME` must be remapped too, the replacement
+  names become part of the contract's identity, and the check must be
+  fail-closed — refuse the build if any build-machine path survives.
+- **A stale `target/` silently changes contract identity.** `cargo clean -p` on
+  workspace crates is insufficient: dependency artifacts are reused and under fat
+  LTO yield a different module. Build into a throwaway target dir for anything
+  whose hash you record. The CI `wasm-staleness` sample was updated to go through
+  the canonical script from a `mktemp -d` rather than a bare `cargo build`, which
+  under the new doctrine would have failed on the runner's own paths.
+- **The pointer's I/O seam.** `PointerFetch` is three-way (`State` / `Absent` /
+  `Unreachable`) for the same reason `ProbeAnswer` is: a transport wired as a
+  two-way `Option` can never reach `NeverPublished` and so silently deletes its
+  own fallback. And a pointer GET must not request the contract code — 100 bytes
+  of answer against ~130 KB of WASM — which is why `PointerIo` exists separately
+  from `ProbeIo`, and what `ConservativeProbeIo` costs.
+- **Author-side pointer publishing.** A publish at an already-used version is a
+  silent no-op *success*, so re-read the pointer afterwards; the network will
+  never tell you a release was ignored. Losing the version counter's store
+  freezes the pointer at a generation you no longer write to, and recovering the
+  version from the network is safe only from a record that verifies under your
+  own key — an unverified read-back gets **you** to sign just below the
+  unsupersedable `u32::MAX - 1` ceiling.
+- **`SuccessorPointer` named as the fourth pointer-like thing**, with its own
+  signing domain (`freenet-migrate/successor-v1`), alongside the pointer
+  contract, `OptionalUpgrade` and `FacadePointer`. Importing the wrong one
+  compiles.
+
 ## 1.35.0 (2026-09-04)
 
 Resolves the blocking review finding on 1.34.0's marker rule, and adds two

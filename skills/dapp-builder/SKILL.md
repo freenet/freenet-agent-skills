@@ -384,6 +384,14 @@ Set up the build system, CI, and deployment pipeline.
    with the GNU flags listed under "Tooling Preflight" in
    `references/build-system.md`.
 
+   **Contracts need more than reproducible tars.** Build them through one
+   canonical script that remaps `CARGO_HOME`, `RUSTUP_HOME` and the repo root,
+   refuses if any build-machine path survives into the WASM, and builds into a
+   throwaway target dir. Remapping only your own source path leaves the cargo
+   registry's absolute paths in the bytes, which binds every contract to the
+   machine that built it. See "Byte-reproducibility" in
+   `references/build-system.md`.
+
 7. **Publish the UI as a web container contract — its URL is permanent, and
    you upgrade in place.** Shipping a new release does **not** rotate the
    gateway URL: the UI is the container's *state*, while the contract key is

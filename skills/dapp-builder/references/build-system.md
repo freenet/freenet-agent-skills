@@ -202,7 +202,11 @@ runs ahead. Prefer a committed monotonic counter file.
 - `rust-toolchain.toml` must be committed and mirrored in any CI
   workflow that rebuilds the contract — rustc version affects WASM
   bytes, and the byte-equality check will fail if CI's rustc differs
-  from the one that produced the committed snapshot.
+  from the one that produced the committed snapshot. Rustc is not the
+  only cause, and mirroring the toolchain alone will not fix a CI
+  mismatch: absolute build paths and a stale `target/` both move the
+  bytes too. See "Byte-reproducibility" below before concluding it is
+  the compiler.
 
 ## Byte-reproducibility: the lockfile is necessary but NOT sufficient
 
@@ -240,12 +244,55 @@ covered by the lockfile:
   re-keyed the contracts and the successor came up with zero claims. Either treat a
   contract crate's formatting as frozen between deliberate re-keys, or run `cargo
   fmt` and re-key on purpose, registering the outgoing hash first.
-- **Absolute build-path embedding.** rustc bakes absolute paths (e.g.
-  `/home/you/.cargo/registry/...`) into the WASM, so the *same* lock + toolchain
-  on a different machine or username still produces different bytes. Strip them
-  with `-Ctrim-paths` (`trim-paths = "all"` in the release profile) or
-  `--remap-path-prefix`, or build in a pinned container. (River verified this and
-  is adopting `trim-paths` on its next deliberate re-key — freenet/river#393.)
+- **Absolute build-path embedding — and remapping your own source path is not
+  enough.** Release binaries embed panic locations as `file:line`, and for
+  dependencies cargo passes **absolute** paths, so the registry root lands in the
+  bytes. Measured in a real contract: `/home/ian/.cargo/registry/.../blake3-1.8.7/`
+  plus eleven other registry roots, 21 occurrences in one WASM. Because the address
+  is `BLAKE3(BLAKE3(wasm) ‖ params)`, **every contract that project had built was
+  bound to the machine that built it** — a GitHub runner and the dev box produced
+  different contracts from one commit, so nobody could reproduce what was deployed.
+  A developer who remaps only the repo root will still ship a machine-specific
+  contract and see nothing wrong.
+
+  Remap all three varying roots — `CARGO_HOME`, `RUSTUP_HOME`, and the repo — or
+  use `-Ctrim-paths` (`trim-paths = "all"` in the release profile), which covers
+  dependency and sysroot paths too, or build in a pinned container. (River verified
+  this and is adopting `trim-paths` on its next deliberate re-key —
+  freenet/river#393.) The working example is
+  `freenet-bitcoin/scripts/build-contracts.sh`:
+
+  ```bash
+  CARGO_DIR="${CARGO_HOME:-$HOME/.cargo}"
+  RUSTUP_DIR="${RUSTUP_HOME:-$HOME/.rustup}"
+
+  export CARGO_BUILD_RUSTFLAGS="\
+  --remap-path-prefix=$CARGO_DIR=/cargo \
+  --remap-path-prefix=$RUSTUP_DIR=/rustup \
+  --remap-path-prefix=$REPO=/build"
+  ```
+
+  **The replacement names are now part of the contract's identity.** They are
+  arbitrary, but changing one re-keys every contract, so pick them once and treat
+  them as frozen. This is also why the flags belong in one canonical script and
+  nowhere else: a second invocation that sets them differently, or not at all,
+  produces a different contract while looking like the same command.
+
+- **A stale `target/` silently changes contract identity.** `cargo clean -p` on the
+  workspace crates is **not** sufficient: dependency artifacts are reused, and under
+  fat LTO they yield a different module and therefore a different contract. Measured
+  the same day — two fresh clones at different paths agreed with each other, and a
+  long-lived working tree agreed with neither. Anything whose hash you intend to
+  record or pin must be built into a throwaway target dir:
+
+  ```bash
+  D=$(mktemp -d); ./scripts/build-contracts.sh "$D"; rm -rf "$D"
+  ```
+
+  The nasty case is not a build that fails; it is a bundle built against a stale
+  `target/` that derives perfectly self-consistent addresses for a contract nobody
+  publishes to any more. That has happened. Cross-check the embedded bytes against
+  the migration registry, not only against themselves.
 
 **Build-command footgun — always use the canonical build script.** Building a
 contract crate **alone** (`cargo build -p my-contract`) can produce *different*
@@ -772,6 +819,42 @@ build script that "warns" on stderr and continues is silent rather than loud. An
 a `cargo:warning` is not a gate even on stdout, because nothing fails on it: when
 a build script finds a condition that must stop the build, `panic!`.
 
+### Verify no build-machine path survived, and fail closed
+
+A hash-equality check cannot catch a machine-specific path, because the committed
+artifact it compares against was produced on the same machine. It needs its own
+check, and that check must **refuse the build** rather than warn — the same
+argument as the `cargo:warning` one above, applied to the bytes. From
+`freenet-bitcoin/scripts/build-contracts.sh`:
+
+```bash
+for f in "$OUT"/my_contract.wasm; do
+  for probe in "$CARGO_DIR" "$RUSTUP_DIR" "$REPO" "${HOME:-/nonexistent}"; do
+    if grep -qaF -- "$probe" "$f"; then
+      echo "REFUSING: $(basename "$f") contains the build-machine path '$probe'." >&2
+      exit 1
+    fi
+  done
+  # A path belonging to some other user means a root nobody remapped.
+  if grep -qaE -- '/(home|Users)/[A-Za-z0-9._-]+/' "$f"; then
+    echo "REFUSING: $(basename "$f") contains a home-directory path." >&2
+    grep -aoE -- '/(home|Users)/[A-Za-z0-9._/-]{0,60}' "$f" | sort -u | head >&2
+    exit 1
+  fi
+done
+```
+
+Two things make this work. It is a **deny-list of roots known to vary**, not an
+allow-list of acceptable path shapes — an allow-list would have to enumerate every
+shape a path can take. And the second, generic `/home|/Users` probe catches a root
+nobody thought to remap: a vendored artifact, a build script writing its own path,
+a dependency baking one in. A varying root that is not on the list is the next
+instance of this bug.
+
+Put the check in the canonical build script, so it runs on the path `publish`
+actually takes, and not only in CI — see "Pre-Publish Checks" below on why a gate
+that lives only in CI is a gate the publish can walk around.
+
 ## Testing with Local Mode
 
 Freenet's **local mode** runs a standalone executor without network connectivity. Use this for testing contract and delegate logic during development.
@@ -955,11 +1038,21 @@ jobs:
       - run: cargo install b3sum
       - name: Verify committed WASMs match source
         run: |
-          cargo build --release --target wasm32-unknown-unknown -p my-delegate
+          # Go through the canonical script, never a bare `cargo build`: it sets
+          # the --remap-path-prefix flags and runs the fail-closed path check.
+          # A bare build here embeds the runner's paths and this job fails on a
+          # difference that is about the runner, not about the source.
+          D=$(mktemp -d)
+          ./scripts/build-contracts.sh "$D"
           COMMITTED=$(b3sum ui/public/contracts/my_delegate.wasm | cut -d' ' -f1)
-          BUILT=$(b3sum target/wasm32-unknown-unknown/release/my_delegate.wasm | cut -d' ' -f1)
+          BUILT=$(b3sum "$D/wasm32-unknown-unknown/release/my_delegate.wasm" | cut -d' ' -f1)
           [ "$COMMITTED" = "$BUILT" ] || { echo "::error::WASM stale"; exit 1; }
 ```
+
+Note this job deliberately does **not** restore the `target` cache the `test` job
+above uses. It builds into a fresh `mktemp -d`, because a hash recorded from a
+reused `target/` is not trustworthy (see "Byte-reproducibility"). Caching the
+registry is fine; caching `target` for a job whose entire output is a hash is not.
 
 ## Resilience Patterns
 

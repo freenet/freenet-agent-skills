@@ -595,7 +595,9 @@ the delegate build was not reproducible, so the key depended on which machine
 built it (fixed, #9). Both are closed, but the shape of the risk is permanent
 for any delegate: if you build one, keep an equivalent registry and treat
 "which bytes does this source produce" as a correctness property. See
-`upgrade-and-migration.md`.
+`upgrade-and-migration.md`. The mechanics — which
+roots to remap, and the fail-closed check that refuses a machine-specific build —
+are under "Byte-reproducibility" in `build-system.md`.
 
 That is true of most of the Freenet stack right now, and it is a reason to
 price the risk in rather than a reason to avoid it. The concrete recourse when
