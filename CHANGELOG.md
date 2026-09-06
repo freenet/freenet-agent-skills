@@ -40,26 +40,33 @@ both targets, and at least one review round had already passed.
   mirror-image trap for the guard against a *future* change: pin the current
   derivation's own output, because a fixture hard-coding the *old* value is
   refused whatever the derivation is and so fires on nothing.
-- **`apply_delta` must be all-or-nothing.** New subsection in
-  `contract-patterns.md`. Returning on the first bad entry leaves earlier entries
-  merged into state nothing validated as a whole — and refused *held* state is
-  not recoverable the way a refused delta is. Wrong in three of three composable
-  state types in one app; one instance let a single crafted delta permanently
-  invalidate another user's mailbox with one write and no key. Also: do not
-  snapshot the dedup set before the loop, or two entries in the same delta
-  colliding on the key both pass.
-- **Bound state by pruning, never by rejecting.** `state-authorization-patterns.md`
-  → State Size Budget. A cap enforced in `validate_state` turns one oversized
-  write into an instance no peer can ever serve or repair, because every edit has
-  to pass the same check that is refusing it. Generalises the past-skew rule that
-  was already there.
-- **Never rank on a value the other side chooses.** Same file, under Replay
-  Protection. Three instances in one day: mailbox retention driven by an
-  unauthenticated timestamp (one forged message emptied a mailbox), a fold
-  tie-break steered by submission order, and an eviction ranking reading a
-  timestamp out of an imported backup string. This is the general form of the
-  existing "a client-supplied timestamp must not be an eviction key" line — it
-  is not really about clocks, and signing the timestamp does not fix it.
+- **Decide what one bad entry in a delta does.** New subsection in
+  `contract-patterns.md`. "Mutate as you go, return `Err` on the first bad entry"
+  is neither of the two safe designs, and was wrong in three of three composable
+  state types in one app. Atomic is right for one indivisible update from one
+  author; for entries independently signed by *different* parties it is a denial
+  vector — one crafted entry refuses every legitimate entry travelling with it,
+  and once in state every subsequent apply fails against it. That is how a single
+  write with no key permanently killed a mailbox. Also: do not snapshot the dedup
+  set before the loop, or two entries in the same delta colliding on the key both
+  pass.
+- **Prune in `update_state`; never let `validate_state` refuse what your own
+  merge produces.** `state-authorization-patterns.md` → State Size Budget. The
+  host validates the state *arriving* at a PUT/UPDATE, but commits the output of
+  `update_state` without re-validating it, and a GET does not validate what it
+  serves. So a bound checked only in `validate_state` is a bound your merge does
+  not know about: two legitimate merges step past it, the result is committed
+  unvalidated, no peer will then accept it, and the node's corrupted-local-state
+  recovery cannot help because it repairs by substituting a *valid incoming*
+  state and by construction none exists.
+- **A value one party supplies may only decide the fate of that party's own
+  records.** Same file, under Replay Protection — stated as a boundary rather
+  than a ban, because the monotonic-counter and last-writer-wins patterns already
+  in this skill rank on writer-supplied values and are fine. Three violations in
+  one day: mailbox retention driven by an unauthenticated `sent_at` (one forged
+  message emptied a mailbox), a fold tie-break steered by submission order, and
+  an eviction ranking reading a timestamp out of an imported backup string.
+  Usually the whole fix is to cap per author.
 - **A symmetric key cannot establish authorship.** Same file, under
   Authentication Patterns. Both parties hold the key by necessity, so a
   direction label inside the ciphertext is something the counterparty can write.
@@ -76,23 +83,33 @@ both targets, and at least one review round had already passed.
   `delegate-patterns.md`. A payment-hijack hole existed because a third request
   family was added past the one function that held the origin check; the two
   older families were still gated and the code looked consistent. Uses
-  `freenet-migrate`'s `OriginPolicy`, which fails closed on an unattested
-  `None`. Paired with the reason that hole had no test: `DelegateCtx`'s secret
+  `freenet-migrate`'s `OriginPolicy`, whose two real variants fail closed on an
+  unattested `None` (`Any` does not, and is documented as local-testing only).
+  Paired with the reason that hole had no test: `DelegateCtx`'s secret
   methods are inert stubs off `wasm32` (freenet-stdlib's `delegate_host.rs`,
   the `#[cfg(not(target_family = "wasm"))]` arms), so a handler taking a
   `DelegateCtx` cannot be exercised under `cargo test` at all. Take
   `impl SecretStore` instead.
 - **Tests that would have caught it.** New closing section in
-  `contract-patterns.md`. Write the test first and *watch it fail*; deletion is
-  the weakest mutation, so substitute a wrong-but-plausible implementation; test
-  a guard against a *simulated future change* rather than the bug you already
-  fixed; and treat a comment asserting a safety property as a claim needing a
-  test rather than as evidence. Twelve such comments in one round asserted
-  properties the code did not have, and eight scripts reported success while
-  measuring nothing.
+  `contract-patterns.md`. Deletion is the weakest mutation, so substitute a
+  wrong-but-plausible implementation; test a guard against a *simulated future
+  change* rather than the bug you already fixed; and treat a comment asserting a
+  safety property as a claim needing a test rather than as evidence. Twelve such
+  comments in one round asserted properties the code did not have.
+- **Correction: the host does not re-validate what your merge produces.**
+  `state-authorization-patterns.md` previously said "the host also runs
+  `validate_state` after every successful `update_state` and rolls back on
+  `Invalid`, so validate remains the backstop." It does not — `attempt_state_update`
+  commits the merge result directly, and only the replay-after-initialization
+  branch re-validates. The sentence was load-bearing for the wrong reason: it
+  invited treating `validate_state` as a safety net behind `update_state`.
 
-Verified against freenet-stdlib `rust/src/delegate_host.rs` and
-`freenet-migrate` 0.6.0's `src/delegate.rs` rather than taken on report.
+Verified against freenet-stdlib `rust/src/delegate_host.rs`,
+`rust/src/delegate_interface.rs` and `rust/src/contract_composition.rs`,
+`freenet-migrate` 0.6.0's `src/delegate.rs`, and freenet-core's
+`contract/executor/runtime/{executor_impl,contract_ops}.rs` — rather than taken
+on report. An independent adversarial review of the first draft found four
+blocking errors in exactly these claims; they are fixed here.
 
 ## 1.36.0 (2026-09-04)
 

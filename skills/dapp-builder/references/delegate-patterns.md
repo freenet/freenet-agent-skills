@@ -495,7 +495,21 @@ consistent, and the new one answered anybody.
 So put the check where every request must pass it, before dispatch:
 
 ```rust
+use freenet_migrate::OriginPolicy;
+
+fn authorize(origin: Option<&MessageOrigin>) -> Result<(), DelegateError> {
+    // `OriginPolicy::authorize` returns MigrateError, and there is no
+    // From<MigrateError> for DelegateError -- map it, and name the refused
+    // caller so a developer reading a node log can act on it.
+    OriginPolicy::SameWebApp(my_webapp_contract_id())
+        .authorize(origin)
+        .map_err(|_| DelegateError::Other(format!("refused caller: {origin:?}")))
+}
+
+// The real trait signature is four parameters, `ctx` first
+// (freenet-stdlib rust/src/delegate_interface.rs).
 fn process(
+    ctx: &mut DelegateCtx,
     _params: Parameters<'static>,
     origin: Option<MessageOrigin>,
     message: InboundDelegateMsg,
@@ -509,12 +523,15 @@ fn process(
 
 `freenet-migrate` exposes the policy type rather than making you hand-roll the
 comparison: `OriginPolicy::SameWebApp(ContractInstanceId)` /
-`FromDelegate(DelegateKey)` / `Any`, with `authorize(Option<&MessageOrigin>)`
-that **fails closed on `None`** — the runtime supplies `None` when it cannot
-attest a caller, and that is not a caller to hand a private key to
-(`freenet-migrate-0.6.0/src/delegate.rs`). Use it for ordinary requests as well
-as for the migration export it was written for; a second, hand-rolled comparison
-beside it is how the two drift apart and one ends up weaker.
+`FromDelegate(DelegateKey)` / `Any`, whose `authorize(Option<&MessageOrigin>)`
+**fails closed on `None`** for both real policies — the runtime supplies `None`
+when it cannot attest a caller, and that is not a caller to hand a private key
+to. (`Any` is the exception, and is documented in the crate as unsafe /
+local-testing only: it matches before the `None` arm and accepts an unattested
+caller. `freenet-migrate-0.6.0/src/delegate.rs`.) Use the policy for ordinary
+requests as well as for the migration export it was written for; a second,
+hand-rolled comparison beside it is how the two drift apart and one ends up
+weaker.
 
 Refuse with an error rather than an empty success. A rejected caller that gets
 `Ok(vec![])` looks, to a legitimate page hitting this unexpectedly, exactly like

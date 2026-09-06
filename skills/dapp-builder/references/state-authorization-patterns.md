@@ -138,33 +138,53 @@ pub fn build_signed_payload_bytes(
 
 Cheap; eliminates an entire class of replay attacks.
 
-### Never Rank on a Value the Other Side Chooses
+### A Value One Party Supplies May Only Decide the Fate of That Party's Own Records
 
-Any decision that *orders* records — which one to evict, which one wins a
-tie-break, which one is "newest" — is a decision the other side gets to make for
-you if the ordering key is a value they supply. Signatures do not help: the
-value is authentically theirs, and the point is that they chose it.
+Ranking on a writer-supplied value is fine, and the rest of this skill
+recommends it: the monotonic `version` above is writer-supplied, so is the
+author's signed timestamp used to order messages, so is the version in
+last-writer-wins. What makes those safe is not the signature — the value is
+authentically theirs, and the point is that they *chose* it. What makes them
+safe is that the value only ever decides the fate of the supplier's **own**
+record: an owner's `version` replaces the owner's previous configuration, and
+nobody else's.
 
-Three shapes of this were found in one app in one day:
+The rule is the boundary, not the value:
+
+> A value one party supplies may decide **which of that party's records
+> survives**. It must never decide **whose records get discarded**.
+
+Three violations of it turned up in one app in one day:
 
 - **Retention driven by an unauthenticated timestamp.** A capped mailbox
-  evicting the oldest entry by a sender-supplied `sent_at` — so one message
-  stamped far in the future evicts every real message behind it, and one
-  stamped far in the past is invisible to a reader sorting by time. One forged
-  message emptied a mailbox.
+  evicting its oldest entry by a sender-supplied `sent_at`: one message stamped
+  far in the future evicts every real message behind it. One forged message
+  emptied a mailbox.
 - **A merge tie-break steered by submission order.** "Whichever claim arrived
-  first" is not a property of the data, it is a property of the network, and the
-  other side can influence it.
+  first" is a property of the network, not of the data, so the counterparty can
+  influence it — and it breaks order-independence besides, which is a merge-law
+  violation in its own right.
 - **An eviction ranking reading a value out of an imported blob.** A timestamp
-  parsed from a backup string the user (or whoever handed them the backup) wrote
-  is not a fact your app established.
+  parsed from a backup string that whoever handed the user the backup wrote is
+  not a fact your app established.
 
-Rank on something the other side cannot choose: a monotonic counter your
-contract increments, a count cap with FIFO by insertion into *your* structure, a
-hash the contract computes, or a signed attestation from the party being ranked
-*against*. This is the general form of the "a client-supplied timestamp must not
-be an eviction key" rule under Time Handling — it is not really about clocks,
-and moving to a signed client timestamp does not fix it.
+Ways to stay on the right side of it:
+
+- **Cap per author, not globally.** Then a forged value can only cost its own
+  author, and no amount of grinding reaches anyone else's entries. This is
+  usually the whole fix.
+- **Refuse rather than choose.** `update_state` declining a write past a
+  per-author cap needs no ranking at all, and a refused write is recoverable in
+  a way a wrong eviction is not.
+- **Tie-break on a deterministic function of the record's content** (a hash, or
+  the signature bytes as in the last-writer-wins example in
+  `contract-patterns.md`) rather than on anything about its arrival.
+- **Where you must rank across parties, use an attestation signed by the party
+  being ranked *against*.**
+
+This is the general form of "a client-supplied timestamp must not be an eviction
+key" under Time Handling. It is not really about clocks, and signing the
+timestamp does not fix it.
 
 ## Signed-Payload Hygiene
 
@@ -345,7 +365,16 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 
 ### Requesting Related State From `update_state`
 
-`update_state` takes no `related` parameter, but it is not confined to `validate_state` for cross-contract reads: return `UpdateModification::requires(vec![...])` and the host resolves those contracts — local state store first, network only as fallback — and re-invokes `update_state` with the results supplied as `UpdateData::RelatedState` entries. The host also runs `validate_state` after every successful `update_state` and rolls back on `Invalid`, so validate remains the backstop.
+`update_state` takes no `related` parameter, but it is not confined to `validate_state` for cross-contract reads: return `UpdateModification::requires(vec![...])` and the host resolves those contracts — local state store first, network only as fallback — and re-invokes `update_state` with the results supplied as `UpdateData::RelatedState` entries.
+
+**Do not treat `validate_state` as a backstop behind your merge.** An earlier
+version of this file said the host re-validates after every successful
+`update_state` and rolls back on `Invalid`. It does not: `validate_state` runs
+on the state *arriving* at a PUT/UPDATE, while `attempt_state_update` commits
+the merge result directly (only the replay-after-initialization branch
+re-validates). Whatever your `update_state` returns is what gets stored. See
+"Prune in `update_state`" under State Size Budget for what that costs when the
+two disagree.
 
 **Prefer the `update_state` route where either would work.** Related state resolved during *validation* is never captured by the conformance system (freenet-core#5376), so a contract whose validity depends on that path can never be judged — and an unjudgeable contract reads exactly like a clean one. The update path is captured today.
 
@@ -490,39 +519,45 @@ better, budget the **bytes** directly (a running total enforced in `update_state
 let the count fall out of it. The arithmetic below is exactly that multiplication —
 note that it is the per-item cap, not the count, that makes it come out finite.
 
-### Bound State by Pruning, Never by Rejecting
-
-Having chosen a cap, there are two ways to enforce it, and only one of them is
-safe. **Pruning** — `update_state` drops the excess and keeps the state valid —
-is recoverable. **Rejecting** — `validate_state` returns `Invalid` when the
-state exceeds the cap — is not, because `validate_state` runs on *held* state,
-on every load, forever.
-
-The asymmetry is the whole rule, and it is worth stating on its own:
-
-> Refusing an incoming delta is recoverable — it can be re-sent, or arrive by a
-> different path. Refusing state you already hold is permanent: nothing can edit
-> it back under the limit, because every edit has to pass the same `validate_state`
-> that is refusing it.
-
-So a cap enforced in `validate_state` is a way of turning a state that grew one
-entry too large into a contract instance that no peer can ever serve or repair.
-Same shape as the past-skew check under Time Handling, and the same fix: put the
-cap in `update_state`, which prunes the excess and produces a state that is
-valid, and reserve `validate_state` for properties that are true of the bytes
-forever.
-
-The one thing you give up is refusing a hostile whole-state PUT purely on size,
-since the host's `MAX_STATE_SIZE` is then your only backstop for that path. That
-is the right trade: an attacker who can PUT oversized state can also, under the
-rejecting design, PUT state that is *permanently* invalid, which is strictly
-worse.
-
 Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32 KiB` = 32 MiB messages, plus ~140 bytes/message metadata = ~32.1 MiB, plus a few KB of recipient_state. Well under the 50 MiB cap — though, per the design target below, `MAX_INBOX_MESSAGES` is a candidate to tune down or to shard further (e.g. archiving older messages into per-time-window contracts) rather than a bound to treat as settled.
 
 **Design target: stay well under 4 MB per instance, regardless of the 50 MiB cap.** The cap is about correctness, not user experience — a GET transfers the entire state before the UI can render anything, so state size is felt directly as load latency, and it's the wire-transfer floor under the streaming behavior described in `ui-patterns.md` → "Large state handling". If a kind of data can grow without bound (message history, uploaded files, a list that only grows), shard by the natural unit of write concurrency — one contract per room, per user, per time-window, per shard-key — so each instance's state stays small no matter how large the dataset gets in aggregate. Treat a multi-MB instance as a signal to split the data model, not to compress harder or budget more cap headroom.
 
 Large *binary* assets served by the UI (audio, video, images, user uploads) are a special case of the same sharding advice, not a new problem: give the asset its own contract instance instead of embedding it in the webapp bundle's state, and reference it from the UI by key. See `ui-patterns.md` → "Large Binary Assets: Their Own Contract, Not the Webapp Bundle" for the same-origin fetch mechanism that makes this work under the gateway CSP.
+
+### Prune in `update_state`; Never Let `validate_state` Refuse What Your Own Merge Produces
+
+Having settled on a cap — bytes, items, tombstones, whatever it bounds — decide
+where it is enforced. **`update_state` pruning the excess** keeps the state valid
+by construction. **`validate_state` returning `Invalid` past the cap** does not,
+and the reason is a gap in the host's call graph worth knowing:
+
+- The host runs `validate_state` on the **incoming** state at the entry to a
+  PUT/UPDATE (`contract/executor/runtime/contract_ops.rs`), which is what stops
+  a hostile oversized PUT — so a `validate_state` cap is not useless.
+- It does **not** run it on the **output** of your `update_state` on the ordinary
+  path (`attempt_state_update` in `executor_impl.rs` commits the merge result
+  directly; only the replay-after-initialization branch validates). Nor does a
+  GET validate what it serves.
+
+So the hazardous shape is a `validate_state` rule your own `update_state` can
+step over: two legitimate merges take the state one entry past the cap, the
+result is committed **unvalidated**, and from then on the state is un-pushable —
+every peer receiving it refuses it, and the node's own corrupted-local-state
+recovery (`executor_impl.rs`, issue #3109) cannot help, because it repairs by
+substituting a *valid incoming* state and by construction none exists. Peers
+that merged the same updates reach the same dead end independently.
+
+The rule, then, is agreement rather than avoidance:
+
+> **`update_state` must never be able to produce a state its own
+> `validate_state` would refuse.** Where a bound is involved, that means pruning
+> in `update_state`; a bound checked only in `validate_state` is a bound your
+> merge does not know about.
+
+Same shape as the past-skew check under Time Handling, and the reason to be
+suspicious of any `validate_state` rule whose truth depends on how much state
+has accumulated, rather than on the bytes in front of it.
 
 ## Per-Context Identity Considerations
 
@@ -552,8 +587,8 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
 | Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
 | Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Cap distinct references in `update_state` (defense in depth in `validate_state` too) |
-| Size or count cap enforced in `validate_state` | One oversized write makes the instance permanently invalid and unrepairable | Prune in `update_state`; `validate_state` checks only properties true of the bytes forever |
-| Eviction / tie-break / "newest" keyed on a value the other side supplies | One forged entry evicts everything real, or silently wins every tie | Rank on a contract-computed counter, insertion order in your own structure, or a hash |
+| A bound your own `update_state` can step over, checked only in `validate_state` | The over-cap merge result is committed unvalidated, then no peer will accept it and nothing can repair it | Prune in `update_state` so it cannot produce state its own `validate_state` refuses |
+| A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author, or refuse the write; ranking a party's own records on their own value is fine |
 | Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |
 | New field added to a signature-covered struct with only `#[serde(default)]` | Re-encoding a pre-existing record adds a map entry and invalidates every old signature | Add `skip_serializing_if`; test against a hand-written byte literal of the old shape |
 | Writer-supplied nonce or id used as record identity | Two records under one id; permanent, unhealable divergence under first-writer-wins | Derive the id from the record's own terms, computed by the contract (`contract-patterns.md` → "Record Identity") |

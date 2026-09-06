@@ -181,10 +181,8 @@ carry forward.
 
 **Once your app has users, a new contract version must be migratable from every
 version that has ever held their data.** That is a constraint on which changes
-you are allowed to make, not a step in the release procedure — and it is the
-constraint that decides, later, which bugs are fixable at all.
-
-The default to protect, in Ian Clarke's framing:
+you may make, not a step in the release procedure, and it is what decides later
+which bugs are fixable at all. The default to protect, in Ian Clarke's framing:
 
 > Any UI should be able to upgrade a contract, because the state just needs to
 > be transferred from old to new — the assumption being that new contracts
@@ -192,7 +190,7 @@ The default to protect, in Ian Clarke's framing:
 
 **Preserve this if you possibly can.** When a new version accepts old state,
 migration is *pure data transfer*: nobody needs a key, because every record
-already carries its own signature (architecture invariant 1 above). What that
+already carries its own signature (architecture invariant 1, below). What that
 buys is not convenience — it is that **a user who never opens your app again
 still has their data carried forward, by whoever does.** Migration stops
 depending on the continued participation of the person whose data it is.
