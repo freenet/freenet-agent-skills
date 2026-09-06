@@ -581,10 +581,15 @@ Two things about how the merge should enforce it:
   per-item cap is a property of the entry.
 
   A running byte budget over the sorted list is the thing that looks equivalent
-  and is not. Sorting `p < q < r` with sizes 9, 2, 1 against a budget of 10:
+  and is not — at least in the form that stops at the first entry which does not
+  fit. Sorting `p < q < r` with sizes 9, 2, 1 against a budget of 10, stopping at
+  the first that does not fit:
   `{p,q}` truncates to `{p}` and `{r}` stays `{r}`, so merging those gives
   `{p, r}` — but merging `{p,q}` with `{r}` directly gives `{p}`. Not associative,
-  which is the merge-law violation this rule exists to avoid.
+  which is the merge-law violation this rule exists to avoid. Skipping the
+  oversized entry and carrying on happens to survive *this* example, which is
+  the point: a byte budget has more than one plausible reading and each needs
+  its own worked check.
 - **Rank a party's records only against that party's own.** Any cross-party
   ranking key is a thing an attacker optimises against: a supplied value
   directly (see "A Value One Party Supplies…" above), and a content-derived one

@@ -811,7 +811,12 @@ Permissionless contract migration only works if all of these hold:
    `validate_state` lets a malicious re-PUT win.** If any field can be forged by an
    untrusted peer, migration becomes an attack vector, so keep the validator strict.
 3. **State serialization is backwards-compatible.** New fields use
-   `#[serde(default)]`; fields are never removed or renamed; existing field
+   `#[serde(default)]` — plus `skip_serializing_if` wherever a signature covers
+   the encoding, which is invariant 2's whole point and bites hardest right here:
+   a migration fold deserializes old state and re-serializes it under the new
+   WASM, and a field that encodes as `null` when absent invalidates every
+   signature in the process (see `state-authorization-patterns.md` →
+   Wire-Format Stability). Fields are never removed or renamed; existing field
    formats never change. If a breaking state change is genuinely required,
    create an explicit `StateV2` type with a written migration. Do not try to
    evolve `StateV1` in place.

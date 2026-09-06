@@ -5,7 +5,8 @@ All notable changes to this project will be documented in this file.
 ## 1.37.0 (2026-09-06)
 
 Findings from a day of building and adversarially reviewing a Freenet
-marketplace app — three PRs across two repositories, eight review rounds. The
+marketplace app — three PRs across two repositories, eight adversarial review
+rounds on the app itself (this entry then took six of its own). The
 counts below are real, and each one is a case where a full test suite, clippy on
 both targets, and at least one review round had already passed.
 
