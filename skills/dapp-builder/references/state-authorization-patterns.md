@@ -307,9 +307,11 @@ Rejecting is the mild version. Of the deployed contracts measured for #5465, 11 
 
 A **past-skew** check on stored state was always worse, for a reason independent of clocks that still applies to any time-derived rejection in `validate_state`: **a rule whose truth expires makes state you already hold retroactively invalid.** Thirty days after an inbox's oldest message arrives, that inbox stops validating. It is then refused by every peer it is sent to, and every attempt to modify it fails too, because `validate_state` gates the state `update_state` returns as well as the state arriving.
 
-Where that ends depends on the contract, and both endings are bad. If the merge still succeeds, the post-merge validation refuses the result and the inbox freezes: no update to it can ever land again. If the merge itself fails — which is ordinary for the monotonic-version envelopes recommended above, since a stale re-push is rejected — the node has a merge failure alongside a locally-invalid state, which is what its corrupted-state recovery keys on (freenet-core#3109), and it may **replace the inbox wholesale** with a valid state from a peer that never held the aged messages. Neither outcome is anything the app can recover from, and nobody triggered either.
+An update that *drops* the offending message produces a state that passes and commits, so this is not an instant dead end. What makes it permanent is that the freeze **re-arms**: purge the oldest message and the next-oldest crosses `MAX_PAST_SKEW_SECS` shortly after, so anything short of a prune cycle faster than the window puts you straight back. And unlike the size-cap case there is no help from outside, because **every peer's copy aged into the same condition independently** — there is no valid donor state anywhere in the network to recover from.
 
-The size-cap trap under State Size Budget looks similar and usually ends in the first way rather than the second, because there everything committed was validated, so the held state is normally still valid. Do not lean on that difference: it is a tendency, not a guarantee — the recovery's local check is a bare `validate_state` with no related-contract resolution, so a contract that reads a related contract, or one whose validation runs out of gas on a large state, can be judged invalid there too.
+Worse, the node may take the state away rather than merely refuse it. Where the merge *also* fails — which is ordinary for the monotonic-version envelopes recommended above, since a stale re-push is rejected — the node has a merge failure alongside a locally-invalid state, which is what its corrupted-state recovery keys on (freenet-core#3109), and it may **replace the inbox wholesale**.
+
+Do not read the size-cap trap under State Size Budget as the same failure. There the held state is *valid*: it was validated when it was committed, it propagates, peers agree, and the contract has merely run out of room. Here the held state is invalid, which is what makes it unpushable and what puts the #3109 recovery in reach. One wants a prune added; the other wants the rule removed.
 
 Replay protection for old messages should use signature-based dedup (signatures are unique per message) and tombstones — never a time window on `validate_state`.
 
@@ -366,7 +368,7 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
-- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and enforcing the limit only in `validate_state` stops the contract accepting writes the moment an eleventh appears (see "Prune in `update_state`" under State Size Budget). Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
+- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and and the limit is not yours to enforce anyway — the **host** rejects the request when the contract asks for more than ten (`"contract requested N related contracts, limit is 10"`), so the operation fails outright rather than your `validate_state` returning `Invalid`. Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
 ### Requesting Related State From `update_state`
@@ -549,14 +551,34 @@ result goes through `fetch_related_for_validation` in
 branch (`contract/executor/runtime/{executor_impl,contract_ops}.rs`). Nothing is
 rolled back; the commit simply does not happen and the caller gets an error.
 
-That makes `validate_state` a real backstop behind your merge — and it means a
-`validate_state` cap does not corrupt anything. It does something quieter: every
-merge that would carry the state past the cap is refused, and if the merge only
-ever unions, the headroom only shrinks, so the contract ends up refusing every
-write that would change it. Nothing repairs that from the app's side either —
-core applies an incoming full state as
-`update_state(current, [State(incoming)])`, so a peer PUT-ing a smaller state
-merges into yours rather than replacing it.
+That makes `validate_state` a real backstop behind your merge, so a
+`validate_state` cap corrupts nothing and diverges nothing. What it costs is
+**liveness**, and the shape is worth being precise about, because two obvious
+readings of it are both wrong.
+
+What is refused is the merge whose *output* exceeds the cap — not every update.
+An update whose merged result lands back under the cap validates and commits
+normally. So if your contract has an operation that shrinks the state — a purge,
+a tombstone that removes what it suppresses, a recipient re-signing a smaller
+envelope — the freeze is recoverable, and making sure one exists is the cheap
+insurance.
+
+If it does not, the state sits at the cap and every write that would add anything
+is refused, indefinitely. Note what is *not* wrong in that situation: the stored
+state was validated when it was committed, so it is valid, it propagates, and
+peers agree on it. The contract is not broken, it is full. (A smaller state
+arriving from a peer does not help by itself: core hands it to your own
+`update_state` alongside the current state rather than replacing anything, so it
+only rescues you if your merge is willing to drop entries.)
+
+**And it is loud, not silent** — worth saying because a skill that teaches people
+to fear silent failure should not misapply the label. The error `validate_state`
+produces here carries the cause `"invalid outcome state"`, which matches neither
+`is_invalid_update_rejection` nor `is_contract_exec_rejection`, so it falls to
+the default arm at both log sites: **ERROR** from `log_update_contract_failure`,
+and **WARN** plus a *spurious self-healing GET* from
+`log_broadcast_to_streaming_failure`, which fetches contract code that is already
+present. Wasteful, and visible to an operator.
 
 Hence the rule, which is about agreement rather than about avoiding
 `validate_state`:
@@ -628,7 +650,7 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Any `time::now()` call in a *contract* | Replicas can diverge, and the merge laws aren't well-formed statements about the contract; a node warns on load today and the call is staged to trap | Carry a client-signed timestamp in state, check monotonicity only; `fdev verify-merge --wasm` reports the import |
 | Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
 | Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
-| Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Bound the count structurally (fixed typed slots), so an eleventh cannot arise |
+| Permitted distinct related contracts > 10 | The host refuses the request outright, so every op needing the eleventh reference fails | Bound the count structurally (fixed typed slots), so an eleventh cannot arise |
 | A bound your own `update_state` can step over, checked only in `validate_state` | Every merge that would cross the cap is refused; headroom only shrinks, so the contract ends up taking no write that changes it | Bound it inside `update_state`; keep the N smallest by a key the entries determine, never evict by arrival order |
 | A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author and rank within an author's own records; any cross-party ranking key is grindable |
 | Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |

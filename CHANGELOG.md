@@ -2,6 +2,73 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.37.2 (2026-09-06)
+
+1.37.0 and 1.37.1 got the *mechanism* right and then drew a false conclusion from
+it, in two places, with the same reasoning error. Both are corrected here, and the
+error is now written into the skill as its own worked example, because it is
+precisely the failure mode the release's testing section is about.
+
+- **"A merge is a join, so it never shrinks the state" — true premise, false
+  conclusion, twice.** A join is monotone in the **lattice** order, not in item
+  count: adding a tombstone is a lawful join that shrinks the materialised set,
+  and this file's own `RecipientState.purged` is exactly that. So the "nothing
+  can repair it" claim in both the size-cap section and the past-skew paragraph
+  was wrong. In each case the true statement is more useful than the one it
+  replaces.
+- **The size-cap trap, corrected.** What is refused is the merge whose *output*
+  exceeds the cap, not every update — one whose merged result lands back under
+  the cap validates and commits normally, so a contract with a purge or a
+  removing tombstone can recover, and making sure one exists is cheap insurance.
+  And the section was missing its own good news: the stored state was validated
+  when it was committed, so it is **valid, it propagates, and peers agree on it.**
+  The contract is not broken, it is full.
+- **The past-skew trap, corrected, with a better argument for why it is
+  permanent.** An update dropping the offending message passes and commits, so it
+  is not an instant dead end. What makes it permanent is that the freeze
+  **re-arms** as each next-oldest message crosses the window, and that **every
+  peer's copy aged into the same condition independently, so there is no valid
+  donor state anywhere in the network.** The #3109 wholesale-replacement risk is
+  kept but demoted to what it is: reachable only when the merge *also* fails.
+- **The two traps are not the same failure**, which 1.37.0 said they were. Under a
+  cap the held state is valid and merely out of room; under past-skew it is
+  invalid, which is what makes it unpushable and puts the #3109 recovery in reach.
+  One wants a prune added; the other wants the rule removed.
+- **"Silently" was the opposite of the truth.** The error carries the cause
+  `"invalid outcome state"`, which starts with neither `"execution error"` nor
+  `"execution error: invalid contract update"`, so it matches neither
+  `is_invalid_update_rejection` nor `is_contract_exec_rejection` and falls to the
+  default arm at both log sites: **ERROR** from `log_update_contract_failure`, and
+  **WARN** plus a *spurious self-healing GET* from
+  `log_broadcast_to_streaming_failure`, fetching contract code that is already
+  present. Loud and mildly wasteful. Worth correcting rather than leaving: a skill
+  that teaches people to fear silent failure devalues the label by misapplying it.
+- **The >10 related-contracts limit is the host's, not yours.** The bullet and its
+  pitfalls row described it as your `validate_state` refusing state. The host
+  rejects the request when the contract asks for more than ten
+  (`"contract requested N related contracts, limit is 10"`), so the operation
+  fails outright.
+- **`contract-patterns.md` → "Tests That Would Have Caught It" gains a worked
+  example, and it is this release.** Six adversarial passes; five found that the
+  previous round's fix had introduced a new error. The costly shape is not a claim
+  that looks shaky — it is one whose premise is true, whose wording is confident,
+  and whose inference does not follow, because nothing about reading it suggests
+  checking. The two specimens: a platform-behaviour claim produced by grepping for
+  a literal where the real call was routed through a helper (**read the call
+  graph, not the string** — and a confident *correction* is trusted more than what
+  it corrects, so getting one wrong costs more than the original error did), and
+  the join/shrink inference above, whose counterexample was two hundred lines up
+  in the file the sentence was written into.
+
+The 1.37.0 entry's cap bullet is marked superseded in place rather than rewritten.
+
+Verified for this release by reading the call graph rather than grepping:
+`validation_error` and its cause string (`executor_impl.rs`),
+`is_invalid_update_rejection` / `is_contract_exec_rejection` (`contract/executor.rs`),
+`log_update_contract_failure` and `log_broadcast_to_streaming_failure` including
+its return value (`operations/update.rs`), and the
+`MAX_RELATED_CONTRACTS_PER_REQUEST` rejection site (`executor_impl.rs`).
+
 ## 1.37.1 (2026-09-06)
 
 Corrections to 1.37.0, which merged while its review was still running. Three
@@ -131,12 +198,12 @@ both targets, and at least one review round had already passed.
   merge produces.** `state-authorization-patterns.md` → State Size Budget. The
   host runs `validate_state` on the state arriving at a PUT/UPDATE *and* on the
   state `update_state` returns, before committing it, so a `validate_state` cap
-  corrupts nothing — it does something quieter. The first merge that would carry
-  the state past the cap is refused, and so is every merge after it: the contract
-  silently goes read-only for good, because the only operation that could shrink
-  the state is an update and every update is now refused. Same failure as the
-  past-skew check under Time Handling, reached by accumulation rather than by the
-  passage of time.
+  corrupts nothing — it does something quieter. **(Superseded in 1.37.2:** this
+  bullet went on to say the contract "silently goes read-only for good, because
+  the only operation that could shrink the state is an update and every update is
+  now refused", and called it the same failure as the past-skew check. Both halves
+  are wrong — an update whose merged output lands back under the cap commits
+  normally, and the failure is loud rather than silent. See the 1.37.2 entry.**)**
 - **A value one party supplies may only decide the fate of that party's own
   records.** Same file, under Replay Protection — stated as a boundary rather
   than a ban, because the monotonic-counter and last-writer-wins patterns already
