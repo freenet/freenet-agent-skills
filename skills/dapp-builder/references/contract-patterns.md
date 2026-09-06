@@ -191,15 +191,16 @@ Three details that ride along with the same loop:
 - **`apply_delta` is a merge, so it must be idempotent and order-independent
   like every other merge path.** A delta that appends, or that mutates a
   counter, breaks the laws just as surely inside `apply_delta` as inside a
-  whole-state merge. Note the constraint this puts on the "filtering" choice: a
-  filter must be a predicate on the *entry* (does it authorize?), never on how
-  full the state has got, or two peers applying the same entries in different
-  orders keep different ones. A predicate that reads the state is only safe when
-  its answer cannot depend on the order — dedup-as-you-go qualifies **provided
+  whole-state merge. Note the constraint this puts on the "filtering" choice:
+  what must be order-independent is the loop's **result**, not each predicate's
+  answer. A filter on the entry alone (does it authorize?) is safe; a filter on
+  how full the state has got is not, because two peers applying the same entries
+  in different orders then keep different ones. Dedup-as-you-go is the awkward
+  middle: its answers *are* order-dependent, yet the result is not — **provided
   the id is content-derived** (see "Record Identity"), because two entries
-  sharing an id are then the same entry and which one the loop keeps cannot
-  matter. With a writer-supplied id it is order-dependent, and therefore a
-  merge-law violation.
+  sharing an id are then the same entry and which one survives cannot matter.
+  With a writer-supplied id they are different entries, the result depends on
+  order, and it is a merge-law violation.
 
 ## The Delta to an Up-to-Date Peer
 
@@ -538,10 +539,14 @@ ranks; it is an untrusted hint, so don't build eviction or expiry on it.
 
 **Note what `MessageId` above does and does not bind.** It identifies a message
 by its author and position, not by its content, so the same author can sign two
-different message bodies under one id — the defect described under "Record
-Identity" below. That is tolerable only where a later reader never relies on the
-id to bind anything about the body. If it might, hash the signed payload into
-the id.
+different bodies under one id — the defect described under "Record Identity"
+below. And the `BTreeMap` keyed on it is itself a reader relying on that id: the
+map holds one of the two bodies, and unless the merge carries an explicit
+deterministic tie-break (the last-writer-wins pattern below has one; a bare
+`insert` does not) *which* one is decided by arrival order, so peers diverge.
+Add a digest of the signed payload as a **trailing** field of `MessageId` —
+trailing because the id is also the map's ordering key, and a leading content
+hash would destroy the timestamp ordering this section is about.
 
 ### 3. Last-Writer-Wins with Version
 

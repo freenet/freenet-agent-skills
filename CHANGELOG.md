@@ -54,12 +54,16 @@ both targets, and at least one review round had already passed.
   merge produces.** `state-authorization-patterns.md` → State Size Budget. The
   host runs `validate_state` on the state arriving at a PUT/UPDATE *and* on the
   state `update_state` returns, before committing it, so a `validate_state` cap
-  corrupts nothing — it does something quieter. The first merge that would carry
-  the state past the cap is refused, and so is every merge after it: the contract
-  silently goes read-only for good, because the only operation that could shrink
-  the state is an update and every update is now refused. Same failure as the
-  past-skew check under Time Handling, reached by accumulation rather than by the
-  passage of time.
+  corrupts nothing — it does something quieter. Every merge that would cross the
+  cap is refused, permanently: under a count cap the contract stops taking writes
+  entirely, under a byte budget large writes are refused forever while small ones
+  keep landing, which is much harder to recognise. Nothing repairs it — a join
+  never shrinks the state, an incoming full state is merged rather than
+  substituted, and the #3109 recovery is unreachable because the held state is
+  valid. The section also carries the part that is easy to get wrong while
+  obeying the rule: prune by **deterministic truncation**, never by "drop
+  whatever would overflow", which is a predicate on how full the state is and so
+  breaks convergence.
 - **A value one party supplies may only decide the fate of that party's own
   records.** Same file, under Replay Protection — stated as a boundary rather
   than a ban, because the monotonic-counter and last-writer-wins patterns already
@@ -101,12 +105,15 @@ both targets, and at least one review round had already passed.
   said it did. A GET serves from the state store without validating. What it
   actually runs on is every incoming state (PUT, UPDATE, and the GET caching
   path) and every state `update_state` returns before it is committed — which is
-  still often, so the conclusions in both places survive: `identity-and-addressing.md`'s
-  argument against verifying a certificate per member, and
-  `state-authorization-patterns.md`'s past-skew paragraph, whose mechanism is now
-  stated as the freeze it actually is (the inbox is refused by every peer *and*
-  by every attempt to modify it, and the one operation that could drop the
-  offending message is itself an update).
+  still often, so `identity-and-addressing.md`'s argument against verifying a
+  certificate per member survives. `state-authorization-patterns.md`'s past-skew
+  paragraph ends worse than either the original or the intermediate version said:
+  a rule that expires makes the *held* state invalid, which is exactly the
+  condition the #3109 corrupted-state recovery keys on, so the inbox is not
+  frozen — it is replaced wholesale by the next valid state that arrives. The
+  contrast with the size cap (where everything committed was validated, so the
+  held state stays valid and that recovery is unreachable) is now stated in both
+  places, because the two traps look alike and end differently.
 
 Verified against freenet-stdlib `rust/src/delegate_host.rs`,
 `rust/src/delegate_interface.rs` and `rust/src/contract_composition.rs`,
