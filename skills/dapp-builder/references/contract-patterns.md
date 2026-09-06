@@ -191,9 +191,14 @@ Three details that ride along with the same loop:
 - **`apply_delta` is a merge, so it must be idempotent and order-independent
   like every other merge path.** A delta that appends, or that mutates a
   counter, breaks the laws just as surely inside `apply_delta` as inside a
-  whole-state merge — and note that "filtering" above must drop the same entries
-  in any order, so the filter has to be a predicate on the entry, never on how
-  much of the delta has been applied so far.
+  whole-state merge. Note the constraint this puts on both bullets above: a
+  filter must be a predicate on the *entry* (does it authorize?), never on how
+  full the state has got, or two peers applying the same entries in different
+  orders keep different ones. Dedup-as-you-go is the one admissible exception,
+  and only because a **content-derived** id (see "Record Identity") makes two
+  entries sharing an id the same entry, so which of them the loop happens to
+  keep cannot matter. With a writer-supplied id it is order-dependent and
+  therefore a merge-law violation.
 
 ## The Delta to an Up-to-Date Peer
 

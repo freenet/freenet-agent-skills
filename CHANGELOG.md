@@ -96,13 +96,17 @@ both targets, and at least one review round had already passed.
   change* rather than the bug you already fixed; and treat a comment asserting a
   safety property as a claim needing a test rather than as evidence. Twelve such
   comments in one round asserted properties the code did not have.
-- **Correction: the host does not re-validate what your merge produces.**
-  `state-authorization-patterns.md` previously said "the host also runs
-  `validate_state` after every successful `update_state` and rolls back on
-  `Invalid`, so validate remains the backstop." It does not — `attempt_state_update`
-  commits the merge result directly, and only the replay-after-initialization
-  branch re-validates. The sentence was load-bearing for the wrong reason: it
-  invited treating `validate_state` as a safety net behind `update_state`.
+- **Correction: `validate_state` does not run on every state load, and does not
+  run on what your merge produces.** Three places said otherwise. It runs on the
+  state *arriving* at a PUT/UPDATE (and on the GET caching path);
+  `attempt_state_update` commits the merge result directly, only the
+  replay-after-initialization branch re-validates, and a GET serves from the
+  state store without validating. Fixed in `state-authorization-patterns.md`
+  (twice — the related-contracts "backstop" claim and the past-skew paragraph's
+  justification) and `identity-and-addressing.md` (the per-member certificate
+  cost argument). Both conclusions survive the correction, and the past-skew one
+  survives for a reason worth having in writing: what makes a `validate_state`
+  rule dangerous is that its truth can *change*, not how often it is checked.
 
 Verified against freenet-stdlib `rust/src/delegate_host.rs`,
 `rust/src/delegate_interface.rs` and `rust/src/contract_composition.rs`,
