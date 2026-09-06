@@ -198,18 +198,26 @@ Four details that ride along with the same loop:
   authorization, because it usually reads state: "is this author a member?"
   answers differently depending on whether *add member M* has been applied yet —
   and not only within one delta, since the two facts can arrive in separate
-  deltas in either order. There is no ordering discipline that fixes that. The
-  two shapes that converge are to make the gating fact **monotonic** (membership
-  is only ever added, so a message rejected today is rejected on every peer
-  forever — you are choosing that, so choose it knowingly), or to have each entry
-  **carry its own authorization proof** (a signed invite chain), which turns the
-  predicate back into one that reads only the entry.
+  deltas in either order. There is no ordering discipline that fixes that. Two
+  shapes do converge: have each entry **carry its own authorization proof** (a
+  signed invite chain rooted in the contract's parameters), which turns the
+  predicate back into one that reads only the entry; or **keep the entry and
+  authorize at read time**, so the merge is a plain union and the question "is
+  this author a member?" is answered by a view over the merged state rather than
+  by whether the loop had got to *add M* yet.
+
+  Making membership add-only is worth doing but does **not** by itself fix this,
+  and it is easy to believe it does. It makes *acceptance* stable — once a
+  message is in, it stays in — so a peer that dropped it can pick it up again
+  through anti-entropy. The merge is still order-dependent in the meantime, and
+  `fdev verify-merge` will say so.
 - **Dedup-as-you-go is the same shape with a happier ending.** Its answers *are*
-  order-dependent, yet the result is not — **provided the id is content-derived**
-  (see "Record Identity"), because two entries sharing an id are then the same
-  entry and which one survives cannot matter. With a writer-supplied id they are
-  different entries, the result depends on order, and it is a merge-law
-  violation.
+  order-dependent, yet the result is not — **provided the id covers every term of
+  the record** (see "Record Identity"), because two entries sharing an id are
+  then byte-for-byte the same entry and which one survives cannot matter. Note
+  how much work "every term" is doing: an id hashing only *some* of the record is
+  content-derived and still leaves two different entries under one id, so the
+  result depends on order again. A writer-supplied id fails the same way.
 
 ## The Delta to an Up-to-Date Peer
 

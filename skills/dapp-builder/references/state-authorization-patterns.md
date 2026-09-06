@@ -50,13 +50,15 @@ pub struct AuthorizedRecipientState {
 pub struct RecipientState {
     pub version: u64,             // monotonic, replay protection
     pub purged: Vec<u32>,          // FIFO order matters; sig covers it
-    // future fields go here, with #[serde(default)]
+    // Future fields go here, with BOTH #[serde(default)] and
+    // skip_serializing_if -- the signature covers these bytes, so a field
+    // that encodes as null when absent invalidates every existing signature.
 }
 ```
 
 Used for: River's room `Configuration`, the inbox's recipient-controlled state, owner-managed metadata.
 
-Adding a new field to a bundled-signed struct doesn't require new per-field auth, just a `#[serde(default)]` for backwards compatibility.
+Adding a new field to a bundled-signed struct doesn't require new per-field auth — the wrapping signature covers it. It does require care with the *encoding*: `#[serde(default)]` alone lets old bytes decode, but re-encoding an existing record now emits the new key and invalidates the signature over it. Add `skip_serializing_if` as well; see "`#[serde(default)]` is not enough when a signature covers the encoding" under Wire-Format Stability, which is exactly this case.
 
 ### A Symmetric Key Cannot Establish Authorship
 
@@ -170,14 +172,12 @@ Three violations of it turned up in one app in one day:
 
 Ways to stay on the right side of it:
 
-- **Cap per author, not globally.** Then a forged value can only cost its own
-  author, and no amount of grinding reaches anyone else's entries. This is
-  usually the whole fix.
-- **Where a bound is needed, bound each author separately and rank each author's
-  records only among their own.** A forged value then costs its own author and
-  reaches nobody else's entries. Note that the *bound* still has to be enforced
-  order-independently — see State Size Budget, which is a separate requirement
-  from this one and is easy to satisfy one of while breaking the other.
+- **Cap per author, not globally, and rank each author's records only among
+  their own.** A forged value then costs its own author and reaches nobody
+  else's entries, however hard it is ground. This is usually the whole fix. Note
+  that the bound itself still has to be enforced order-independently — see State
+  Size Budget, a separate requirement that is easy to satisfy while breaking
+  this one, and vice versa.
 - **Tie-break on a deterministic function of the record's content** (a hash, or
   the signature bytes as in the last-writer-wins example in
   `contract-patterns.md`) rather than on anything about its arrival.
@@ -366,7 +366,7 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
-- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and enforcing the limit only in `validate_state` stops the contract accepting writes the moment an eleventh appears (see "Prune in `update_state`" under State Size Budget).
+- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and enforcing the limit only in `validate_state` stops the contract accepting writes the moment an eleventh appears (see "Prune in `update_state`" under State Size Budget). Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
 ### Requesting Related State From `update_state`
@@ -519,10 +519,13 @@ The host enforces `MAX_STATE_SIZE = 50 MiB` as a hard correctness backstop — a
 an item can be any size — the real bound is 1000 × *the largest item the other side
 may send*, and the other side chooses. A cap that reads like a memory limit and is not
 one is how a contract-controlled value becomes an out-of-memory. Whenever you write a
-count over variable-size values, multiply it by that worst case and check the product;
-better, budget the **bytes** directly (a running total enforced in `update_state`) and
-let the count fall out of it. The arithmetic below is exactly that multiplication —
-note that it is the per-item cap, not the count, that makes it come out finite.
+count over variable-size values, multiply it by that worst case and check the product.
+The product is the bound to reach for: a count cap **times a per-item size cap** bounds
+bytes while staying convergent, because the per-item cap is a property of the entry.
+Budgeting the bytes directly with a running total is the tempting alternative and is
+harder than it looks; "Prune in `update_state`" below has the counterexample. The
+arithmetic below is exactly that multiplication — note that it is the per-item cap,
+not the count, that makes it come out finite.
 
 Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32 KiB` = 32 MiB messages, plus ~140 bytes/message metadata = ~32.1 MiB, plus a few KB of recipient_state. Well under the 50 MiB cap — though, per the design target below, `MAX_INBOX_MESSAGES` is a candidate to tune down or to shard further (e.g. archiving older messages into per-time-window contracts) rather than a bound to treat as settled.
 
@@ -572,16 +575,23 @@ Two things about how the merge should enforce it:
   violation traded for a bound. The straightforward convergent form is a **count
   cap: sort by a key the entries themselves determine, keep the N smallest.**
   That is order-independent because an entry among the N smallest of `A ∪ B` is
-  among the N smallest of whichever side it came from. A **byte** budget is
-  harder than it looks and the count-cap argument does not carry over — check any
-  scheme you invent against associativity with a worked example before trusting
-  it.
+  among the N smallest of whichever side it came from. The key must be unique —
+  tie-break on a digest of the whole entry, or two peers break the tie differently.
+  Pair it with a **per-item size cap** and you have a byte bound as well, since a
+  per-item cap is a property of the entry.
+
+  A running byte budget over the sorted list is the thing that looks equivalent
+  and is not. Sorting `p < q < r` with sizes 9, 2, 1 against a budget of 10:
+  `{p,q}` truncates to `{p}` and `{r}` stays `{r}`, so merging those gives
+  `{p, r}` — but merging `{p,q}` with `{r}` directly gives `{p}`. Not associative,
+  which is the merge-law violation this rule exists to avoid.
 - **Rank a party's records only against that party's own.** Any cross-party
   ranking key is a thing an attacker optimises against: a supplied value
   directly (see "A Value One Party Supplies…" above), and a content-derived one
   by grinding the content until its digest sorts where they want it. If you find
   yourself needing a global bound across mutually-untrusting writers, take that
-  as the signal to shard instead — which is what the design target above is for.
+  as the signal to shard — one contract instance per writer, per room, per
+  time-window — so no ranking across parties is needed at all.
 
 The past-skew check under Time Handling is the neighbouring failure, reached by
 expiry rather than by accumulation.
@@ -614,8 +624,8 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
 | Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
 | Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Bound the count structurally (fixed typed slots), so an eleventh cannot arise |
-| A bound your own `update_state` can step over, checked only in `validate_state` | Every merge that would cross the cap is refused; headroom only shrinks, so the contract ends up taking no writes at all | Bound it inside `update_state`, by deterministic truncation ranked per author — not by evicting whatever arrived last |
-| A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author, or refuse the write; ranking a party's own records on their own value is fine |
+| A bound your own `update_state` can step over, checked only in `validate_state` | Every merge that would cross the cap is refused; headroom only shrinks, so the contract ends up taking no write that changes it | Bound it inside `update_state`; keep the N smallest by a key the entries determine, never evict by arrival order |
+| A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author and rank within an author's own records; any cross-party ranking key is grindable |
 | Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |
 | New field added to a signature-covered struct with only `#[serde(default)]` | Re-encoding a pre-existing record adds a map entry and invalidates every old signature | Add `skip_serializing_if`; test against a hand-written byte literal of the old shape |
 | Writer-supplied nonce or id used as record identity | Two records under one id; permanent, unhealable divergence under first-writer-wins | Derive the id from the record's own terms, computed by the contract (`contract-patterns.md` → "Record Identity") |

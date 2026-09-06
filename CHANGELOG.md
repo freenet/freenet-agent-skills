@@ -49,25 +49,28 @@ both targets, and at least one review round had already passed.
   and once in state every subsequent apply fails against it. That is how a single
   write with no key permanently killed a mailbox. Also: do not snapshot the dedup
   set before the loop, or two entries in the same delta colliding on the key both
-  pass.
+  pass. Plus, from the review rounds, the two shapes that converge when the
+  filter is an authorization check reading state — the entry carries its own
+  proof, or you keep the entry and authorize at read time. Making the gating fact
+  monotonic is worth doing and is not one of them: it stabilises *acceptance*,
+  while the merge stays order-dependent.
 - **Prune in `update_state`; never let `validate_state` refuse what your own
   merge produces.** `state-authorization-patterns.md` → State Size Budget. The
   host runs `validate_state` on the state arriving at a PUT/UPDATE *and* on the
   state `update_state` returns, before committing it, so a `validate_state` cap
   corrupts nothing — it does something quieter. Every merge that would cross the
   cap is refused, and a merge that only unions never shrinks the state, so the
-  headroom only shrinks until the contract stops taking writes at all (a byte
-  budget passes through a confusing middle stage where large writes are refused
-  and small ones still land, then ends in the same place). Nothing repairs it
-  from the app's side: an incoming full state is merged rather than substituted.
-  The section also carries the two things that are easy to get wrong while
-  obeying the rule: the surviving set must be a function of the entry set rather
-  than of arrival order (the worked convergent form is a count cap keeping the N
-  smallest by a key the entries determine; a byte budget does not follow from the
-  same argument and needs checking against associativity in its own right), and a
-  party's records must be ranked only against that party's own, since any
-  cross-party ranking key is something an attacker optimises against — a supplied
-  value directly, a content-derived one by grinding.
+  headroom only shrinks until the contract refuses every write that would change
+  it. Nothing repairs it from the app's side: an incoming full state is merged
+  rather than substituted. The section also carries the two things that are easy
+  to get wrong while obeying the rule. The surviving set must be a function of
+  the entry set rather than of arrival order — the convergent form is a count cap
+  keeping the N smallest by a unique key the entries determine, paired with a
+  per-item size cap when you need a byte bound; a running byte budget over the
+  sorted list looks equivalent and is not associative, and the counterexample is
+  in the text. And a party's records must be ranked only against that party's
+  own, because any cross-party ranking key is something an attacker optimises
+  against — a supplied value directly, a content-derived one by grinding.
 - **A value one party supplies may only decide the fate of that party's own
   records.** Same file, under Replay Protection — stated as a boundary rather
   than a ban, because the monotonic-counter and last-writer-wins patterns already
@@ -124,14 +127,20 @@ Verified against freenet-stdlib `rust/src/delegate_host.rs`,
 `rust/src/delegate_interface.rs` and `rust/src/contract_composition.rs`,
 `freenet-migrate` 0.6.0's `src/delegate.rs`, and freenet-core's
 `contract/executor/runtime/{executor_impl,contract_ops}.rs` — rather than taken
-on report. Two independent adversarial reviews ran. The first found four
-blocking errors in these API claims; the second found that one of the four was
-itself wrong, and that the fix for it had replaced a true statement with a false
-one (`validate_state` **is** run on the output of `update_state`, at
+on report. Six independent adversarial review passes ran, and every one of the
+first five found that the previous round's fix had introduced a new error —
+always the same shape, a correct mechanism paired with a consequence drawn from
+it that ran backwards. Two are worth recording, because they are what this
+release's own testing section is about. The first review reported that the host
+commits a merge result without re-validating it; the second showed that was
+wrong (`validate_state` **is** run on the output of `update_state`, at
 `bridged_upsert_contract_state_inner`, `get_updated_state`, and the re-PUT
-branch). Worth recording, because it is the finding this release's own testing
-section is about: the reviewer that reads only the function you named will
-confirm whatever that function does.
+branch) — a reviewer that reads only the function you named will confirm
+whatever that function does. And the guidance built on top of the corrected
+mechanism kept coming out subtly non-convergent, until the fifth pass made the
+case that four paragraphs of merge algebra in prose was the wrong instrument for
+a dApp-authoring guide. It was cut back to the part that holds without a proof,
+which is most of this entry's value.
 
 ## 1.36.0 (2026-09-04)
 
