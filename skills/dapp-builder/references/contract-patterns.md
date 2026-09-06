@@ -1235,6 +1235,34 @@ already passed.
   else in the function could break it. Each such sentence is a test you have not
   written, or a claim to delete.
 
+### A worked example, from this document
+
+The shape that costs the most is not a claim that is obviously shaky. It is one
+whose **premise is true, whose wording is confident, and whose inference does not
+follow** — because nothing about reading it suggests checking.
+
+This file's own guidance on capping state took six adversarial passes, and five
+of them found that the previous round's fix had introduced a new error of exactly
+that shape. Two are worth keeping:
+
+- *"The host commits the output of `update_state` without re-validating it."*
+  Produced by grepping for the literal `validate_state` in the executor, finding
+  two call sites, and concluding there were only two. The real call is routed
+  through a helper. **When the claim is about platform behaviour, read the call
+  graph, not the string** — and note that a *confident correction* is trusted
+  more than the thing it corrects, so getting one wrong costs more than the
+  original error did.
+- *"A merge is a join, so it never shrinks the state, and nothing can repair it."*
+  The premise is true and the conclusion is false: a join is monotone in the
+  **lattice** order, not in item count, and adding a tombstone is a perfectly
+  lawful join that shrinks the materialised set. The counterexample was two
+  hundred lines up in the same file the sentence was written into.
+
+Both read as rigorous. Neither would have been caught by any test of the code
+they described, because they were claims *about* code rather than claims in it —
+which is the whole reason the bullets above ask you to state what input would
+turn each one red.
+
 ## River Contract Reference
 
 See [River's room-contract](https://github.com/freenet/river/tree/main/contracts/room-contract/src/lib.rs) for a complete implementation, and River's `AGENTS.md` under "Contract Upgrade" for the full upgrade runbook.
