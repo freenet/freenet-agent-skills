@@ -61,10 +61,13 @@ both targets, and at least one review round had already passed.
   and small ones still land, then ends in the same place). Nothing repairs it
   from the app's side: an incoming full state is merged rather than substituted.
   The section also carries the two things that are easy to get wrong while
-  obeying the rule — bound by **deterministic truncation** (sort on a key the
-  entries determine, keep the longest prefix that fits) rather than evicting
-  whatever arrived last, and rank **per author**, since a global top-N on an
-  author-supplied value is the forged-value attack from the section above.
+  obeying the rule: the surviving set must be a function of the entry set rather
+  than of arrival order (the worked convergent form is a count cap keeping the N
+  smallest by a key the entries determine; a byte budget does not follow from the
+  same argument and needs checking against associativity in its own right), and a
+  party's records must be ranked only against that party's own, since any
+  cross-party ranking key is something an attacker optimises against — a supplied
+  value directly, a content-derived one by grinding.
 - **A value one party supplies may only decide the fate of that party's own
   records.** Same file, under Replay Protection — stated as a boundary rather
   than a ban, because the monotonic-counter and last-writer-wins patterns already

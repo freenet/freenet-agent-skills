@@ -176,7 +176,7 @@ generations: returning on the first refused record discards everything else the
 predecessor held (see `upgrade-and-migration.md` → "A New Version Must Accept
 Old State", where exactly that cost a seller their whole store).
 
-Three details that ride along with the same loop:
+Four details that ride along with the same loop:
 
 - **Do not leave a partial mutation behind.** `freenet-scaffold`'s derive
   propagates an `Err` and stdlib's `inner_update_state` returns without
@@ -194,17 +194,22 @@ Three details that ride along with the same loop:
   whole-state merge. Note the constraint this puts on the "filtering" choice:
   what must be order-independent is the loop's **result**, not each predicate's
   answer. A filter that reads only the entry is trivially safe; one that reads
-  how full the state has got is not, because two peers applying the same entries
-  in different orders keep different ones. Most real filters are in between,
-  because they read state — "is this author a member?" is order-dependent the
-  moment one delta carries both *add member M* and *a message from M*, so decide
-  membership against the merged state rather than against the state the loop has
-  reached. Dedup-as-you-go is the same shape with a happier ending: its answers
-  *are* order-dependent, yet the result is not, **provided the id is
-  content-derived** (see "Record Identity"), because two entries sharing an id
-  are then the same entry and which one survives cannot matter. With a
-  writer-supplied id they are different entries, the result depends on order, and
-  it is a merge-law violation.
+  how full the state has got is not. The one that catches people out is
+  authorization, because it usually reads state: "is this author a member?"
+  answers differently depending on whether *add member M* has been applied yet —
+  and not only within one delta, since the two facts can arrive in separate
+  deltas in either order. There is no ordering discipline that fixes that. The
+  two shapes that converge are to make the gating fact **monotonic** (membership
+  is only ever added, so a message rejected today is rejected on every peer
+  forever — you are choosing that, so choose it knowingly), or to have each entry
+  **carry its own authorization proof** (a signed invite chain), which turns the
+  predicate back into one that reads only the entry.
+- **Dedup-as-you-go is the same shape with a happier ending.** Its answers *are*
+  order-dependent, yet the result is not — **provided the id is content-derived**
+  (see "Record Identity"), because two entries sharing an id are then the same
+  entry and which one survives cannot matter. With a writer-supplied id they are
+  different entries, the result depends on order, and it is a merge-law
+  violation.
 
 ## The Delta to an Up-to-Date Peer
 

@@ -118,7 +118,7 @@ pub struct RecipientState {
 
 Bound the tombstone list. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full.
 
-That eviction is arrival-ordered, which "A Value One Party Supplies…" below and the truncation rule under State Size Budget both otherwise forbid, so note what makes it legal here: **no peer ever re-derives the order.** `RecipientState` is a single-writer, version-stamped envelope that the recipient re-signs in full, and the merge is last-writer-wins on that whole envelope — so peers copy the recipient's chosen list rather than each computing their own. Write `purged` as a set the merge *unions* instead, which is the more natural CRDT reflex, and the eviction stops working: every evicted tombstone comes back from any peer still holding an older copy, so the list is unbounded in practice and you are in the State Size Budget trap below. (Note which way that fails — the resurrected tombstone keeps suppressing its message. Losing the suppression is what a *successful* eviction costs, and that is the risk the LWW-envelope design accepts deliberately.)
+That eviction is arrival-ordered, which "A Value One Party Supplies…" below and the order-independence rule under State Size Budget both otherwise forbid, so note what makes it legal here: **no peer ever re-derives the order.** `RecipientState` is a single-writer, version-stamped envelope that the recipient re-signs in full, and the merge is last-writer-wins on that whole envelope — so peers copy the recipient's chosen list rather than each computing their own. Write `purged` as a set the merge *unions* instead, which is the more natural CRDT reflex, and the eviction stops working: every evicted tombstone comes back from any peer still holding an older copy, so the list is unbounded in practice and you are in the State Size Budget trap below. (Note which way that fails — the resurrected tombstone keeps suppressing its message. Losing the suppression is what a *successful* eviction costs, and that is the risk the LWW-envelope design accepts deliberately.)
 
 ### Cross-Context Binding
 
@@ -173,11 +173,11 @@ Ways to stay on the right side of it:
 - **Cap per author, not globally.** Then a forged value can only cost its own
   author, and no amount of grinding reaches anyone else's entries. This is
   usually the whole fix.
-- **Refuse rather than choose.** Declining a write past a per-author cap needs no
-  ranking at all, and a refused write is recoverable in a way a wrong eviction is
-  not. Do this at the point the user makes the write, so the entry is never
-  created: refusing the *n*th arrival inside the merge is an order-dependent
-  filter (see "Bound it by deterministic truncation" under State Size Budget).
+- **Where a bound is needed, bound each author separately and rank each author's
+  records only among their own.** A forged value then costs its own author and
+  reaches nobody else's entries. Note that the *bound* still has to be enforced
+  order-independently — see State Size Budget, which is a separate requirement
+  from this one and is easy to satisfy one of while breaking the other.
 - **Tie-break on a deterministic function of the record's content** (a hash, or
   the signature bytes as in the last-writer-wins example in
   `contract-patterns.md`) rather than on anything about its arrival.
@@ -366,7 +366,7 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
-- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Design the state so more than ten distinct references cannot arise, rather than enforcing a cap at all — truncating a reference list silently drops a dependency the contract needs, and enforcing the limit only in `validate_state` stops the contract accepting writes the moment the eleventh appears (see "Prune in `update_state`" under State Size Budget).
+- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and enforcing the limit only in `validate_state` stops the contract accepting writes the moment an eleventh appears (see "Prune in `update_state`" under State Size Budget).
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
 ### Requesting Related State From `update_state`
@@ -547,56 +547,44 @@ branch (`contract/executor/runtime/{executor_impl,contract_ops}.rs`). Nothing is
 rolled back; the commit simply does not happen and the caller gets an error.
 
 That makes `validate_state` a real backstop behind your merge — and it means a
-`validate_state` cap does not corrupt anything. It does something quieter:
-
-> Every merge that would carry the state past the cap is refused, and a merge
-> that only unions never shrinks the state, so the headroom only ever shrinks
-> until **the contract stops accepting writes at all.** A byte budget passes
-> through an intermediate stage that is easy to misread — large writes refused
-> while small ones still land — but it ends in the same place.
-
-Nothing repairs it from the app's side. Core applies an incoming full state as
+`validate_state` cap does not corrupt anything. It does something quieter: every
+merge that would carry the state past the cap is refused, and if the merge only
+ever unions, the headroom only shrinks, so the contract ends up refusing every
+write that would change it. Nothing repairs that from the app's side either —
+core applies an incoming full state as
 `update_state(current, [State(incoming)])`, so a peer PUT-ing a smaller state
-does not replace yours, it merges into it, and there is no operation that
-shrinks a state whose merge only grows it.
+merges into yours rather than replacing it.
 
 Hence the rule, which is about agreement rather than about avoiding
 `validate_state`:
 
 > **`update_state` must never be able to produce a state its own
-> `validate_state` would refuse.** Where a bound is involved, that means bounding
-> it inside `update_state`. A bound checked only in `validate_state` is a bound
-> your merge does not know about, and the day it binds, the contract stops taking
-> writes for good.
+> `validate_state` would refuse.** Where a bound is involved, that means
+> enforcing the bound inside `update_state`. A bound checked only in
+> `validate_state` is a bound your merge does not know about.
 
-**Bound it by deterministic truncation.** This is the part that is easy to get
-wrong while obeying the rule. "Evict until it fits" and "refuse the eleventh"
-decide *which* entries survive from the order they arrived in, so two peers
-merging the same entries in different orders keep different ones and never
-converge — a merge-law violation traded for a bound. The requirement is that the
-surviving set be a function of the entry set alone: sort by a key the entries
-themselves determine and keep the longest prefix that fits. That works for a
-count cap (top N) and for a byte budget (the longest prefix whose cumulative
-size fits), and it is convergent because an entry among the N smallest of
-`A ∪ B` is among the N smallest of whichever side it came from.
+Two things about how the merge should enforce it:
 
-**Choose the ranking key so it cannot decide another party's fate**, or you
-have traded the merge-law violation for the one under "A Value One Party
-Supplies…". A global top-N on an author-supplied counter is exactly the
-forged-value attack described there. Rank **within each author's own records and
-cap per author**, which satisfies both rules; a content-derived id works too,
-since nobody can aim it.
+- **The surviving set must be a function of the entry set, not of arrival
+  order.** "Evict until it fits" and "refuse the eleventh" decide which entries
+  survive from the order they arrived in, so two peers merging the same entries
+  in different orders keep different ones and never converge — a merge-law
+  violation traded for a bound. The straightforward convergent form is a **count
+  cap: sort by a key the entries themselves determine, keep the N smallest.**
+  That is order-independent because an entry among the N smallest of `A ∪ B` is
+  among the N smallest of whichever side it came from. A **byte** budget is
+  harder than it looks and the count-cap argument does not carry over — check any
+  scheme you invent against associativity with a worked example before trusting
+  it.
+- **Rank a party's records only against that party's own.** Any cross-party
+  ranking key is a thing an attacker optimises against: a supplied value
+  directly (see "A Value One Party Supplies…" above), and a content-derived one
+  by grinding the content until its digest sorts where they want it. If you find
+  yourself needing a global bound across mutually-untrusting writers, take that
+  as the signal to shard instead — which is what the design target above is for.
 
-Where a bound would have to discard another party's data to hold, prefer not
-having one: refuse the write at the point the user makes it, so the entry is
-never created and nothing has to be chosen between. That is the "refuse rather
-than choose" advice under "A Value One Party Supplies…" — it belongs to your
-client and your admission check, not inside the merge, where refusing the
-eleventh arrival is the order-dependent filter above.
-
-The past-skew check under Time Handling is the neighbouring failure, and it ends
-worse: there the *held* state becomes invalid, which makes the #3109 recovery
-reachable and gets the state replaced rather than frozen.
+The past-skew check under Time Handling is the neighbouring failure, reached by
+expiry rather than by accumulation.
 
 ## Per-Context Identity Considerations
 
@@ -625,7 +613,7 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Any `time::now()` call in a *contract* | Replicas can diverge, and the merge laws aren't well-formed statements about the contract; a node warns on load today and the call is staged to trap | Carry a client-signed timestamp in state, check monotonicity only; `fdev verify-merge --wasm` reports the import |
 | Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
 | Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
-| Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Cap distinct references in `update_state` (defense in depth in `validate_state` too) |
+| Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Bound the count structurally (fixed typed slots), so an eleventh cannot arise |
 | A bound your own `update_state` can step over, checked only in `validate_state` | Every merge that would cross the cap is refused; headroom only shrinks, so the contract ends up taking no writes at all | Bound it inside `update_state`, by deterministic truncation ranked per author — not by evicting whatever arrived last |
 | A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author, or refuse the write; ranking a party's own records on their own value is fine |
 | Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |
