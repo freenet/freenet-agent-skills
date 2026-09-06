@@ -541,11 +541,13 @@ rolled back; the commit simply does not happen and the caller gets an error.
 That makes `validate_state` a real backstop behind your merge — and it means a
 `validate_state` cap does not corrupt anything. It does something quieter:
 
-> The first merge that would carry the state past the cap is refused. So is
-> every merge after it. **The contract silently stops accepting writes**, peers
-> keep retrying the same failing merge, and nothing can repair it, because the
-> only thing that could shrink the state is an update and every update is now
-> refused.
+> The first merge that would carry the state past the cap is refused — and for a
+> collection that only grows, so is every merge after it. **The contract
+> silently stops accepting writes**, and nothing can repair it: a merge is a
+> join, so it never shrinks the state, and the one operation that could is
+> itself an update. An incoming full state does not rescue it either — core
+> applies that as `update_state(current, [State(incoming)])`, which unions rather
+> than replaces.
 
 Hence the rule, which is about agreement rather than about avoiding
 `validate_state`:
