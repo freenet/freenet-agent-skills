@@ -50,13 +50,15 @@ pub struct AuthorizedRecipientState {
 pub struct RecipientState {
     pub version: u64,             // monotonic, replay protection
     pub purged: Vec<u32>,          // FIFO order matters; sig covers it
-    // future fields go here, with #[serde(default)]
+    // Future fields go here, with BOTH #[serde(default)] and
+    // skip_serializing_if -- the signature covers these bytes, so a field
+    // that encodes as null when absent invalidates every existing signature.
 }
 ```
 
 Used for: River's room `Configuration`, the inbox's recipient-controlled state, owner-managed metadata.
 
-Adding a new field to a bundled-signed struct doesn't require new per-field auth, just a `#[serde(default)]` for backwards compatibility.
+Adding a new field to a bundled-signed struct doesn't require new per-field auth — the wrapping signature covers it. It does require care with the *encoding*: `#[serde(default)]` alone lets old bytes decode, but re-encoding an existing record now emits the new key and invalidates the signature over it. Add `skip_serializing_if` as well; see "`#[serde(default)]` is not enough when a signature covers the encoding" under Wire-Format Stability, which is exactly this case.
 
 ### A Symmetric Key Cannot Establish Authorship
 
@@ -116,7 +118,9 @@ pub struct RecipientState {
 }
 ```
 
-Bound the tombstone list. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full — and note *why* that is allowed to be arrival-ordered when "A Value One Party Supplies…" below says ordering by arrival is not: `RecipientState` is a version-stamped envelope the recipient re-signs in full, so the recipient chooses which tombstones survive and merges take the higher version wholesale. Nobody else's records are at stake, and no peer re-derives the order.
+Bound the tombstone list. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full.
+
+That eviction is arrival-ordered, which "A Value One Party Supplies…" below and the order-independence rule under State Size Budget both otherwise forbid, so note what makes it legal here: **no peer ever re-derives the order.** `RecipientState` is a single-writer, version-stamped envelope that the recipient re-signs in full, and the merge is last-writer-wins on that whole envelope — so peers copy the recipient's chosen list rather than each computing their own. Write `purged` as a set the merge *unions* instead, which is the more natural CRDT reflex, and the eviction stops working: every evicted tombstone comes back from any peer still holding an older copy, so the list is unbounded in practice and you are in the State Size Budget trap below. (Note which way that fails — the resurrected tombstone keeps suppressing its message. Losing the suppression is what a *successful* eviction costs, and that is the risk the LWW-envelope design accepts deliberately.)
 
 ### Cross-Context Binding
 
@@ -168,12 +172,12 @@ Three violations of it turned up in one app in one day:
 
 Ways to stay on the right side of it:
 
-- **Cap per author, not globally.** Then a forged value can only cost its own
-  author, and no amount of grinding reaches anyone else's entries. This is
-  usually the whole fix.
-- **Refuse rather than choose.** `update_state` declining a write past a
-  per-author cap needs no ranking at all, and a refused write is recoverable in
-  a way a wrong eviction is not.
+- **Cap per author, not globally, and rank each author's records only among
+  their own.** A forged value then costs its own author and reaches nobody
+  else's entries, however hard it is ground. This is usually the whole fix. Note
+  that the bound itself still has to be enforced order-independently — see State
+  Size Budget, a separate requirement that is easy to satisfy while breaking
+  this one, and vice versa.
 - **Tie-break on a deterministic function of the record's content** (a hash, or
   the signature bytes as in the last-writer-wins example in
   `contract-patterns.md`) rather than on anything about its arrival.
@@ -301,7 +305,11 @@ if message.timestamp > host_now() + MAX_FUTURE_SKEW_SECS {
 
 Rejecting is the mild version. Of the deployed contracts measured for #5465, 11 silently **prune** future-dated entries inside `update_state`, so the resulting state is a function of the evaluating peer's clock — the exact defect class conformance exists to detect, produced by the capability rather than caught by it.
 
-A **past-skew** check on stored state was always worse, for a reason independent of clocks that still applies to any time-derived rejection in `validate_state`: **a rule whose truth expires turns previously-valid state into state nothing will accept.** `validate_state` gates both the state arriving at a PUT/UPDATE and the state `update_state` returns before it is committed. So if the contract rejects state carrying any message older than `MAX_PAST_SKEW_SECS`, then 30 days after an inbox's oldest message arrives, that inbox is refused by every peer it is sent to *and* every attempt to modify it fails validation. It cannot propagate, cannot be healed, and cannot be repaired by its holder — the one operation that could drop the offending message is itself an update. The inbox is frozen permanently, by a rule nobody triggered.
+A **past-skew** check on stored state was always worse, for a reason independent of clocks that still applies to any time-derived rejection in `validate_state`: **a rule whose truth expires makes state you already hold retroactively invalid.** Thirty days after an inbox's oldest message arrives, that inbox stops validating. It is then refused by every peer it is sent to, and every attempt to modify it fails too, because `validate_state` gates the state `update_state` returns as well as the state arriving.
+
+Where that ends depends on the contract, and both endings are bad. If the merge still succeeds, the post-merge validation refuses the result and the inbox freezes: no update to it can ever land again. If the merge itself fails — which is ordinary for the monotonic-version envelopes recommended above, since a stale re-push is rejected — the node has a merge failure alongside a locally-invalid state, which is what its corrupted-state recovery keys on (freenet-core#3109), and it may **replace the inbox wholesale** with a valid state from a peer that never held the aged messages. Neither outcome is anything the app can recover from, and nobody triggered either.
+
+The size-cap trap under State Size Budget looks similar and usually ends in the first way rather than the second, because there everything committed was validated, so the held state is normally still valid. Do not lean on that difference: it is a tendency, not a guarantee — the recovery's local check is a bare `validate_state` with no related-contract resolution, so a contract that reads a related contract, or one whose validation runs out of gas on a large state, can be judged invalid there too.
 
 Replay protection for old messages should use signature-based dedup (signatures are unique per message) and tombstones — never a time window on `validate_state`.
 
@@ -358,7 +366,7 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
-- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Cap your state's distinct related references **in `update_state`**, so your merge cannot produce a state needing more than 10. Checking it only in `validate_state` is the read-only-forever trap under State Size Budget: the first merge that crosses ten is refused and so is every one after it.
+- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and enforcing the limit only in `validate_state` stops the contract accepting writes the moment an eleventh appears (see "Prune in `update_state`" under State Size Budget). Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
 ### Requesting Related State From `update_state`
@@ -511,10 +519,13 @@ The host enforces `MAX_STATE_SIZE = 50 MiB` as a hard correctness backstop — a
 an item can be any size — the real bound is 1000 × *the largest item the other side
 may send*, and the other side chooses. A cap that reads like a memory limit and is not
 one is how a contract-controlled value becomes an out-of-memory. Whenever you write a
-count over variable-size values, multiply it by that worst case and check the product;
-better, budget the **bytes** directly (a running total enforced in `update_state`) and
-let the count fall out of it. The arithmetic below is exactly that multiplication —
-note that it is the per-item cap, not the count, that makes it come out finite.
+count over variable-size values, multiply it by that worst case and check the product.
+The product is the bound to reach for: a count cap **times a per-item size cap** bounds
+bytes while staying convergent, because the per-item cap is a property of the entry.
+Budgeting the bytes directly with a running total is the tempting alternative and is
+harder than it looks; "Prune in `update_state`" below has the counterexample. The
+arithmetic below is exactly that multiplication — note that it is the per-item cap,
+not the count, that makes it come out finite.
 
 Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32 KiB` = 32 MiB messages, plus ~140 bytes/message metadata = ~32.1 MiB, plus a few KB of recipient_state. Well under the 50 MiB cap — though, per the design target below, `MAX_INBOX_MESSAGES` is a candidate to tune down or to shard further (e.g. archiving older messages into per-time-window contracts) rather than a bound to treat as settled.
 
@@ -539,28 +550,56 @@ branch (`contract/executor/runtime/{executor_impl,contract_ops}.rs`). Nothing is
 rolled back; the commit simply does not happen and the caller gets an error.
 
 That makes `validate_state` a real backstop behind your merge — and it means a
-`validate_state` cap does not corrupt anything. It does something quieter:
-
-> The first merge that would carry the state past the cap is refused — and for a
-> collection that only grows, so is every merge after it. **The contract
-> silently stops accepting writes**, and nothing can repair it: a merge is a
-> join, so it never shrinks the state, and the one operation that could is
-> itself an update. An incoming full state does not rescue it either — core
-> applies that as `update_state(current, [State(incoming)])`, which unions rather
-> than replaces.
+`validate_state` cap does not corrupt anything. It does something quieter: every
+merge that would carry the state past the cap is refused, and if the merge only
+ever unions, the headroom only shrinks, so the contract ends up refusing every
+write that would change it. Nothing repairs that from the app's side either —
+core applies an incoming full state as
+`update_state(current, [State(incoming)])`, so a peer PUT-ing a smaller state
+merges into yours rather than replacing it.
 
 Hence the rule, which is about agreement rather than about avoiding
 `validate_state`:
 
 > **`update_state` must never be able to produce a state its own
-> `validate_state` would refuse.** Where a bound is involved, that means pruning
-> in `update_state`. A bound checked only in `validate_state` is a bound your
-> merge does not know about, and the day it binds, the contract goes read-only
-> for good.
+> `validate_state` would refuse.** Where a bound is involved, that means
+> enforcing the bound inside `update_state`. A bound checked only in
+> `validate_state` is a bound your merge does not know about.
 
-The past-skew check under Time Handling is the same failure reached by a
-different route — there it is the passage of time rather than accumulation that
-makes a once-true rule false.
+Two things about how the merge should enforce it:
+
+- **The surviving set must be a function of the entry set, not of arrival
+  order.** "Evict until it fits" and "refuse the eleventh" decide which entries
+  survive from the order they arrived in, so two peers merging the same entries
+  in different orders keep different ones and never converge — a merge-law
+  violation traded for a bound. The straightforward convergent form is a **count
+  cap: sort by a key the entries themselves determine, keep the N smallest.**
+  That is order-independent because an entry among the N smallest of `A ∪ B` is
+  among the N smallest of whichever side it came from. The key must be unique —
+  tie-break on a digest of the whole entry, or two peers break the tie differently.
+  Pair it with a **per-item size cap** and you have a byte bound as well, since a
+  per-item cap is a property of the entry.
+
+  A running byte budget over the sorted list is the thing that looks equivalent
+  and is not — at least in the form that stops at the first entry which does not
+  fit. Sorting `p < q < r` with sizes 9, 2, 1 against a budget of 10, stopping at
+  the first that does not fit:
+  `{p,q}` truncates to `{p}` and `{r}` stays `{r}`, so merging those gives
+  `{p, r}` — but merging `{p,q}` with `{r}` directly gives `{p}`. Not associative,
+  which is the merge-law violation this rule exists to avoid. Skipping the
+  oversized entry and carrying on happens to survive *this* example, which is
+  the point: a byte budget has more than one plausible reading and each needs
+  its own worked check.
+- **Rank a party's records only against that party's own.** Any cross-party
+  ranking key is a thing an attacker optimises against: a supplied value
+  directly (see "A Value One Party Supplies…" above), and a content-derived one
+  by grinding the content until its digest sorts where they want it. If you find
+  yourself needing a global bound across mutually-untrusting writers, take that
+  as the signal to shard — one contract instance per writer, per room, per
+  time-window — so no ranking across parties is needed at all.
+
+The past-skew check under Time Handling is the neighbouring failure, reached by
+expiry rather than by accumulation.
 
 ## Per-Context Identity Considerations
 
@@ -589,9 +628,9 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Any `time::now()` call in a *contract* | Replicas can diverge, and the merge laws aren't well-formed statements about the contract; a node warns on load today and the call is staged to trap | Carry a client-signed timestamp in state, check monotonicity only; `fdev verify-merge --wasm` reports the import |
 | Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
 | Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
-| Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Cap distinct references in `update_state` (defense in depth in `validate_state` too) |
-| A bound your own `update_state` can step over, checked only in `validate_state` | The first merge past the cap is refused, and so is every one after it — the contract silently goes read-only for good | Prune in `update_state` so it cannot produce state its own `validate_state` refuses |
-| A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author, or refuse the write; ranking a party's own records on their own value is fine |
+| Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Bound the count structurally (fixed typed slots), so an eleventh cannot arise |
+| A bound your own `update_state` can step over, checked only in `validate_state` | Every merge that would cross the cap is refused; headroom only shrinks, so the contract ends up taking no write that changes it | Bound it inside `update_state`; keep the N smallest by a key the entries determine, never evict by arrival order |
+| A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author and rank within an author's own records; any cross-party ranking key is grindable |
 | Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |
 | New field added to a signature-covered struct with only `#[serde(default)]` | Re-encoding a pre-existing record adds a map entry and invalidates every old signature | Add `skip_serializing_if`; test against a hand-written byte literal of the old shape |
 | Writer-supplied nonce or id used as record identity | Two records under one id; permanent, unhealable divergence under first-writer-wins | Derive the id from the record's own terms, computed by the contract (`contract-patterns.md` → "Record Identity") |

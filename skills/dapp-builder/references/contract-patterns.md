@@ -176,7 +176,7 @@ generations: returning on the first refused record discards everything else the
 predecessor held (see `upgrade-and-migration.md` → "A New Version Must Accept
 Old State", where exactly that cost a seller their whole store).
 
-Three details that ride along with the same loop:
+Four details that ride along with the same loop:
 
 - **Do not leave a partial mutation behind.** `freenet-scaffold`'s derive
   propagates an `Err` and stdlib's `inner_update_state` returns without
@@ -191,15 +191,33 @@ Three details that ride along with the same loop:
 - **`apply_delta` is a merge, so it must be idempotent and order-independent
   like every other merge path.** A delta that appends, or that mutates a
   counter, breaks the laws just as surely inside `apply_delta` as inside a
-  whole-state merge. Note the constraint this puts on the "filtering" choice: a
-  filter must be a predicate on the *entry* (does it authorize?), never on how
-  full the state has got, or two peers applying the same entries in different
-  orders keep different ones. A predicate that reads the state is only safe when
-  its answer cannot depend on the order — dedup-as-you-go qualifies **provided
-  the id is content-derived** (see "Record Identity"), because two entries
-  sharing an id are then the same entry and which one the loop keeps cannot
-  matter. With a writer-supplied id it is order-dependent, and therefore a
-  merge-law violation.
+  whole-state merge. Note the constraint this puts on the "filtering" choice:
+  what must be order-independent is the loop's **result**, not each predicate's
+  answer. A filter that reads only the entry is trivially safe; one that reads
+  how full the state has got is not. The one that catches people out is
+  authorization, because it usually reads state: "is this author a member?"
+  answers differently depending on whether *add member M* has been applied yet —
+  and not only within one delta, since the two facts can arrive in separate
+  deltas in either order. There is no ordering discipline that fixes that. Two
+  shapes do converge: have each entry **carry its own authorization proof** (a
+  signed invite chain rooted in the contract's parameters), which turns the
+  predicate back into one that reads only the entry; or **keep the entry and
+  authorize at read time**, so the merge is a plain union and the question "is
+  this author a member?" is answered by a view over the merged state rather than
+  by whether the loop had got to *add M* yet.
+
+  Making membership add-only is worth doing but does **not** by itself fix this,
+  and it is easy to believe it does. It makes *acceptance* stable — once a
+  message is in, it stays in — so a peer that dropped it can pick it up again
+  through anti-entropy. The merge is still order-dependent in the meantime, and
+  `fdev verify-merge` will say so.
+- **Dedup-as-you-go is the same shape with a happier ending.** Its answers *are*
+  order-dependent, yet the result is not — **provided the id covers every term of
+  the record** (see "Record Identity"), because two entries sharing an id are
+  then byte-for-byte the same entry and which one survives cannot matter. Note
+  how much work "every term" is doing: an id hashing only *some* of the record is
+  content-derived and still leaves two different entries under one id, so the
+  result depends on order again. A writer-supplied id fails the same way.
 
 ## The Delta to an Up-to-Date Peer
 
@@ -538,10 +556,14 @@ ranks; it is an untrusted hint, so don't build eviction or expiry on it.
 
 **Note what `MessageId` above does and does not bind.** It identifies a message
 by its author and position, not by its content, so the same author can sign two
-different message bodies under one id — the defect described under "Record
-Identity" below. That is tolerable only where a later reader never relies on the
-id to bind anything about the body. If it might, hash the signed payload into
-the id.
+different bodies under one id — the defect described under "Record Identity"
+below. And the `BTreeMap` keyed on it is itself a reader relying on that id: the
+map holds one of the two bodies, and unless the merge carries an explicit
+deterministic tie-break (the last-writer-wins pattern below has one; a bare
+`insert` does not) *which* one is decided by arrival order, so peers diverge.
+Add a digest of the signed payload as a **trailing** field of `MessageId` —
+trailing because the id is also the map's ordering key, and a leading content
+hash would destroy the timestamp ordering this section is about.
 
 ### 3. Last-Writer-Wins with Version
 
@@ -789,7 +811,12 @@ Permissionless contract migration only works if all of these hold:
    `validate_state` lets a malicious re-PUT win.** If any field can be forged by an
    untrusted peer, migration becomes an attack vector, so keep the validator strict.
 3. **State serialization is backwards-compatible.** New fields use
-   `#[serde(default)]`; fields are never removed or renamed; existing field
+   `#[serde(default)]` — plus `skip_serializing_if` wherever a signature covers
+   the encoding, which is invariant 2's whole point and bites hardest right here:
+   a migration fold deserializes old state and re-serializes it under the new
+   WASM, and a field that encodes as `null` when absent invalidates every
+   signature in the process (see `state-authorization-patterns.md` →
+   Wire-Format Stability). Fields are never removed or renamed; existing field
    formats never change. If a breaking state change is genuinely required,
    create an explicit `StateV2` type with a written migration. Do not try to
    evolve `StateV1` in place.

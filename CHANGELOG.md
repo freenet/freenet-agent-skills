@@ -2,6 +2,83 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.37.1 (2026-09-06)
+
+Corrections to 1.37.0, which merged while its review was still running. Three
+more adversarial passes ran after that merge and each found a real error in the
+text that shipped. The pattern is worth naming because it is the same one 1.37.0's
+own testing section is about: **a correct mechanism paired with a consequence
+drawn from it that runs backwards.** Six passes in total; five of them found that
+the previous round's fix had introduced a new error of exactly that shape.
+
+- **`validate_state` is run on what your merge produces, and 1.37.0 said the
+  opposite in one place while relying on the truth of it in another.** The host
+  validates the state arriving at a PUT/UPDATE *and* the state `update_state`
+  returns, before committing it (`bridged_upsert_contract_state_inner`,
+  `get_updated_state`, and the re-PUT branch). Nothing is rolled back; the commit
+  simply does not happen. This is the finding a reviewer that reads only the
+  function you named will get wrong — `attempt_state_update` neither validates nor
+  commits, and both facts are its caller's.
+- **The past-skew ending was wrong in both earlier versions.** A rule whose truth
+  expires does not merely freeze the state. If the merge still succeeds, the
+  post-merge validation refuses the result and the contract freezes; if the merge
+  fails too — ordinary for the monotonic-version envelopes this skill recommends,
+  since a stale re-push is rejected — the node has a merge failure alongside a
+  locally-invalid state, which is what its corrupted-state recovery keys on
+  (freenet-core#3109), and it may replace the state wholesale. Both endings are
+  now named, with the conditions that select between them, and the earlier claim
+  that the size-cap trap is distinguishable "by construction" is hedged: the
+  recovery's local check is a bare `validate_state` with no related-contract
+  resolution and can trap or run out of gas.
+- **The bound must live inside `update_state`, and the way it does so matters as
+  much as where.** A bound checked only in `validate_state` is one your merge does
+  not know about, and the day it binds the contract refuses every write that would
+  change it. But "evict until it fits" and "refuse the eleventh" decide which
+  entries survive from arrival order, so peers diverge — a merge-law violation
+  traded for a bound. The convergent form is a count cap keeping the N smallest by
+  a **unique** key the entries determine, paired with a per-item size cap when you
+  need a byte bound. A running byte budget over the sorted list looks equivalent
+  and is not; the counterexample is in the text, along with the caution that a
+  byte budget has more than one plausible semantics and each needs its own check.
+- **Rank a party's records only against that party's own — including when the key
+  is a hash.** An intermediate draft said a content-derived ranking key was safe
+  "since nobody can aim it". A hash is aimable by grinding the content: beating
+  the smallest of a thousand costs about a thousand hashes. A content hash is a
+  fine tie-break and a bad global eviction rank.
+- **Two shapes converge for an authorization filter that reads state, and
+  "make membership add-only" is not one of them.** With add-only membership,
+  *acceptance* is stable but *rejection* is not, so a peer holding `add M` keeps
+  M's message and a peer that does not yet hold it drops one — a non-commutative
+  merge. What monotonicity buys is that a dropped entry can be picked up again by
+  anti-entropy. The shapes that actually converge: have the entry carry its own
+  signed authorization proof rooted in the contract's parameters, or keep the
+  entry and authorize at read time over the merged state.
+- **`#[serde(default)]` is not enough when a signature covers the encoding — in
+  all four places that said it was.** 1.37.0 corrected one. The Bundled Signature
+  pattern and its code comment, and both migration architecture invariants, gave
+  the unqualified advice; the migration one bites hardest, since a fold
+  deserializes old state and re-serializes it under new WASM, which is the exact
+  re-encode that invalidates the signatures.
+- **`validate_state` does not run on every state *load*.** A GET serves from the
+  state store without validating. It runs on every incoming state and on every
+  state `update_state` returns. Both places that relied on the wrong version keep
+  their conclusions, which is why the error survived so long.
+- Smaller corrections in the same sweep: the `MessageId` example makes a
+  writer-supplied id the record identity, which the new Record Identity section
+  calls a defect — annotated, with the note that a content digest belongs in a
+  *trailing* field since the id is also the map's ordering key; the
+  related-contracts limit and its pitfalls row gave opposite advice, and now both
+  say to bound the count structurally; the tombstone paragraph's union-merge
+  failure ran backwards (a resurrected tombstone keeps *suppressing* its message —
+  what fails is that the eviction never sticks); and the dedup-as-you-go argument
+  leaned on "content-derived id" where the load-bearing property is that the id
+  covers *every* term.
+
+Every mechanism claim above was checked against freenet-core's
+`contract/executor/runtime/{executor_impl,contract_ops}.rs`, freenet-stdlib's
+`delegate_host.rs` / `delegate_interface.rs` / `contract_composition.rs`, and
+`freenet-migrate` 0.6.0's `src/delegate.rs`.
+
 ## 1.37.0 (2026-09-06)
 
 Findings from a day of building and adversarially reviewing a Freenet
