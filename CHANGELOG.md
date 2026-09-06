@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.37.3 (2026-09-06)
+
+A trim, and the reason for it is the release's own lesson.
+
+**A rule does not expire; a claim about mechanism does.** *"`update_state` must
+never produce a state its own `validate_state` would refuse"* holds for as long
+as contracts have those two functions. Every sentence describing which internal
+function calls which, in what order, and what its caller does with the result is
+true only until freenet-core changes — and nobody re-reads a skill to check. So
+each paragraph of node internals is a future false claim with a delay fuse, in a
+document whose own thesis is that confident false claims are the expensive kind.
+
+That was not hypothetical: across 1.37.0–1.37.2 the mechanism paragraphs were the
+part that broke, twice, in opposite directions, and one wrong version shipped.
+The rule survived every pass unchanged.
+
+- **The State Size Budget section is cut from 89 lines to 73**, and what went is
+  the call-graph detail: which executor function validates what, the log-severity
+  predicates, the self-healing-fetch consequence, the #3109 preconditions. What
+  stays is the rule, the three things a reader can act on (give the contract
+  something that shrinks; nothing is corrupted and nothing diverges; the failure
+  is loud, not silent), and the two order-independence rules — which are about
+  *your* code, so they do not go stale. It is renamed to **"Bound It In
+  `update_state`, Never Only In `validate_state`"**, since the rule rather than
+  the mechanism is now the subject.
+- **The detail is replaced by a pointer**, with a note saying why: read
+  `crates/core/src/contract/executor/runtime/{executor_impl,contract_ops}.rs`
+  rather than trusting a paraphrase of it, including this one.
+- **The worked example under "Tests That Would Have Caught It" is kept exactly as
+  strong**, and gains the conclusion the trim itself demonstrates: write the rule,
+  write the shortest reason that makes it stick, point at the source for the rest —
+  both errors it describes were in the part that should have been a pointer.
+
+The 1.37.0 entry's superseded bullet stays marked in place rather than rewritten.
+That version shipped; the record should say what it said.
+
 ## 1.37.2 (2026-09-06)
 
 1.37.0 and 1.37.1 got the *mechanism* right and then drew a false conclusion from

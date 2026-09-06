@@ -309,9 +309,9 @@ A **past-skew** check on stored state was always worse, for a reason independent
 
 An update that *drops* the offending message produces a state that passes and commits, so this is not an instant dead end. What makes it permanent is that the freeze **re-arms**: purge the oldest message and the next-oldest crosses `MAX_PAST_SKEW_SECS` shortly after, so anything short of a prune cycle faster than the window puts you straight back. And unlike the size-cap case there is no help from outside, because **every peer's copy aged into the same condition independently** — there is no valid donor state anywhere in the network to recover from.
 
-Worse, the node may take the state away rather than merely refuse it. Where the merge *also* fails — which is ordinary for the monotonic-version envelopes recommended above, since a stale re-push is rejected — the node has a merge failure alongside a locally-invalid state, which is what its corrupted-state recovery keys on (freenet-core#3109), and it may **replace the inbox wholesale**.
+Worse, a node may take the state away rather than merely refuse it: a locally-invalid state is what a node's corrupted-state recovery keys on, and it can replace the whole thing (freenet-core#3109).
 
-Do not read the size-cap trap under State Size Budget as the same failure. There the held state is *valid*: it was validated when it was committed, it propagates, peers agree, and the contract has merely run out of room. Here the held state is invalid, which is what makes it unpushable and what puts the #3109 recovery in reach. One wants a prune added; the other wants the rule removed.
+Do not read the size-cap trap under State Size Budget as the same failure. There the held state is *valid* — it was validated when it was committed, it propagates, and the contract has merely run out of room. Here the held state is invalid, which is what makes it unpushable and what puts that recovery in reach. One wants a prune added; the other wants the rule removed.
 
 Replay protection for old messages should use signature-based dedup (signatures are unique per message) and tombstones — never a time window on `validate_state`.
 
@@ -368,18 +368,17 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
-- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and and the limit is not yours to enforce anyway — the **host** rejects the request when the contract asks for more than ten (`"contract requested N related contracts, limit is 10"`), so the operation fails outright rather than your `validate_state` returning `Invalid`. Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
+- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and and the limit is not yours to enforce anyway — the **host** rejects the request outright when a contract asks for more than ten, so the operation fails rather than your `validate_state` returning `Invalid`. Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
 ### Requesting Related State From `update_state`
 
 `update_state` takes no `related` parameter, but it is not confined to `validate_state` for cross-contract reads: return `UpdateModification::requires(vec![...])` and the host resolves those contracts — local state store first, network only as fallback — and re-invokes `update_state` with the results supplied as `UpdateData::RelatedState` entries.
 
-The host also runs `validate_state` on the state `update_state` returns, before
-committing it, and refuses the update if it is not `Valid` — so validate remains
-the backstop. Nothing is rolled back: the commit simply does not happen. Note
-what that costs when the two functions disagree about a bound — see "Prune in
-`update_state`" under State Size Budget.
+The host also validates the state `update_state` returns before committing it,
+so validate remains the backstop — and note what that costs when your two
+functions disagree about a bound, since the merge is then refused rather than
+corrected: see "Bound It In `update_state`" under State Size Budget.
 
 **Prefer the `update_state` route where either would work.** Related state resolved during *validation* is never captured by the conformance system (freenet-core#5376), so a contract whose validity depends on that path can never be judged — and an unjudgeable contract reads exactly like a clean one. The update path is captured today.
 
@@ -525,7 +524,7 @@ count over variable-size values, multiply it by that worst case and check the pr
 The product is the bound to reach for: a count cap **times a per-item size cap** bounds
 bytes while staying convergent, because the per-item cap is a property of the entry.
 Budgeting the bytes directly with a running total is the tempting alternative and is
-harder than it looks; "Prune in `update_state`" below has the counterexample. The
+harder than it looks; "Bound It In `update_state`" below has the counterexample. The
 arithmetic below is exactly that multiplication — note that it is the per-item cap,
 not the count, that makes it come out finite.
 
@@ -535,83 +534,57 @@ Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32
 
 Large *binary* assets served by the UI (audio, video, images, user uploads) are a special case of the same sharding advice, not a new problem: give the asset its own contract instance instead of embedding it in the webapp bundle's state, and reference it from the UI by key. See `ui-patterns.md` → "Large Binary Assets: Their Own Contract, Not the Webapp Bundle" for the same-origin fetch mechanism that makes this work under the gateway CSP.
 
-### Prune in `update_state`; Never Let `validate_state` Refuse What Your Own Merge Produces
+### Bound It In `update_state`, Never Only In `validate_state`
 
 Having settled on a cap — bytes, items, tombstones, whatever it bounds — decide
-where it is enforced. **`update_state` pruning the excess** keeps the state
-inside the cap by construction. **`validate_state` returning `Invalid` past the
-cap** does something quite different, and the host's call graph is what makes it
-different:
-
-`validate_state` runs on the state *arriving* at a PUT/UPDATE, **and again on
-the state your `update_state` returns, before it is committed** — the merge
-result goes through `fetch_related_for_validation` in
-`bridged_upsert_contract_state_inner`, and through
-`fetch_related_for_validation_network` in `get_updated_state` and the re-PUT
-branch (`contract/executor/runtime/{executor_impl,contract_ops}.rs`). Nothing is
-rolled back; the commit simply does not happen and the caller gets an error.
-
-That makes `validate_state` a real backstop behind your merge, so a
-`validate_state` cap corrupts nothing and diverges nothing. What it costs is
-**liveness**, and the shape is worth being precise about, because two obvious
-readings of it are both wrong.
-
-What is refused is the merge whose *output* exceeds the cap — not every update.
-An update whose merged result lands back under the cap validates and commits
-normally. So if your contract has an operation that shrinks the state — a purge,
-a tombstone that removes what it suppresses, a recipient re-signing a smaller
-envelope — the freeze is recoverable, and making sure one exists is the cheap
-insurance.
-
-If it does not, the state sits at the cap and every write that would add anything
-is refused, indefinitely. Note what is *not* wrong in that situation: the stored
-state was validated when it was committed, so it is valid, it propagates, and
-peers agree on it. The contract is not broken, it is full. (A smaller state
-arriving from a peer does not help by itself: core hands it to your own
-`update_state` alongside the current state rather than replacing anything, so it
-only rescues you if your merge is willing to drop entries.)
-
-**And it is loud, not silent** — worth saying because a skill that teaches people
-to fear silent failure should not misapply the label. The error `validate_state`
-produces here carries the cause `"invalid outcome state"`, which matches neither
-`is_invalid_update_rejection` nor `is_contract_exec_rejection`, so it falls to
-the default arm at both log sites: **ERROR** from `log_update_contract_failure`,
-and **WARN** plus a *spurious self-healing GET* from
-`log_broadcast_to_streaming_failure`, which fetches contract code that is already
-present. Wasteful, and visible to an operator.
-
-Hence the rule, which is about agreement rather than about avoiding
-`validate_state`:
+where it is enforced.
 
 > **`update_state` must never be able to produce a state its own
-> `validate_state` would refuse.** Where a bound is involved, that means
-> enforcing the bound inside `update_state`. A bound checked only in
-> `validate_state` is a bound your merge does not know about.
+> `validate_state` would refuse.** A merge whose output your own validator
+> rejects is an update that cannot land. A bound checked only in
+> `validate_state` is a bound your merge does not know about, so the day it
+> binds, every write that would cross it is refused — indefinitely, if nothing
+> in the contract ever shrinks the state.
 
-Two things about how the merge should enforce it:
+Three things follow, and they are the whole of what you can act on:
+
+- **Give the contract something that shrinks.** What is refused is the merge
+  whose *output* exceeds the cap, not every update, so a purge, a removing
+  tombstone or a re-signed smaller envelope lands normally and lifts the freeze.
+  Having one is cheap insurance; not having one is what makes the freeze
+  permanent.
+- **Nothing is corrupted, and nothing diverges.** The stored state was validated
+  when it was committed, so it is valid, it propagates, and peers agree on it.
+  The contract is not broken, it is full. (A smaller state arriving from a peer
+  does not rescue you by itself — the host hands it to your own `update_state`
+  alongside the current state rather than replacing anything, so it helps only
+  if your merge is willing to drop entries.)
+- **It is loud, not silent.** The node logs the refusal as an error rather than
+  swallowing it, so it is findable. Worth saying because a skill that teaches
+  people to fear silent failure should not misapply the label to a failure that
+  announces itself.
+
+Two rules about how the merge should do the bounding — these are about your
+code, so unlike the paragraph above they do not go stale:
 
 - **The surviving set must be a function of the entry set, not of arrival
   order.** "Evict until it fits" and "refuse the eleventh" decide which entries
   survive from the order they arrived in, so two peers merging the same entries
   in different orders keep different ones and never converge — a merge-law
   violation traded for a bound. The straightforward convergent form is a **count
-  cap: sort by a key the entries themselves determine, keep the N smallest.**
-  That is order-independent because an entry among the N smallest of `A ∪ B` is
+  cap: sort by a key the entries themselves determine, keep the N smallest**,
+  which is order-independent because an entry among the N smallest of `A ∪ B` is
   among the N smallest of whichever side it came from. The key must be unique —
-  tie-break on a digest of the whole entry, or two peers break the tie differently.
-  Pair it with a **per-item size cap** and you have a byte bound as well, since a
-  per-item cap is a property of the entry.
+  tie-break on a digest of the whole entry. Pair it with a **per-item size cap**
+  and you have a byte bound too, since a per-item cap is a property of the entry.
 
-  A running byte budget over the sorted list is the thing that looks equivalent
-  and is not — at least in the form that stops at the first entry which does not
-  fit. Sorting `p < q < r` with sizes 9, 2, 1 against a budget of 10, stopping at
-  the first that does not fit:
-  `{p,q}` truncates to `{p}` and `{r}` stays `{r}`, so merging those gives
-  `{p, r}` — but merging `{p,q}` with `{r}` directly gives `{p}`. Not associative,
-  which is the merge-law violation this rule exists to avoid. Skipping the
-  oversized entry and carrying on happens to survive *this* example, which is
-  the point: a byte budget has more than one plausible reading and each needs
-  its own worked check.
+  A running byte budget over the sorted list looks equivalent and is not, at
+  least in the form that stops at the first entry which does not fit: sorting
+  `p < q < r` with sizes 9, 2, 1 against a budget of 10, `{p,q}` truncates to
+  `{p}` and `{r}` stays `{r}`, so merging those gives `{p, r}` — while merging
+  `{p,q}` with `{r}` directly gives `{p}`. Not associative. Skipping the
+  oversized entry and carrying on survives *this* example, which is the point: a
+  byte budget has more than one plausible reading and each needs its own check.
 - **Rank a party's records only against that party's own.** Any cross-party
   ranking key is a thing an attacker optimises against: a supplied value
   directly (see "A Value One Party Supplies…" above), and a content-derived one
@@ -621,7 +594,16 @@ Two things about how the merge should enforce it:
   time-window — so no ranking across parties is needed at all.
 
 The past-skew check under Time Handling is the neighbouring failure, reached by
-expiry rather than by accumulation.
+expiry rather than by accumulation, and it ends worse.
+
+> **On the node-side detail deliberately left out of this section.** Which
+> executor function validates what, in which order, and what its caller does
+> with the result, is a fact about a freenet-core version rather than about your
+> contract — and nobody re-reads a skill to check whether it still holds. Two
+> earlier revisions of this section got that call graph wrong in opposite
+> directions and one of them shipped. If you need it, read
+> `crates/core/src/contract/executor/runtime/{executor_impl,contract_ops}.rs`
+> rather than trusting a paraphrase of it, including this one.
 
 ## Per-Context Identity Considerations
 
