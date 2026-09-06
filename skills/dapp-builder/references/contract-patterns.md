@@ -191,14 +191,15 @@ Three details that ride along with the same loop:
 - **`apply_delta` is a merge, so it must be idempotent and order-independent
   like every other merge path.** A delta that appends, or that mutates a
   counter, breaks the laws just as surely inside `apply_delta` as inside a
-  whole-state merge. Note the constraint this puts on both bullets above: a
+  whole-state merge. Note the constraint this puts on the "filtering" choice: a
   filter must be a predicate on the *entry* (does it authorize?), never on how
   full the state has got, or two peers applying the same entries in different
-  orders keep different ones. Dedup-as-you-go is the one admissible exception,
-  and only because a **content-derived** id (see "Record Identity") makes two
-  entries sharing an id the same entry, so which of them the loop happens to
-  keep cannot matter. With a writer-supplied id it is order-dependent and
-  therefore a merge-law violation.
+  orders keep different ones. A predicate that reads the state is only safe when
+  its answer cannot depend on the order — dedup-as-you-go qualifies **provided
+  the id is content-derived** (see "Record Identity"), because two entries
+  sharing an id are then the same entry and which one the loop keeps cannot
+  matter. With a writer-supplied id it is order-dependent, and therefore a
+  merge-law violation.
 
 ## The Delta to an Up-to-Date Peer
 
@@ -534,6 +535,13 @@ pub struct MessageId {
 The timestamp here comes from the **author's signed payload**, carried in the
 state — never from `freenet_stdlib::time::now()` inside the merge. It orders and
 ranks; it is an untrusted hint, so don't build eviction or expiry on it.
+
+**Note what `MessageId` above does and does not bind.** It identifies a message
+by its author and position, not by its content, so the same author can sign two
+different message bodies under one id — the defect described under "Record
+Identity" below. That is tolerable only where a later reader never relies on the
+id to bind anything about the body. If it might, hash the signed payload into
+the id.
 
 ### 3. Last-Writer-Wins with Version
 
@@ -1187,12 +1195,10 @@ already passed.
   implementation instead.** Deleting a check usually fails something. Replacing
   it with the check a careful person would have written by mistake — comparing
   the wrong field, taking the first match instead of the only match, ordering by
-  the wrong key — usually does not, and that is the version that ships. (If you
-  wrote the test after the code, you have never observed it fail at all; a
-  mutation is how you find out whether it can.)
+  the wrong key — usually does not, and that is the version that ships.
 - **Test a guard against a *simulated future change*, not against the bug you
   already fixed.** The two are different inputs, and only the first exercises
-  what the guard is for. `upgrade-and-migration.md` → "Test the upgrade path"
+  what the guard is for. `upgrade-and-migration.md` → "Test the upgrade path, not just the new version"
   has the canonical case, a derivation pin, where getting this backwards
   produces a test that fires on nothing.
 - **A comment asserting a safety property is a claim, not evidence.** Twelve
@@ -1201,8 +1207,6 @@ already passed.
   true of the thing they were reasoning about, never turned around and asked what
   else in the function could break it. Each such sentence is a test you have not
   written, or a claim to delete.
-
-Ask the same of any tool that reports success: what input would make it say no?
 
 ## River Contract Reference
 

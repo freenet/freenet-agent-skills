@@ -10,9 +10,9 @@ counts below are real, and each one is a case where a full test suite, clippy on
 both targets, and at least one review round had already passed.
 
 - **Record identity, and the one function that decides it.**
-  `contract-patterns.md` gains "Record Identity: Content-Derived, and Decided in
-  One Place". An id that does not cover every term of the record it names lets
-  one author sign two different records under one id, and under a
+  `contract-patterns.md` gains a "Record Identity" section. An id that does not
+  cover every term of the record it names lets one author sign two different
+  records under one id, and under a
   first-writer-wins merge that is *permanent divergence that cannot heal* —
   both peers' summaries already name the id, so neither can tell the other
   anything is missing. Eight instances in one app: six sites deciding "already
@@ -52,13 +52,14 @@ both targets, and at least one review round had already passed.
   pass.
 - **Prune in `update_state`; never let `validate_state` refuse what your own
   merge produces.** `state-authorization-patterns.md` → State Size Budget. The
-  host validates the state *arriving* at a PUT/UPDATE, but commits the output of
-  `update_state` without re-validating it, and a GET does not validate what it
-  serves. So a bound checked only in `validate_state` is a bound your merge does
-  not know about: two legitimate merges step past it, the result is committed
-  unvalidated, no peer will then accept it, and the node's corrupted-local-state
-  recovery cannot help because it repairs by substituting a *valid incoming*
-  state and by construction none exists.
+  host runs `validate_state` on the state arriving at a PUT/UPDATE *and* on the
+  state `update_state` returns, before committing it, so a `validate_state` cap
+  corrupts nothing — it does something quieter. The first merge that would carry
+  the state past the cap is refused, and so is every merge after it: the contract
+  silently goes read-only for good, because the only operation that could shrink
+  the state is an update and every update is now refused. Same failure as the
+  past-skew check under Time Handling, reached by accumulation rather than by the
+  passage of time.
 - **A value one party supplies may only decide the fate of that party's own
   records.** Same file, under Replay Protection — stated as a boundary rather
   than a ban, because the monotonic-counter and last-writer-wins patterns already
@@ -96,24 +97,29 @@ both targets, and at least one review round had already passed.
   change* rather than the bug you already fixed; and treat a comment asserting a
   safety property as a claim needing a test rather than as evidence. Twelve such
   comments in one round asserted properties the code did not have.
-- **Correction: `validate_state` does not run on every state load, and does not
-  run on what your merge produces.** Three places said otherwise. It runs on the
-  state *arriving* at a PUT/UPDATE (and on the GET caching path);
-  `attempt_state_update` commits the merge result directly, only the
-  replay-after-initialization branch re-validates, and a GET serves from the
-  state store without validating. Fixed in `state-authorization-patterns.md`
-  (twice — the related-contracts "backstop" claim and the past-skew paragraph's
-  justification) and `identity-and-addressing.md` (the per-member certificate
-  cost argument). Both conclusions survive the correction, and the past-skew one
-  survives for a reason worth having in writing: what makes a `validate_state`
-  rule dangerous is that its truth can *change*, not how often it is checked.
+- **Correction: `validate_state` does not run on every state *load*.** Two places
+  said it did. A GET serves from the state store without validating. What it
+  actually runs on is every incoming state (PUT, UPDATE, and the GET caching
+  path) and every state `update_state` returns before it is committed — which is
+  still often, so the conclusions in both places survive: `identity-and-addressing.md`'s
+  argument against verifying a certificate per member, and
+  `state-authorization-patterns.md`'s past-skew paragraph, whose mechanism is now
+  stated as the freeze it actually is (the inbox is refused by every peer *and*
+  by every attempt to modify it, and the one operation that could drop the
+  offending message is itself an update).
 
 Verified against freenet-stdlib `rust/src/delegate_host.rs`,
 `rust/src/delegate_interface.rs` and `rust/src/contract_composition.rs`,
 `freenet-migrate` 0.6.0's `src/delegate.rs`, and freenet-core's
 `contract/executor/runtime/{executor_impl,contract_ops}.rs` — rather than taken
-on report. An independent adversarial review of the first draft found four
-blocking errors in exactly these claims; they are fixed here.
+on report. Two independent adversarial reviews ran. The first found four
+blocking errors in these API claims; the second found that one of the four was
+itself wrong, and that the fix for it had replaced a true statement with a false
+one (`validate_state` **is** run on the output of `update_state`, at
+`bridged_upsert_contract_state_inner`, `get_updated_state`, and the re-PUT
+branch). Worth recording, because it is the finding this release's own testing
+section is about: the reviewer that reads only the function you named will
+confirm whatever that function does.
 
 ## 1.36.0 (2026-09-04)
 

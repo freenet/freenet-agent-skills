@@ -267,14 +267,13 @@ If the change makes previously-published records unverifiable:
    the app**, in language saying the loss was expected as part of an upgrade
    rather than that something broke.
 
-The reason to spend deliberate effort on this *before* launch — on what each id
-covers, on parameter structs (they are hashed into the address; see the
-parameter-change section below), and on state shapes — is that afterwards there
-is often no good option left. Play the case above forward past a launch: the
-correct fix destroys every seller's shop, the escape hatch requires every
-affected seller to still hold their identity and open the app, and accepting the
-old format reopens the defect. There is no fourth option, so **the defect would
-have been carried indefinitely.**
+Spend deliberate effort on this *before* launch — on what each id covers, on
+parameter structs (they are hashed into the address; see the parameter-change
+section below), and on state shapes. Afterwards there is often no good option
+left: in the case above, after a launch the correct fix destroys every seller's
+shop, the escape hatch reaches only sellers still holding their identity, and
+accepting the old format reopens the defect. There is no fourth option, so **the
+defect would simply have been carried indefinitely.**
 
 ## The one truth that shapes everything
 
