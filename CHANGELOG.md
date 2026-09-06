@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.37.0 (2026-09-06)
+
+Findings from a day of building and adversarially reviewing a Freenet
+marketplace app — three PRs across two repositories, eight review rounds. The
+counts below are real, and each one is a case where a full test suite, clippy on
+both targets, and at least one review round had already passed.
+
+- **Record identity, and the one function that decides it.**
+  `contract-patterns.md` gains "Record Identity: Content-Derived, and Decided in
+  One Place". An id that does not cover every term of the record it names lets
+  one author sign two different records under one id, and under a
+  first-writer-wins merge that is *permanent divergence that cannot heal* —
+  both peers' summaries already name the id, so neither can tell the other
+  anything is missing. Eight instances in one app: six sites deciding "already
+  held" by a writer-supplied nonce (five correct on the day they were written,
+  and then the identity moved in one file), plus order and listing ids that
+  hashed only some of their terms. Derive from content, compute in the contract,
+  and route every sameness decision through one function.
+- **A new contract version must accept old state.** New section in
+  `upgrade-and-migration.md`, carrying Ian's framing: *any UI should be able to
+  upgrade a contract, because the state just needs to be transferred from old to
+  new — the assumption being that new contracts always accept old contract
+  state.* That property is what lets a user who never opens the app again be
+  carried forward by whoever does. A derivation change breaks it by
+  construction, which makes it a breaking change to users' data rather than an
+  internal refactor. Covers why accepting the old format in `verify` is not the
+  answer (it reopens the hole, and a contract has no history so it cannot be
+  scoped to old data), the owner-assisted re-issue fallback and the "any UI can
+  migrate" property it spends, and the four-step rule for someone about to
+  change a derivation.
+- **Migration fixtures built with the current derivation cannot see the past.**
+  `upgrade-and-migration.md` → "Test the upgrade path". Every fixture in a repo
+  builds records the current way, so none can hold what a predecessor produced —
+  which is exactly why the change above passed everything. Wherever old bytes
+  and new code meet, the fixture must be bytes, not a constructor call. The
+  mirror-image trap for the guard against a *future* change: pin the current
+  derivation's own output, because a fixture hard-coding the *old* value is
+  refused whatever the derivation is and so fires on nothing.
+- **`apply_delta` must be all-or-nothing.** New subsection in
+  `contract-patterns.md`. Returning on the first bad entry leaves earlier entries
+  merged into state nothing validated as a whole — and refused *held* state is
+  not recoverable the way a refused delta is. Wrong in three of three composable
+  state types in one app; one instance let a single crafted delta permanently
+  invalidate another user's mailbox with one write and no key. Also: do not
+  snapshot the dedup set before the loop, or two entries in the same delta
+  colliding on the key both pass.
+- **Bound state by pruning, never by rejecting.** `state-authorization-patterns.md`
+  → State Size Budget. A cap enforced in `validate_state` turns one oversized
+  write into an instance no peer can ever serve or repair, because every edit has
+  to pass the same check that is refusing it. Generalises the past-skew rule that
+  was already there.
+- **Never rank on a value the other side chooses.** Same file, under Replay
+  Protection. Three instances in one day: mailbox retention driven by an
+  unauthenticated timestamp (one forged message emptied a mailbox), a fold
+  tie-break steered by submission order, and an eviction ranking reading a
+  timestamp out of an imported backup string. This is the general form of the
+  existing "a client-supplied timestamp must not be an eviction key" line — it
+  is not really about clocks, and signing the timestamp does not fix it.
+- **A symmetric key cannot establish authorship.** Same file, under
+  Authentication Patterns. Both parties hold the key by necessity, so a
+  direction label inside the ciphertext is something the counterparty can write.
+  Decryption proves membership; authorship needs its own signature.
+- **`#[serde(default)]` is not enough when a signature covers the encoding.**
+  Same file, under Wire-Format Stability, correcting text that previously
+  presented `#[serde(default)]` as the whole answer. A new `Option` field that
+  serialises as `null` when absent turns ciborium's `map(13)` into `map(14)` and
+  invalidates every signature ever made over that type, including on records
+  already published. Use `skip_serializing_if`, and test against a hand-written
+  byte literal of the old shape — building a modern struct with the field set to
+  `None` only proves today's code agrees with itself.
+- **Put the delegate's origin gate at the boundary, not per handler.**
+  `delegate-patterns.md`. A payment-hijack hole existed because a third request
+  family was added past the one function that held the origin check; the two
+  older families were still gated and the code looked consistent. Uses
+  `freenet-migrate`'s `OriginPolicy`, which fails closed on an unattested
+  `None`. Paired with the reason that hole had no test: `DelegateCtx`'s secret
+  methods are inert stubs off `wasm32` (freenet-stdlib's `delegate_host.rs`,
+  the `#[cfg(not(target_family = "wasm"))]` arms), so a handler taking a
+  `DelegateCtx` cannot be exercised under `cargo test` at all. Take
+  `impl SecretStore` instead.
+- **Tests that would have caught it.** New closing section in
+  `contract-patterns.md`. Write the test first and *watch it fail*; deletion is
+  the weakest mutation, so substitute a wrong-but-plausible implementation; test
+  a guard against a *simulated future change* rather than the bug you already
+  fixed; and treat a comment asserting a safety property as a claim needing a
+  test rather than as evidence. Twelve such comments in one round asserted
+  properties the code did not have, and eight scripts reported success while
+  measuring nothing.
+
+Verified against freenet-stdlib `rust/src/delegate_host.rs` and
+`freenet-migrate` 0.6.0's `src/delegate.rs` rather than taken on report.
+
 ## 1.36.0 (2026-09-04)
 
 Field findings from a night of building and deploying a Freenet app. Two are

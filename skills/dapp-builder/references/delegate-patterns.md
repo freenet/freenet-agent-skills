@@ -479,6 +479,84 @@ match origin {
 
 **Security note:** Do not trust `MessageOrigin::Delegate` for sensitive operations unless you whitelist the caller's `DelegateKey`. Per the stdlib docs, an inter-delegate message *replaces* rather than composes with any inherited `WebApp` origin the calling delegate may itself hold — the receiver sees only `Delegate(caller_key)` for the duration of the call and does not gain contract access on behalf of any web app the caller was acting for. Authorize on the calling delegate's identity alone.
 
+## Check the Origin at the Boundary, Not Per Handler
+
+**A delegate's address is public and its secrets are not.** The key is
+`BLAKE3(BLAKE3(wasm) || params)` over a WASM you probably committed, so anyone
+can compute it, and any web app the user has ever opened on that node can send
+it an `ApplicationMessage`. Reading `origin` is the entire access control.
+
+The failure mode is not "we forgot to check". It is **"we checked in every
+request family that existed at the time"**. A payment-hijack hole in one app
+existed because a third request family was added past the one function that held
+the origin check — the two older families were still gated, the code looked
+consistent, and the new one answered anybody.
+
+So put the check where every request must pass it, before dispatch:
+
+```rust
+fn process(
+    _params: Parameters<'static>,
+    origin: Option<MessageOrigin>,
+    message: InboundDelegateMsg,
+) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
+    // One gate, ahead of the match. A request family added later cannot
+    // route around it without deleting this line.
+    authorize(origin.as_ref())?;
+    match message { /* ... */ }
+}
+```
+
+`freenet-migrate` exposes the policy type rather than making you hand-roll the
+comparison: `OriginPolicy::SameWebApp(ContractInstanceId)` /
+`FromDelegate(DelegateKey)` / `Any`, with `authorize(Option<&MessageOrigin>)`
+that **fails closed on `None`** — the runtime supplies `None` when it cannot
+attest a caller, and that is not a caller to hand a private key to
+(`freenet-migrate-0.6.0/src/delegate.rs`). Use it for ordinary requests as well
+as for the migration export it was written for; a second, hand-rolled comparison
+beside it is how the two drift apart and one ends up weaker.
+
+Refuse with an error rather than an empty success. A rejected caller that gets
+`Ok(vec![])` looks, to a legitimate page hitting this unexpectedly, exactly like
+a request that worked, and the first symptom is a user wondering why nothing
+saved.
+
+### Take `impl SecretStore`, not `DelegateCtx` — or you cannot test any of this
+
+`DelegateCtx`'s secret methods are **inert off `wasm32`**: the
+`#[cfg(not(target_family = "wasm"))]` arms in freenet-stdlib's
+`delegate_host.rs` return `None` from `get_secret`, `false` from `set_secret`
+and `remove_secret`, and an empty `Vec` from context reads. A handler that takes
+a `DelegateCtx` therefore cannot be exercised under `cargo test` at all — every
+read misses and every write is refused, so a test can only ever observe the
+failure path.
+
+That is why the hole above had no test. The only statement a test could make
+about the affected handler was "it returned something", never "the seller's
+payment key is still the seller's".
+
+Take a trait instead and let the tests hold a real in-memory store:
+
+```rust
+use freenet_migrate::SecretStore;  // list_secrets / get_secret / has_secret / set_secret
+
+fn handle_request(store: &mut impl SecretStore, req: Request) -> Result<Reply, Error> { /* ... */ }
+
+// Production: pass the ctx. freenet-migrate impls SecretStore for DelegateCtx
+// under `#[cfg(all(feature = "delegate", target_family = "wasm"))]`, so the
+// bridge only exists where the FFI symbols do -- which is exactly why native
+// tests need their own impl rather than a stub of the real one.
+// Tests: a BTreeMap-backed impl, so a hostile request can be run against a
+// populated store and the assertion is on the bytes still in it afterwards.
+```
+
+Reuse `freenet-migrate`'s `SecretStore` rather than defining a parallel one if
+you already depend on the crate for migration — one vocabulary for "the
+delegate's secret store" across the crate. Note it has no `remove`; if you need
+genuine deletion (`DelegateCtx::remove_secret`), that takes an extra trait of
+your own, and it is a native stub too, so what your tests can state is that your
+code *asks* for removal, not that the node performed it.
+
 ## Async Operation Pattern
 
 Since delegates are stateless between calls, use context to track pending operations:

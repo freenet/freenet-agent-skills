@@ -177,6 +177,107 @@ so the fix is to add them, not to recreate everything. The honest caveats stand:
 migration is per-client on next load, and a fresh device has no local state to
 carry forward.
 
+## A New Version Must Accept Old State
+
+**Once your app has users, a new contract version must be migratable from every
+version that has ever held their data.** That is a constraint on which changes
+you are allowed to make, not a step in the release procedure — and it is the
+constraint that decides, later, which bugs are fixable at all.
+
+The default to protect, in Ian Clarke's framing:
+
+> Any UI should be able to upgrade a contract, because the state just needs to
+> be transferred from old to new — the assumption being that new contracts
+> always accept old contract state.
+
+**Preserve this if you possibly can.** When a new version accepts old state,
+migration is *pure data transfer*: nobody needs a key, because every record
+already carries its own signature (architecture invariant 1 above). What that
+buys is not convenience — it is that **a user who never opens your app again
+still has their data carried forward, by whoever does.** Migration stops
+depending on the continued participation of the person whose data it is.
+
+### A derivation change breaks that default by construction
+
+Change how a record's identity is derived — what its id hashes over — and every
+record published under the old rule becomes unverifiable, because the id *is*
+the thing that changed. There is no version of "new accepts old" that survives
+it. This is not carelessness: content-derived identity is correct (see
+`contract-patterns.md` → "Record Identity"), and every existing record was
+derived the other way, and both things cannot be had at once for data that
+already exists.
+
+So **a derivation change is a breaking change to users' data, not an internal
+refactor.** It does not read like one — a few lines in one function, nothing in
+the type system moving, every test green — which is exactly why it needs saying.
+
+What that costs when it lands unnoticed, from the case that produced this
+section: a listing id stopped covering the price (a real defect — one seller
+could sign two listings under one id, and under first-writer-wins that diverges
+permanently). The fix made every existing listing unverifiable; the migration
+fold returned on the first refusal and so discarded the predecessor **in full**
+— listings, orders, and the store's own name and certificate with them; it
+reported that in a browser console line; and then it **sealed**, making the loss
+permanent. It passed fmt, clippy on both targets, the full suite, and a review
+round.
+
+### Accepting the old format in `verify` is not the answer
+
+It is the obvious first idea, and it fails for two independent reasons.
+
+- **It reopens the hole the change closed.** If the old id did not cover the
+  price, accepting the old form means a seller can still mint two listings under
+  one id at different prices.
+- **It cannot be scoped to old data, because a contract has no history.** A
+  contract validating state sees the state and its parameters and nothing else —
+  no clock, no write times, no predecessor — so it cannot distinguish a
+  genuinely old record from a new one shaped to look old. Any acceptance of the
+  old form is acceptance for everybody, forever.
+
+### The escape hatch, and what it costs
+
+Where the change is genuinely unavoidable, the migration can **re-issue** the
+old records instead of discarding them: accept the predecessor's record as data,
+recompute its id under the current rules, ask the delegate to re-sign it as the
+same owner over the same terms, and publish that. Nothing is forged, and the
+contract only ever sees new-format records, so the hole stays closed.
+
+**It gives up "any UI can migrate."** Re-signing needs the owner's key, so only
+the owner's browser can perform the migration, and only while they still hold
+that identity. A user who has stopped opening your app is migrated by nobody —
+where under "new accepts old" they would have been carried forward by the next
+person to open it. That is a regression in the model: it converts migration from
+a property of the data into a property of the owner's continued participation.
+
+It also needs the fold to surface refused records as *needs re-issuing* rather
+than *discarded* (the fold is a pure function with no delegate access, which is
+what makes it testable — so the re-signing belongs in the UI layer above it),
+and it must not seal while anything is still un-reissued.
+
+### The rule, for someone about to change a derivation
+
+If the change makes previously-published records unverifiable:
+
+1. **Try to avoid it.** Can the new version accept old state? That is the
+   default, and it is worth real effort, because it is the only option that
+   costs nobody anything.
+2. If not, it is a **data-breaking change**. Say so in the PR, in those words.
+3. Either build the owner-assisted re-issue — knowing it gives up "any UI can
+   migrate" — or establish that no published generation holds data anyone would
+   miss, **and record who established that, dated.**
+4. If the answer is "the data goes", the person who loses it must be told **in
+   the app**, in language saying the loss was expected as part of an upgrade
+   rather than that something broke.
+
+The reason to spend deliberate effort on this *before* launch — on what each id
+covers, on parameter structs (they are hashed into the address; see the
+parameter-change section below), and on state shapes — is that afterwards there
+is often no good option left. Play the case above forward past a launch: the
+correct fix destroys every seller's shop, the escape hatch requires every
+affected seller to still hold their identity and open the app, and accepting the
+old format reopens the defect. There is no fourth option, so **the defect would
+have been carried indefinitely.**
+
 ## The one truth that shapes everything
 
 Freenet keys are `BLAKE3(code_hash || params)`, so **any change to contract or
@@ -533,6 +634,21 @@ key change needs two tests:
    entities, set the in-progress flag, skip the rest), then run the load path and
    assert the missing entities are recovered and the flag clears.
 
+**"Real old-format bytes" is the load-bearing phrase, and it is the one that
+gets skipped.** Every fixture in your repository builds its records with the
+*current* code, so not one of them can hold what a predecessor produced — which
+is why a change that made every existing record unverifiable passed a full suite
+and a review round with nothing to say about it. The habit generalises past ids:
+**wherever old bytes and new code have to meet, the fixture must be bytes, not a
+constructor call.** Paste a hex literal captured from the shipped version.
+
+The pin that guards a *future* derivation change has the mirror-image trap.
+Pin the **current** derivation's own output — a known-answer test whose expected
+value you got by running today's code — so that changing the derivation turns it
+red. A fixture that hard-codes the *old* id is refused whatever the derivation
+is, so simulating a future change fails zero tests. Check your pin by simulating
+the change it exists to catch, not by reproducing the bug you already fixed.
+
 Make this testable by extracting the *decision* (mark-done vs. re-run, given the
 in-progress flag) into a **pure function** with a truth-table unit test, rather
 than burying it in async load code. River's `decide_per_room_load_action(bool)` is
@@ -554,6 +670,12 @@ and returns the safe value, kept **alongside** the behavioural test rather than
 instead of it, with a comment saying why this one guard is pinned that way.
 Otherwise the earlier rule (a source pin is a false positive waiting to happen)
 gets applied to the one case where it is correct, and the pin is deleted.
+
+**A source scrape only knows what it read, so assert on that too.** One written
+to check every production site truncated the file at the first `#[cfg(test)]`
+and passed over 40 lines of 1,138 — reporting success about the 3% it had seen.
+Have the scrape assert a floor on how much it examined, or check the file it
+opened is the one you meant.
 
 **Three questions worth asking of any migration change in review.** Each names a
 failure a green test suite let through.

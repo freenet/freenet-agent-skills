@@ -151,6 +151,33 @@ pub trait ComposableState {
 }
 ```
 
+### `apply_delta` must be all-or-nothing
+
+A delta arrives as one unit and must be applied as one. The tempting shape —
+loop over the incoming entries, and `return Err(..)` on the first bad one —
+leaves the earlier entries already merged into state that nothing ever validated
+as a whole. The half-applied state is then what `verify` sees, and **state your
+own `verify` refuses is not recoverable**: an incoming delta can be refused and
+re-sent, but held state that fails validation is permanently invalid (see
+`state-authorization-patterns.md` → "Bound State by Pruning, Never by
+Rejecting").
+
+Validate every entry in the delta first and commit only if all of them pass, or
+apply into a clone and swap it in on success. In one app this was wrong in
+**three of three** composable state types, and one instance let a single crafted
+delta permanently invalidate another user's mailbox with one write and no key.
+
+Two details that ride along with the same loop:
+
+- **Do not snapshot the "already held" set before the loop.** Build it from the
+  state as it grows, or two entries in the *same* delta that collide on the
+  dedup key both pass — the check answers against a state that no longer exists
+  by the time the second entry is applied.
+- **`apply_delta` is a merge, so it must be idempotent and order-independent
+  like every other merge path.** A delta that appends, or that mutates a
+  counter, breaks the laws just as surely inside `apply_delta` as inside a
+  whole-state merge.
+
 ## The Delta to an Up-to-Date Peer
 
 When a peer's summary shows it already holds everything your state has, the delta
@@ -566,6 +593,49 @@ fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
 ```
 
 **Write a test for every signed field** that verifies tampering with it causes verification to fail.
+
+## Record Identity: Content-Derived, and Decided in One Place
+
+Signatures answer *who wrote this*. They do not answer *which record is this*,
+and that second question is the one that gets designed badly.
+
+**An id that does not cover every term of the record it names lets one author
+sign two different records under one id.** A listing id derived from
+`(seller, created_at, title)` and not the price is two prices for one listing.
+A message identified by a writer-supplied nonce lets a counterparty submit a
+different message under an existing nonce and displace it. Both pass every
+signature check, because both really were signed by their author.
+
+Under a first-writer-wins merge that is **permanent divergence, and it cannot
+heal**: each peer keeps whichever it saw first, both peers' summaries already
+name the id, so neither can ever tell the other that anything is missing. This
+is worse than a rejected write — the state is diverged and converged-looking at
+the same time.
+
+Two rules:
+
+1. **Derive the id from the record's own terms, and compute it in the contract.**
+   Never accept an id or a nonce supplied by the writer as identity. If the id
+   is a hash, hash *everything a reader will later rely on the id to bind* — the
+   price, the payment address, the recipient — not just the fields that felt
+   like "the key" when you wrote it.
+2. **Exactly one function answers "are these the same thing", and every site
+   calls it.** `verify`, `summarize`, `delta`, the dedup check, each merge arm,
+   and any migration fold all decide sameness, and they must not each decide it
+   themselves. In one app six sites compared a writer-supplied nonce; five were
+   correct on the day they were written, and then the identity moved in one file
+   and nothing compelled the other five to notice.
+
+A source-scrape test can enforce rule 2 (assert no site derives sameness
+itself). If you write one, **check what it actually read** — ours truncated the
+file at the first `#[cfg(test)]` and so covered 40 lines of 1,138, reporting
+success over the 3% it had seen.
+
+**Changing a derivation after publishing is a breaking change to users' data,
+not an internal refactor** — every record published under the old rule becomes
+unverifiable. Get the coverage right before launch; see
+`upgrade-and-migration.md` → "A New Version Must Accept Old State" for what it
+costs afterwards.
 
 ## Contract Parameters
 
@@ -1085,6 +1155,39 @@ underneath is still app-side, with the app carrying the export across
 `delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
 why" for the full history and current guidance). Tracked live under
 [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
+
+## Tests That Would Have Caught It
+
+Contract bugs are found by tests that could have failed, and a green suite says
+nothing about how many of its tests are in that category. Four habits, each of
+which caught something a full suite and a review round had already passed.
+
+- **Write the test first and watch it fail.** Not as ceremony: a test written
+  after the fix has never been observed to fail, so nothing has established that
+  it can. Where the code already exists, get the same evidence by mutation —
+  break the guard, confirm the test goes red, restore it.
+- **Deletion is the weakest mutation. Substitute a wrong-but-plausible
+  implementation instead.** Deleting a check usually fails something; replacing
+  it with the check a careful person would have written by mistake — comparing
+  the wrong field, taking the first match instead of the only match, ordering by
+  the wrong key — usually does not, and that is the version that ships.
+- **A guard against a *future* change must be tested against a simulated future
+  change, not against the bug you already fixed.** A known-answer test pinning a
+  derivation is the canonical case: pin the *current* algorithm's own output, so
+  that changing the algorithm turns it red. A fixture that hard-codes the *old*
+  value is refused whatever the derivation is, so it fires on nothing. That
+  mistake was made by someone who had just fixed three of the same shape.
+- **A comment asserting a safety property is a claim, not evidence.** Twelve
+  comments in one review round asserted properties the code did not have. One
+  author's account of how: *"I wrote the sentence while reasoning about a
+  different thing, and it was true of what I was thinking about. I never turned
+  it around and asked what else in the function could break it. The comment was
+  a conclusion, not a check."* Every such sentence is either a test you have not
+  written, or a claim to delete.
+
+Ask the same question of a tool that reports success: what input would make it
+say no? Eight scripts and tests in that same round reported success while
+measuring nothing at all.
 
 ## River Contract Reference
 

@@ -58,6 +58,21 @@ Used for: River's room `Configuration`, the inbox's recipient-controlled state, 
 
 Adding a new field to a bundled-signed struct doesn't require new per-field auth, just a `#[serde(default)]` for backwards compatibility.
 
+### A Symmetric Key Cannot Establish Authorship
+
+If two parties share a symmetric key — a conversation key, a channel key, a
+derived session secret — then **decryption proves membership, never
+authorship.** Both sides hold the same key by necessity, so either can produce
+anything the other could: a `direction: FromBuyer` field inside the ciphertext,
+a sender label, an ordering convention, are all things the *other* party can
+write. A UI that renders one side's messages differently on the strength of such
+a label is showing the reader something the counterparty chose.
+
+Anything whose authenticity matters has to carry its own signature under a key
+only the claimed author holds — the same rule as every other field in state,
+and easy to lose sight of once a payload is encrypted, because encryption feels
+like it already established something. It established confidentiality.
+
 ### The Mistake to Avoid
 
 Storing **bare derived/cached fields** with no corresponding authorization. Looks fine because update paths populate them legitimately, but a peer can PUT arbitrary state through `validate_state` and the bare fields won't be verified against anything.
@@ -122,6 +137,34 @@ pub fn build_signed_payload_bytes(
 ```
 
 Cheap; eliminates an entire class of replay attacks.
+
+### Never Rank on a Value the Other Side Chooses
+
+Any decision that *orders* records — which one to evict, which one wins a
+tie-break, which one is "newest" — is a decision the other side gets to make for
+you if the ordering key is a value they supply. Signatures do not help: the
+value is authentically theirs, and the point is that they chose it.
+
+Three shapes of this were found in one app in one day:
+
+- **Retention driven by an unauthenticated timestamp.** A capped mailbox
+  evicting the oldest entry by a sender-supplied `sent_at` — so one message
+  stamped far in the future evicts every real message behind it, and one
+  stamped far in the past is invisible to a reader sorting by time. One forged
+  message emptied a mailbox.
+- **A merge tie-break steered by submission order.** "Whichever claim arrived
+  first" is not a property of the data, it is a property of the network, and the
+  other side can influence it.
+- **An eviction ranking reading a value out of an imported blob.** A timestamp
+  parsed from a backup string the user (or whoever handed them the backup) wrote
+  is not a fact your app established.
+
+Rank on something the other side cannot choose: a monotonic counter your
+contract increments, a count cap with FIFO by insertion into *your* structure, a
+hash the contract computes, or a signed attestation from the party being ranked
+*against*. This is the general form of the "a client-supplied timestamp must not
+be an eviction key" rule under Time Handling — it is not really about clocks,
+and moving to a signed client timestamp does not fix it.
 
 ## Signed-Payload Hygiene
 
@@ -357,6 +400,41 @@ pub struct Inbox {
 
 `#[serde(default)]` doesn't apply to fields that are required for security (e.g., the contract should never silently accept a message with a defaulted-to-zero `signature`). For those, omit the default and let deserialization fail loudly.
 
+#### `#[serde(default)]` is not enough when a signature covers the encoding
+
+`#[serde(default)]` fixes *reading* old bytes. It does nothing about *writing*
+them back, and that is what breaks signatures. Add an `Option` field to a struct
+whose serialized form is the signed payload, and re-encoding an existing record
+now emits the new key with a `null` value: ciborium writes a definite-length
+map, so `map(13)` becomes `map(14)` and **every signature ever made over that
+type stops verifying** — including on records already published, which have no
+route back to a signing key.
+
+```rust
+#[derive(Serialize, Deserialize)]
+pub struct SignedTerms {
+    // ...
+    /// Added in v2. `skip_serializing_if` keeps a record that predates the
+    /// field byte-identical to what its author signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payout_address: Option<Address>,
+}
+```
+
+Two things to get right beyond the attribute:
+
+- **`skip_serializing_if` is a promise about the absent case only.** A record
+  that *does* carry the field encodes at map(14) and must be signed that way, so
+  the two shapes coexist forever. That is fine; what is not fine is a later
+  change that makes the field non-optional, which silently re-breaks every
+  pre-v2 record.
+- **Test it with a hand-written byte literal of the OLD shape.** Building a
+  modern struct with the field set to `None` and serializing it proves only that
+  today's code agrees with itself — it is exactly the encoding path you are
+  trying to check. Paste the old bytes as a hex constant, deserialize *those*,
+  and assert the signature still verifies. Same reasoning as the hard-coded
+  expected hex above, one step earlier in the pipeline.
+
 ### Don't Default Required Auth Fields
 
 ```rust
@@ -412,6 +490,34 @@ better, budget the **bytes** directly (a running total enforced in `update_state
 let the count fall out of it. The arithmetic below is exactly that multiplication —
 note that it is the per-item cap, not the count, that makes it come out finite.
 
+### Bound State by Pruning, Never by Rejecting
+
+Having chosen a cap, there are two ways to enforce it, and only one of them is
+safe. **Pruning** — `update_state` drops the excess and keeps the state valid —
+is recoverable. **Rejecting** — `validate_state` returns `Invalid` when the
+state exceeds the cap — is not, because `validate_state` runs on *held* state,
+on every load, forever.
+
+The asymmetry is the whole rule, and it is worth stating on its own:
+
+> Refusing an incoming delta is recoverable — it can be re-sent, or arrive by a
+> different path. Refusing state you already hold is permanent: nothing can edit
+> it back under the limit, because every edit has to pass the same `validate_state`
+> that is refusing it.
+
+So a cap enforced in `validate_state` is a way of turning a state that grew one
+entry too large into a contract instance that no peer can ever serve or repair.
+Same shape as the past-skew check under Time Handling, and the same fix: put the
+cap in `update_state`, which prunes the excess and produces a state that is
+valid, and reserve `validate_state` for properties that are true of the bytes
+forever.
+
+The one thing you give up is refusing a hostile whole-state PUT purely on size,
+since the host's `MAX_STATE_SIZE` is then your only backstop for that path. That
+is the right trade: an attacker who can PUT oversized state can also, under the
+rejecting design, PUT state that is *permanently* invalid, which is strictly
+worse.
+
 Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32 KiB` = 32 MiB messages, plus ~140 bytes/message metadata = ~32.1 MiB, plus a few KB of recipient_state. Well under the 50 MiB cap — though, per the design target below, `MAX_INBOX_MESSAGES` is a candidate to tune down or to shard further (e.g. archiving older messages into per-time-window contracts) rather than a bound to treat as settled.
 
 **Design target: stay well under 4 MB per instance, regardless of the 50 MiB cap.** The cap is about correctness, not user experience — a GET transfers the entire state before the UI can render anything, so state size is felt directly as load latency, and it's the wire-transfer floor under the streaming behavior described in `ui-patterns.md` → "Large state handling". If a kind of data can grow without bound (message history, uploaded files, a list that only grows), shard by the natural unit of write concurrency — one contract per room, per user, per time-window, per shard-key — so each instance's state stays small no matter how large the dataset gets in aggregate. Treat a multi-MB instance as a signal to split the data model, not to compress harder or budget more cap headroom.
@@ -446,6 +552,11 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
 | Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
 | Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Cap distinct references in `update_state` (defense in depth in `validate_state` too) |
+| Size or count cap enforced in `validate_state` | One oversized write makes the instance permanently invalid and unrepairable | Prune in `update_state`; `validate_state` checks only properties true of the bytes forever |
+| Eviction / tie-break / "newest" keyed on a value the other side supplies | One forged entry evicts everything real, or silently wins every tie | Rank on a contract-computed counter, insertion order in your own structure, or a hash |
+| Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |
+| New field added to a signature-covered struct with only `#[serde(default)]` | Re-encoding a pre-existing record adds a map entry and invalidates every old signature | Add `skip_serializing_if`; test against a hand-written byte literal of the old shape |
+| Writer-supplied nonce or id used as record identity | Two records under one id; permanent, unhealable divergence under first-writer-wins | Derive the id from the record's own terms, computed by the contract (`contract-patterns.md` → "Record Identity") |
 
 ## Reference: River Inbox Contract
 
