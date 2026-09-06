@@ -193,14 +193,18 @@ Three details that ride along with the same loop:
   counter, breaks the laws just as surely inside `apply_delta` as inside a
   whole-state merge. Note the constraint this puts on the "filtering" choice:
   what must be order-independent is the loop's **result**, not each predicate's
-  answer. A filter on the entry alone (does it authorize?) is safe; a filter on
+  answer. A filter that reads only the entry is trivially safe; one that reads
   how full the state has got is not, because two peers applying the same entries
-  in different orders then keep different ones. Dedup-as-you-go is the awkward
-  middle: its answers *are* order-dependent, yet the result is not — **provided
-  the id is content-derived** (see "Record Identity"), because two entries
-  sharing an id are then the same entry and which one survives cannot matter.
-  With a writer-supplied id they are different entries, the result depends on
-  order, and it is a merge-law violation.
+  in different orders keep different ones. Most real filters are in between,
+  because they read state — "is this author a member?" is order-dependent the
+  moment one delta carries both *add member M* and *a message from M*, so decide
+  membership against the merged state rather than against the state the loop has
+  reached. Dedup-as-you-go is the same shape with a happier ending: its answers
+  *are* order-dependent, yet the result is not, **provided the id is
+  content-derived** (see "Record Identity"), because two entries sharing an id
+  are then the same entry and which one survives cannot matter. With a
+  writer-supplied id they are different entries, the result depends on order, and
+  it is a merge-law violation.
 
 ## The Delta to an Up-to-Date Peer
 

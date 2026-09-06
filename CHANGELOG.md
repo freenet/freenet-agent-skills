@@ -55,15 +55,16 @@ both targets, and at least one review round had already passed.
   host runs `validate_state` on the state arriving at a PUT/UPDATE *and* on the
   state `update_state` returns, before committing it, so a `validate_state` cap
   corrupts nothing — it does something quieter. Every merge that would cross the
-  cap is refused, permanently: under a count cap the contract stops taking writes
-  entirely, under a byte budget large writes are refused forever while small ones
-  keep landing, which is much harder to recognise. Nothing repairs it — a join
-  never shrinks the state, an incoming full state is merged rather than
-  substituted, and the #3109 recovery is unreachable because the held state is
-  valid. The section also carries the part that is easy to get wrong while
-  obeying the rule: prune by **deterministic truncation**, never by "drop
-  whatever would overflow", which is a predicate on how full the state is and so
-  breaks convergence.
+  cap is refused, and a merge that only unions never shrinks the state, so the
+  headroom only shrinks until the contract stops taking writes at all (a byte
+  budget passes through a confusing middle stage where large writes are refused
+  and small ones still land, then ends in the same place). Nothing repairs it
+  from the app's side: an incoming full state is merged rather than substituted.
+  The section also carries the two things that are easy to get wrong while
+  obeying the rule — bound by **deterministic truncation** (sort on a key the
+  entries determine, keep the longest prefix that fits) rather than evicting
+  whatever arrived last, and rank **per author**, since a global top-N on an
+  author-supplied value is the forged-value attack from the section above.
 - **A value one party supplies may only decide the fate of that party's own
   records.** Same file, under Replay Protection — stated as a boundary rather
   than a ban, because the monotonic-counter and last-writer-wins patterns already
@@ -107,13 +108,14 @@ both targets, and at least one review round had already passed.
   path) and every state `update_state` returns before it is committed — which is
   still often, so `identity-and-addressing.md`'s argument against verifying a
   certificate per member survives. `state-authorization-patterns.md`'s past-skew
-  paragraph ends worse than either the original or the intermediate version said:
-  a rule that expires makes the *held* state invalid, which is exactly the
-  condition the #3109 corrupted-state recovery keys on, so the inbox is not
-  frozen — it is replaced wholesale by the next valid state that arrives. The
-  contrast with the size cap (where everything committed was validated, so the
-  held state stays valid and that recovery is unreachable) is now stated in both
-  places, because the two traps look alike and end differently.
+  paragraph now names both endings, because which one you get depends on the
+  contract. If the merge still succeeds, the post-merge validation refuses the
+  result and the inbox freezes. If the merge fails too — ordinary for the
+  monotonic-version envelopes this file recommends — the node has a merge failure
+  alongside a locally-invalid state, which is what its corrupted-state recovery
+  keys on (#3109), and it may replace the inbox wholesale. The size-cap trap
+  usually ends the first way rather than the second, but that is a tendency and
+  the text says so rather than claiming it holds by construction.
 
 Verified against freenet-stdlib `rust/src/delegate_host.rs`,
 `rust/src/delegate_interface.rs` and `rust/src/contract_composition.rs`,
