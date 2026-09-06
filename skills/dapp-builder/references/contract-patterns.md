@@ -1263,6 +1263,15 @@ they described, because they were claims *about* code rather than claims in it â
 which is the whole reason the bullets above ask you to state what input would
 turn each one red.
 
+There is a cheaper defence than getting such claims right, and it is the one
+this file now applies to itself: **a rule does not expire; a claim about
+mechanism does.** "Bound it in `update_state`" holds for as long as contracts
+have that function. Every sentence describing which internal function calls which,
+in what order, is true only until the platform changes â€” and nobody re-reads a
+document to check. So write the rule, write the shortest reason that makes it
+stick, and point at the source for the rest. Both errors above were in the part
+that should have been a pointer.
+
 ## River Contract Reference
 
 See [River's room-contract](https://github.com/freenet/river/tree/main/contracts/room-contract/src/lib.rs) for a complete implementation, and River's `AGENTS.md` under "Contract Upgrade" for the full upgrade runbook.
