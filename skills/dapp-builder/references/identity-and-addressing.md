@@ -420,8 +420,9 @@ Verification can go through the delegate
 `valid`, `signer_fingerprint`, and the donation metadata), or you can link
 `ghostkey_lib` and verify the chain yourself. That library builds for
 `wasm32-unknown-unknown` (the delegate is compiled from it), so verifying
-in-contract is plausible, but note that `validate_state` runs on *every* state
-load: verifying one certificate per member on every load scales badly. The
+in-contract is plausible, but note that `validate_state` runs on *every incoming
+state* — every PUT and UPDATE that reaches the node, and the GET caching path —
+so verifying one certificate per member each time scales badly. The
 cheaper shape is the one River already uses for membership — verify once at
 admission in `update_state`, then record a signed membership entry that later
 loads check with a single Ed25519 verification.

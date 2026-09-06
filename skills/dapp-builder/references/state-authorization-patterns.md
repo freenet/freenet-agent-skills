@@ -58,6 +58,19 @@ Used for: River's room `Configuration`, the inbox's recipient-controlled state, 
 
 Adding a new field to a bundled-signed struct doesn't require new per-field auth, just a `#[serde(default)]` for backwards compatibility.
 
+### A Symmetric Key Cannot Establish Authorship
+
+If two parties share a symmetric key — a conversation key, a channel key, a
+derived session secret — **decryption proves membership, never authorship.**
+Both sides hold the same key by necessity, so a `direction: FromBuyer` field
+inside the ciphertext, a sender label, an ordering convention, are all things the
+*other* party can write; a UI that renders one side's messages differently on the
+strength of such a label is showing the reader something the counterparty chose.
+Anything whose authenticity matters carries its own signature under a key only
+the claimed author holds. This is easy to lose sight of once a payload is
+encrypted, because encryption feels like it settled something — it settled
+confidentiality.
+
 ### The Mistake to Avoid
 
 Storing **bare derived/cached fields** with no corresponding authorization. Looks fine because update paths populate them legitimately, but a peer can PUT arbitrary state through `validate_state` and the bare fields won't be verified against anything.
@@ -103,7 +116,7 @@ pub struct RecipientState {
 }
 ```
 
-Bound the tombstone list. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full.
+Bound the tombstone list. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full — and note *why* that is allowed to be arrival-ordered when "A Value One Party Supplies…" below says ordering by arrival is not: `RecipientState` is a version-stamped envelope the recipient re-signs in full, so the recipient chooses which tombstones survive and merges take the higher version wholesale. Nobody else's records are at stake, and no peer re-derives the order.
 
 ### Cross-Context Binding
 
@@ -122,6 +135,54 @@ pub fn build_signed_payload_bytes(
 ```
 
 Cheap; eliminates an entire class of replay attacks.
+
+### A Value One Party Supplies May Only Decide the Fate of That Party's Own Records
+
+Ranking on a writer-supplied value is fine, and the rest of this skill
+recommends it: the monotonic `version` above is writer-supplied, so is the
+author's signed timestamp used to order messages, so is the version in
+last-writer-wins. What makes those safe is not the signature — the value is
+authentically theirs, and the point is that they *chose* it. What makes them
+safe is that the value only ever decides the fate of the supplier's **own**
+record: an owner's `version` replaces the owner's previous configuration, and
+nobody else's.
+
+The rule is the boundary, not the value:
+
+> A value one party supplies may decide **which of that party's records
+> survives**. It must never decide **whose records get discarded**.
+
+Three violations of it turned up in one app in one day:
+
+- **Retention driven by an unauthenticated timestamp.** A capped mailbox
+  evicting its oldest entry by a sender-supplied `sent_at`: one message stamped
+  far in the future evicts every real message behind it. One forged message
+  emptied a mailbox.
+- **A merge tie-break steered by submission order.** "Whichever claim arrived
+  first" is a property of the network, not of the data, so the counterparty can
+  influence it — and it breaks order-independence besides, which is a merge-law
+  violation in its own right.
+- **An eviction ranking reading a value out of an imported blob.** A timestamp
+  parsed from a backup string that whoever handed the user the backup wrote is
+  not a fact your app established.
+
+Ways to stay on the right side of it:
+
+- **Cap per author, not globally.** Then a forged value can only cost its own
+  author, and no amount of grinding reaches anyone else's entries. This is
+  usually the whole fix.
+- **Refuse rather than choose.** `update_state` declining a write past a
+  per-author cap needs no ranking at all, and a refused write is recoverable in
+  a way a wrong eviction is not.
+- **Tie-break on a deterministic function of the record's content** (a hash, or
+  the signature bytes as in the last-writer-wins example in
+  `contract-patterns.md`) rather than on anything about its arrival.
+- **Where you must rank across parties, use an attestation signed by the party
+  being ranked *against*.**
+
+This is the general form of "a client-supplied timestamp must not be an eviction
+key" under Time Handling. It is not really about clocks, and signing the
+timestamp does not fix it.
 
 ## Signed-Payload Hygiene
 
@@ -240,7 +301,7 @@ if message.timestamp > host_now() + MAX_FUTURE_SKEW_SECS {
 
 Rejecting is the mild version. Of the deployed contracts measured for #5465, 11 silently **prune** future-dated entries inside `update_state`, so the resulting state is a function of the evaluating peer's clock — the exact defect class conformance exists to detect, produced by the capability rather than caught by it.
 
-A **past-skew** check on stored state was always worse, for a reason independent of clocks that still applies to any time-derived rejection in `validate_state`: that function runs on every state load, including state that's been in storage for months. If the contract rejects state with any message older than `MAX_PAST_SKEW_SECS`, then 30 days after an inbox's oldest message arrives, the entire inbox spontaneously becomes invalid. Permanent state destruction.
+A **past-skew** check on stored state was always worse, for a reason independent of clocks that still applies to any time-derived rejection in `validate_state`: **a rule whose truth expires turns previously-valid state into state nothing will accept.** `validate_state` gates both the state arriving at a PUT/UPDATE and the state `update_state` returns before it is committed. So if the contract rejects state carrying any message older than `MAX_PAST_SKEW_SECS`, then 30 days after an inbox's oldest message arrives, that inbox is refused by every peer it is sent to *and* every attempt to modify it fails validation. It cannot propagate, cannot be healed, and cannot be repaired by its holder — the one operation that could drop the offending message is itself an update. The inbox is frozen permanently, by a rule nobody triggered.
 
 Replay protection for old messages should use signature-based dedup (signatures are unique per message) and tombstones — never a time window on `validate_state`.
 
@@ -297,12 +358,18 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
-- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Cap your state's distinct related references at validation time so you can't produce a state needing more than 10.
+- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Cap your state's distinct related references **in `update_state`**, so your merge cannot produce a state needing more than 10. Checking it only in `validate_state` is the read-only-forever trap under State Size Budget: the first merge that crosses ten is refused and so is every one after it.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
 ### Requesting Related State From `update_state`
 
-`update_state` takes no `related` parameter, but it is not confined to `validate_state` for cross-contract reads: return `UpdateModification::requires(vec![...])` and the host resolves those contracts — local state store first, network only as fallback — and re-invokes `update_state` with the results supplied as `UpdateData::RelatedState` entries. The host also runs `validate_state` after every successful `update_state` and rolls back on `Invalid`, so validate remains the backstop.
+`update_state` takes no `related` parameter, but it is not confined to `validate_state` for cross-contract reads: return `UpdateModification::requires(vec![...])` and the host resolves those contracts — local state store first, network only as fallback — and re-invokes `update_state` with the results supplied as `UpdateData::RelatedState` entries.
+
+The host also runs `validate_state` on the state `update_state` returns, before
+committing it, and refuses the update if it is not `Valid` — so validate remains
+the backstop. Nothing is rolled back: the commit simply does not happen. Note
+what that costs when the two functions disagree about a bound — see "Prune in
+`update_state`" under State Size Budget.
 
 **Prefer the `update_state` route where either would work.** Related state resolved during *validation* is never captured by the conformance system (freenet-core#5376), so a contract whose validity depends on that path can never be judged — and an unjudgeable contract reads exactly like a clean one. The update path is captured today.
 
@@ -316,7 +383,9 @@ The related-contracts mechanism shipped in freenet-core PR #3650 (March 2026). C
 automatic for a check confined to the bytes in front of it — `balance >= 0`, "every
 entry carries a valid signature", "the counter never goes backwards" are all fine,
 and a balance being *spendable* does not make it unusable as a well-formedness
-check. The hazard is narrower and easy to miss: **an already-accepted item whose
+check. (A bytes-confined check can still be one your own `update_state` is able
+to violate, which freezes the contract; that is a separate hazard, under "Prune
+in `update_state`".) The hazard here is narrower and easy to miss: **an already-accepted item whose
 validity depends on a quantity that can later shrink.** Two shapes do it.
 
 1. **A value read live from another contract** (the `RelatedContracts` mechanism
@@ -356,6 +425,41 @@ pub struct Inbox {
 ```
 
 `#[serde(default)]` doesn't apply to fields that are required for security (e.g., the contract should never silently accept a message with a defaulted-to-zero `signature`). For those, omit the default and let deserialization fail loudly.
+
+#### `#[serde(default)]` is not enough when a signature covers the encoding
+
+`#[serde(default)]` fixes *reading* old bytes. It does nothing about *writing*
+them back, and that is what breaks signatures. Add an `Option` field to a struct
+whose serialized form is the signed payload, and re-encoding an existing record
+now emits the new key with a `null` value: ciborium writes a definite-length
+map, so `map(13)` becomes `map(14)` and **every signature ever made over that
+type stops verifying** — including on records already published, which have no
+route back to a signing key.
+
+```rust
+#[derive(Serialize, Deserialize)]
+pub struct SignedTerms {
+    // ...
+    /// Added in v2. `skip_serializing_if` keeps a record that predates the
+    /// field byte-identical to what its author signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payout_address: Option<Address>,
+}
+```
+
+Two things to get right beyond the attribute:
+
+- **`skip_serializing_if` is a promise about the absent case only.** A record
+  that *does* carry the field encodes at map(14) and must be signed that way, so
+  the two shapes coexist forever. That is fine; what is not fine is a later
+  change that makes the field non-optional, which silently re-breaks every
+  pre-v2 record.
+- **Test it with a hand-written byte literal of the OLD shape.** Building a
+  modern struct with the field set to `None` and serializing it proves only that
+  today's code agrees with itself — it is exactly the encoding path you are
+  trying to check. Paste the old bytes as a hex constant, deserialize *those*,
+  and assert the signature still verifies. Same reasoning as the hard-coded
+  expected hex above, one step earlier in the pipeline.
 
 ### Don't Default Required Auth Fields
 
@@ -418,6 +522,46 @@ Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32
 
 Large *binary* assets served by the UI (audio, video, images, user uploads) are a special case of the same sharding advice, not a new problem: give the asset its own contract instance instead of embedding it in the webapp bundle's state, and reference it from the UI by key. See `ui-patterns.md` → "Large Binary Assets: Their Own Contract, Not the Webapp Bundle" for the same-origin fetch mechanism that makes this work under the gateway CSP.
 
+### Prune in `update_state`; Never Let `validate_state` Refuse What Your Own Merge Produces
+
+Having settled on a cap — bytes, items, tombstones, whatever it bounds — decide
+where it is enforced. **`update_state` pruning the excess** keeps the state
+inside the cap by construction. **`validate_state` returning `Invalid` past the
+cap** does something quite different, and the host's call graph is what makes it
+different:
+
+`validate_state` runs on the state *arriving* at a PUT/UPDATE, **and again on
+the state your `update_state` returns, before it is committed** — the merge
+result goes through `fetch_related_for_validation` in
+`bridged_upsert_contract_state_inner`, and through
+`fetch_related_for_validation_network` in `get_updated_state` and the re-PUT
+branch (`contract/executor/runtime/{executor_impl,contract_ops}.rs`). Nothing is
+rolled back; the commit simply does not happen and the caller gets an error.
+
+That makes `validate_state` a real backstop behind your merge — and it means a
+`validate_state` cap does not corrupt anything. It does something quieter:
+
+> The first merge that would carry the state past the cap is refused — and for a
+> collection that only grows, so is every merge after it. **The contract
+> silently stops accepting writes**, and nothing can repair it: a merge is a
+> join, so it never shrinks the state, and the one operation that could is
+> itself an update. An incoming full state does not rescue it either — core
+> applies that as `update_state(current, [State(incoming)])`, which unions rather
+> than replaces.
+
+Hence the rule, which is about agreement rather than about avoiding
+`validate_state`:
+
+> **`update_state` must never be able to produce a state its own
+> `validate_state` would refuse.** Where a bound is involved, that means pruning
+> in `update_state`. A bound checked only in `validate_state` is a bound your
+> merge does not know about, and the day it binds, the contract goes read-only
+> for good.
+
+The past-skew check under Time Handling is the same failure reached by a
+different route — there it is the passage of time rather than accumulation that
+makes a once-true rule false.
+
 ## Per-Context Identity Considerations
 
 If your dApp uses **per-context signing keys** (River's pattern: the inviter generates a fresh keypair for each new member, scoped to one room):
@@ -446,6 +590,11 @@ This pattern provides cross-context unlinkability for free, at the cost of needi
 | Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
 | Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
 | Permitted distinct related contracts > 10 | Inbox or similar becomes unvalidatable forever | Cap distinct references in `update_state` (defense in depth in `validate_state` too) |
+| A bound your own `update_state` can step over, checked only in `validate_state` | The first merge past the cap is refused, and so is every one after it — the contract silently goes read-only for good | Prune in `update_state` so it cannot produce state its own `validate_state` refuses |
+| A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author, or refuse the write; ranking a party's own records on their own value is fine |
+| Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |
+| New field added to a signature-covered struct with only `#[serde(default)]` | Re-encoding a pre-existing record adds a map entry and invalidates every old signature | Add `skip_serializing_if`; test against a hand-written byte literal of the old shape |
+| Writer-supplied nonce or id used as record identity | Two records under one id; permanent, unhealable divergence under first-writer-wins | Derive the id from the record's own terms, computed by the contract (`contract-patterns.md` → "Record Identity") |
 
 ## Reference: River Inbox Contract
 

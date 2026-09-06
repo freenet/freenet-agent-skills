@@ -151,6 +151,56 @@ pub trait ComposableState {
 }
 ```
 
+### Decide What One Bad Entry in a Delta Does
+
+The shape that writes itself — loop over the incoming entries, mutate `self` as
+you go, `return Err(..)` on the first one that fails — is neither of the two
+safe designs, and it was wrong in **three of three** composable state types in
+one app.
+
+Pick one deliberately:
+
+- **Atomic.** Validate every entry first, commit only if all pass (or apply into
+  a clone and swap on success). Right when the entries are one indivisible
+  update from one author.
+- **Filtering.** Drop the entries that do not authorize and apply the rest.
+  Right when entries are independently signed by *different* parties — which is
+  the common case for a mailbox, a member list, or a message log.
+
+**For independently-signed entries, atomic is a denial vector.** One crafted
+entry refuses every legitimate entry travelling with it, and if that entry ever
+lands in state, every subsequent apply fails against it and the instance stops
+accepting updates for good. That is how a single write with no key permanently
+killed a mailbox in the app above. The same trap sits in any *fold* over
+generations: returning on the first refused record discards everything else the
+predecessor held (see `upgrade-and-migration.md` → "A New Version Must Accept
+Old State", where exactly that cost a seller their whole store).
+
+Three details that ride along with the same loop:
+
+- **Do not leave a partial mutation behind.** `freenet-scaffold`'s derive
+  propagates an `Err` and stdlib's `inner_update_state` returns without
+  serializing, so the mutated value is dropped there — but that is a property of
+  *that caller*. A client-side fold, a migration merge, or a hand-rolled
+  `update_state` that logs the error and carries on commits whatever the loop
+  left half-done.
+- **Do not snapshot the "already held" set before the loop.** Build it from the
+  state as it grows, or two entries in the *same* delta that collide on the
+  dedup key both pass — the check answers against a state that no longer exists
+  by the time the second entry is applied.
+- **`apply_delta` is a merge, so it must be idempotent and order-independent
+  like every other merge path.** A delta that appends, or that mutates a
+  counter, breaks the laws just as surely inside `apply_delta` as inside a
+  whole-state merge. Note the constraint this puts on the "filtering" choice: a
+  filter must be a predicate on the *entry* (does it authorize?), never on how
+  full the state has got, or two peers applying the same entries in different
+  orders keep different ones. A predicate that reads the state is only safe when
+  its answer cannot depend on the order — dedup-as-you-go qualifies **provided
+  the id is content-derived** (see "Record Identity"), because two entries
+  sharing an id are then the same entry and which one the loop keeps cannot
+  matter. With a writer-supplied id it is order-dependent, and therefore a
+  merge-law violation.
+
 ## The Delta to an Up-to-Date Peer
 
 When a peer's summary shows it already holds everything your state has, the delta
@@ -486,6 +536,13 @@ The timestamp here comes from the **author's signed payload**, carried in the
 state — never from `freenet_stdlib::time::now()` inside the merge. It orders and
 ranks; it is an untrusted hint, so don't build eviction or expiry on it.
 
+**Note what `MessageId` above does and does not bind.** It identifies a message
+by its author and position, not by its content, so the same author can sign two
+different message bodies under one id — the defect described under "Record
+Identity" below. That is tolerable only where a later reader never relies on the
+id to bind anything about the body. If it might, hash the signed payload into
+the id.
+
 ### 3. Last-Writer-Wins with Version
 
 ```rust
@@ -566,6 +623,48 @@ fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
 ```
 
 **Write a test for every signed field** that verifies tampering with it causes verification to fail.
+
+## Record Identity
+
+Signatures answer *who wrote this*. They do not answer *which record is this*,
+and that second question is the one that gets designed badly.
+
+**An id that does not cover every term of the record it names lets one author
+sign two different records under one id.** A listing id derived from
+`(seller, created_at, title)` and not the price is two prices for one listing.
+A message identified by a writer-supplied nonce lets a counterparty submit a
+different message under an existing nonce and displace it. Both pass every
+signature check, because both really were signed by their author.
+
+Under a first-writer-wins merge that is **permanent divergence, and it cannot
+heal**: each peer keeps whichever it saw first, both peers' summaries already
+name the id, so neither can ever tell the other that anything is missing. This
+is worse than a rejected write — the state is diverged and converged-looking at
+the same time.
+
+Two rules:
+
+1. **Derive the id from the record's own terms, and compute it in the contract.**
+   Never accept an id or a nonce supplied by the writer as identity. If the id
+   is a hash, hash *everything a reader will later rely on the id to bind* — the
+   price, the payment address, the recipient — not just the fields that felt
+   like "the key" when you wrote it.
+2. **Exactly one function answers "are these the same thing", and every site
+   calls it.** `verify`, `summarize`, `delta`, the dedup check, each merge arm,
+   and any migration fold all decide sameness, and they must not each decide it
+   themselves. In one app six sites compared a writer-supplied nonce; five were
+   correct on the day they were written, and then the identity moved in one file
+   and nothing compelled the other five to notice.
+
+A source-scrape test can enforce rule 2 (assert no site derives sameness
+itself) — but see `upgrade-and-migration.md` on what such a scrape has to assert
+about its own coverage before you can believe it.
+
+**Changing a derivation after publishing is a breaking change to users' data,
+not an internal refactor** — every record published under the old rule becomes
+unverifiable. Get the coverage right before launch; see
+`upgrade-and-migration.md` → "A New Version Must Accept Old State" for what it
+costs afterwards.
 
 ## Contract Parameters
 
@@ -1085,6 +1184,29 @@ underneath is still app-side, with the app carrying the export across
 `delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
 why" for the full history and current guidance). Tracked live under
 [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
+
+## Tests That Would Have Caught It
+
+A green suite says nothing about how many of its tests *could* have gone red.
+Three habits, each of which caught something a full suite and a review round had
+already passed.
+
+- **Deletion is the weakest mutation; substitute a wrong-but-plausible
+  implementation instead.** Deleting a check usually fails something. Replacing
+  it with the check a careful person would have written by mistake — comparing
+  the wrong field, taking the first match instead of the only match, ordering by
+  the wrong key — usually does not, and that is the version that ships.
+- **Test a guard against a *simulated future change*, not against the bug you
+  already fixed.** The two are different inputs, and only the first exercises
+  what the guard is for. `upgrade-and-migration.md` → "Test the upgrade path, not just the new version"
+  has the canonical case, a derivation pin, where getting this backwards
+  produces a test that fires on nothing.
+- **A comment asserting a safety property is a claim, not evidence.** Twelve
+  comments in one review round asserted properties the code did not have. How it
+  happens, in one author's words: *"the comment was a conclusion, not a check"* —
+  true of the thing they were reasoning about, never turned around and asked what
+  else in the function could break it. Each such sentence is a test you have not
+  written, or a claim to delete.
 
 ## River Contract Reference
 

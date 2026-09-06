@@ -2,6 +2,125 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.37.0 (2026-09-06)
+
+Findings from a day of building and adversarially reviewing a Freenet
+marketplace app — three PRs across two repositories, eight review rounds. The
+counts below are real, and each one is a case where a full test suite, clippy on
+both targets, and at least one review round had already passed.
+
+- **Record identity, and the one function that decides it.**
+  `contract-patterns.md` gains a "Record Identity" section. An id that does not
+  cover every term of the record it names lets one author sign two different
+  records under one id, and under a
+  first-writer-wins merge that is *permanent divergence that cannot heal* —
+  both peers' summaries already name the id, so neither can tell the other
+  anything is missing. Eight instances in one app: six sites deciding "already
+  held" by a writer-supplied nonce (five correct on the day they were written,
+  and then the identity moved in one file), plus order and listing ids that
+  hashed only some of their terms. Derive from content, compute in the contract,
+  and route every sameness decision through one function.
+- **A new contract version must accept old state.** New section in
+  `upgrade-and-migration.md`, carrying Ian's framing: *any UI should be able to
+  upgrade a contract, because the state just needs to be transferred from old to
+  new — the assumption being that new contracts always accept old contract
+  state.* That property is what lets a user who never opens the app again be
+  carried forward by whoever does. A derivation change breaks it by
+  construction, which makes it a breaking change to users' data rather than an
+  internal refactor. Covers why accepting the old format in `verify` is not the
+  answer (it reopens the hole, and a contract has no history so it cannot be
+  scoped to old data), the owner-assisted re-issue fallback and the "any UI can
+  migrate" property it spends, and the four-step rule for someone about to
+  change a derivation.
+- **Migration fixtures built with the current derivation cannot see the past.**
+  `upgrade-and-migration.md` → "Test the upgrade path". Every fixture in a repo
+  builds records the current way, so none can hold what a predecessor produced —
+  which is exactly why the change above passed everything. Wherever old bytes
+  and new code meet, the fixture must be bytes, not a constructor call. The
+  mirror-image trap for the guard against a *future* change: pin the current
+  derivation's own output, because a fixture hard-coding the *old* value is
+  refused whatever the derivation is and so fires on nothing.
+- **Decide what one bad entry in a delta does.** New subsection in
+  `contract-patterns.md`. "Mutate as you go, return `Err` on the first bad entry"
+  is neither of the two safe designs, and was wrong in three of three composable
+  state types in one app. Atomic is right for one indivisible update from one
+  author; for entries independently signed by *different* parties it is a denial
+  vector — one crafted entry refuses every legitimate entry travelling with it,
+  and once in state every subsequent apply fails against it. That is how a single
+  write with no key permanently killed a mailbox. Also: do not snapshot the dedup
+  set before the loop, or two entries in the same delta colliding on the key both
+  pass.
+- **Prune in `update_state`; never let `validate_state` refuse what your own
+  merge produces.** `state-authorization-patterns.md` → State Size Budget. The
+  host runs `validate_state` on the state arriving at a PUT/UPDATE *and* on the
+  state `update_state` returns, before committing it, so a `validate_state` cap
+  corrupts nothing — it does something quieter. The first merge that would carry
+  the state past the cap is refused, and so is every merge after it: the contract
+  silently goes read-only for good, because the only operation that could shrink
+  the state is an update and every update is now refused. Same failure as the
+  past-skew check under Time Handling, reached by accumulation rather than by the
+  passage of time.
+- **A value one party supplies may only decide the fate of that party's own
+  records.** Same file, under Replay Protection — stated as a boundary rather
+  than a ban, because the monotonic-counter and last-writer-wins patterns already
+  in this skill rank on writer-supplied values and are fine. Three violations in
+  one day: mailbox retention driven by an unauthenticated `sent_at` (one forged
+  message emptied a mailbox), a fold tie-break steered by submission order, and
+  an eviction ranking reading a timestamp out of an imported backup string.
+  Usually the whole fix is to cap per author.
+- **A symmetric key cannot establish authorship.** Same file, under
+  Authentication Patterns. Both parties hold the key by necessity, so a
+  direction label inside the ciphertext is something the counterparty can write.
+  Decryption proves membership; authorship needs its own signature.
+- **`#[serde(default)]` is not enough when a signature covers the encoding.**
+  Same file, under Wire-Format Stability, correcting text that previously
+  presented `#[serde(default)]` as the whole answer. A new `Option` field that
+  serialises as `null` when absent turns ciborium's `map(13)` into `map(14)` and
+  invalidates every signature ever made over that type, including on records
+  already published. Use `skip_serializing_if`, and test against a hand-written
+  byte literal of the old shape — building a modern struct with the field set to
+  `None` only proves today's code agrees with itself.
+- **Put the delegate's origin gate at the boundary, not per handler.**
+  `delegate-patterns.md`. A payment-hijack hole existed because a third request
+  family was added past the one function that held the origin check; the two
+  older families were still gated and the code looked consistent. Uses
+  `freenet-migrate`'s `OriginPolicy`, whose two real variants fail closed on an
+  unattested `None` (`Any` does not, and is documented as local-testing only).
+  Paired with the reason that hole had no test: `DelegateCtx`'s secret
+  methods are inert stubs off `wasm32` (freenet-stdlib's `delegate_host.rs`,
+  the `#[cfg(not(target_family = "wasm"))]` arms), so a handler taking a
+  `DelegateCtx` cannot be exercised under `cargo test` at all. Take
+  `impl SecretStore` instead.
+- **Tests that would have caught it.** New closing section in
+  `contract-patterns.md`. Deletion is the weakest mutation, so substitute a
+  wrong-but-plausible implementation; test a guard against a *simulated future
+  change* rather than the bug you already fixed; and treat a comment asserting a
+  safety property as a claim needing a test rather than as evidence. Twelve such
+  comments in one round asserted properties the code did not have.
+- **Correction: `validate_state` does not run on every state *load*.** Two places
+  said it did. A GET serves from the state store without validating. What it
+  actually runs on is every incoming state (PUT, UPDATE, and the GET caching
+  path) and every state `update_state` returns before it is committed — which is
+  still often, so the conclusions in both places survive: `identity-and-addressing.md`'s
+  argument against verifying a certificate per member, and
+  `state-authorization-patterns.md`'s past-skew paragraph, whose mechanism is now
+  stated as the freeze it actually is (the inbox is refused by every peer *and*
+  by every attempt to modify it, and the one operation that could drop the
+  offending message is itself an update).
+
+Verified against freenet-stdlib `rust/src/delegate_host.rs`,
+`rust/src/delegate_interface.rs` and `rust/src/contract_composition.rs`,
+`freenet-migrate` 0.6.0's `src/delegate.rs`, and freenet-core's
+`contract/executor/runtime/{executor_impl,contract_ops}.rs` — rather than taken
+on report. Two independent adversarial reviews ran. The first found four
+blocking errors in these API claims; the second found that one of the four was
+itself wrong, and that the fix for it had replaced a true statement with a false
+one (`validate_state` **is** run on the output of `update_state`, at
+`bridged_upsert_contract_state_inner`, `get_updated_state`, and the re-PUT
+branch). Worth recording, because it is the finding this release's own testing
+section is about: the reviewer that reads only the function you named will
+confirm whatever that function does.
+
 ## 1.36.0 (2026-09-04)
 
 Field findings from a night of building and deploying a Freenet app. Two are
