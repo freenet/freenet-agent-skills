@@ -408,8 +408,12 @@ Practical rules:
    `state-authorization-patterns.md`.
 2. **Backwards/forwards-compatible serialization.** The same bytes must validate
    under old and new WASM during the rollout window. Additive-only
-   (`#[serde(default)]`), never remove/rename/repurpose a field, version-tag when
-   you must break, and pin the wire format with round-trip tests.
+   (`#[serde(default)]`, plus `skip_serializing_if` wherever a signature covers
+   the encoding — otherwise re-encoding an existing record adds a map entry and
+   invalidates every signature ever made over that type; see
+   `state-authorization-patterns.md` → Wire-Format Stability), never
+   remove/rename/repurpose a field, version-tag when you must break, and pin the
+   wire format with round-trip tests against hand-written bytes of the old shape.
 3. **Shard mutable storage by unit-of-concurrent-change, and use compare-and-swap,
    never blind overwrite.** River #345 stored the whole room list as one blob
    overwritten last-writer-wins; two browser tabs clobbered each other. The fix
