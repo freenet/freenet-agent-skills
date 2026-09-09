@@ -185,9 +185,34 @@ Practical limits:
   `ContractRequest::Update` and reserved for the runtime's own request-related
   orchestration, which surfaces `RelatedState` to your WASM itself.
 - A related fetch that times out can wedge an UPDATE merge (freenet-core#4077, open).
-- Related state resolved during *validation* is never captured by the conformance
-  system (freenet-core#5376, open), so a contract that depends on that path is
-  unjudgeable — and an unjudgeable contract reads exactly like a clean one.
+- Related state resolved during *validation* **is** captured, since **v0.2.131
+  (2026-08-24)** — freenet-core#5393 and #5402. Before that, a contract whose validity
+  depended on another contract was permanently unjudgeable, and an unjudgeable
+  contract reads exactly like a clean one. Note issue #5376 closed on 2026-09-06, a
+  fortnight after the code shipped: **a close date is bookkeeping; the release tag is
+  what makes a mechanism available.** Checking that for yourself has its own trap —
+  this repo squash-merges, so the SHAs an issue timeline cites are branch commits that
+  never exist in `main`. Searching the log for them, or for the issue number, finds
+  nothing in any tag and reads exactly like "never shipped". Go by PR number, and
+  confirm with `merge-base --is-ancestor <merge-sha> <tag>`.
+- **Judgeable is not judged.** The verifier never *fetches* related state; it replays
+  only what the bundle already carries, mapping any `RequestRelated` straight to
+  `Inconclusive::RelatedRequired` (`conformance/verifier.rs:997-1005`). Production is
+  stricter — the executor fetches and re-validates once at depth=1
+  (`executor_impl.rs:2461`) — and that path is never exercised by the verifier.
+  Capture also keeps only the most-recently-observed state per related contract, so a
+  defect needing a specific or older one yields no verdict at all: measured 1,567 of
+  5,856 replayed cases inconclusive for want of related state, five contracts with no
+  verdict on *any* case (`conformance/capture.rs:108-125`). That file states the intent
+  plainly — "depending on related state must not be a way to escape conformance
+  checking" — and coverage starvation is how it still can.
+- **`fdev verify-merge --state <files>` is blind to related contracts.** The
+  non-`--bundle` path leaves `related` unconditionally empty
+  (`fdev/src/conformance.rs:912-915`), so a contract of this shape comes back 100%
+  inconclusive on every property — which, skimmed for violations, reads as a clean
+  bill. Check on the `--bundle` path, confirm the bundle reports `related_entries > 0`,
+  count the explicit verdicts, and treat **inconclusive as not a pass**. Exit code 4
+  means violations were found and the JSON is complete.
 - `freenet-scaffold`'s `#[composable]` has no inter-contract awareness
   (freenet-core#2870), so cross-contract dependencies are hand-rolled.
 

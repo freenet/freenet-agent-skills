@@ -380,7 +380,7 @@ so validate remains the backstop — and note what that costs when your two
 functions disagree about a bound, since the merge is then refused rather than
 corrected: see "Bound It In `update_state`" under State Size Budget.
 
-**Prefer the `update_state` route where either would work.** Related state resolved during *validation* is never captured by the conformance system (freenet-core#5376), so a contract whose validity depends on that path can never be judged — and an unjudgeable contract reads exactly like a clean one. The update path is captured today.
+**Prefer the `update_state` route where either would work.** The preference survives, but the old reason for it does not: validation-resolved related state *is* captured now, since v0.2.131 (2026-08-24, freenet-core#5393 and #5402), so such a contract is no longer unjudgeable by construction. The reason to still prefer the update route is coverage. The update path resolves local-store-first and pushes the result into `updates`, which capture records as a matter of course; the validation path is captured only when it actually fires, and two live contracts were measured carrying zero related entries because they receive only UPDATE traffic. Better still, fold the related fact into your own state as it arrives and gate on your own state — that keeps validity a function of your own inputs, so peers cannot disagree, and puts the fact inside the merge algebra where the laws check it normally.
 
 ### Production Track Record
 
