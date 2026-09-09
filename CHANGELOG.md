@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.37.4 (2026-09-08)
+
+The previous release said a claim about mechanism expires. This one is that
+claim expiring, eight days later, on the very page that said it.
+
+**The corrected fact.** Related state resolved during *validation* is captured
+by the conformance system, and has been since **v0.2.131 (2026-08-24)** —
+freenet-core#5393 and #5402. The skill said it never was, citing #5376 as open.
+So a whole class of contract — anything whose validity depends on another
+contract, which the authorization chain does routinely — was described as
+permanently exempt from conformance checking when it had been judgeable in
+released builds for a fortnight.
+
+**Two ways the correction was nearly got wrong, both worth keeping.** The issue
+closed on 2026-09-06, so a first pass reported the fix as two days old rather
+than two weeks. **A close date is bookkeeping; the release tag is what makes a
+mechanism available.** And confirming it by searching the log fails: the repo
+squash-merges, so the SHAs an issue timeline cites are branch commits that exist
+in no tag. Searching for them, or for the issue number, returns nothing and
+reads exactly like "never shipped". Go by PR number.
+
+**Judgeable is not judged**, which is the half that survives the good news. The
+verifier never *fetches* related state — it replays only what the bundle already
+carries, and maps any `RequestRelated` to `Inconclusive::RelatedRequired`.
+Capture keeps just the most-recently-observed state per related contract, so a
+defect needing a specific or older one yields no verdict: 1,567 of 5,856 replayed
+cases inconclusive, five contracts with no verdict on any case. And
+`fdev verify-merge --state <files>` leaves `related` unconditionally empty, so a
+contract of this shape comes back 100% inconclusive on every property — which,
+skimmed for violations, reads as a clean bill. Hence the checks now stated with
+it: use `--bundle`, confirm `related_entries > 0`, count explicit verdicts, and
+treat inconclusive as not a pass.
+
+Every failure in this entry has one shape. The instrument returned something
+clean-looking rather than an error: a closed issue that read as a recent fix, a
+log search that read as never-shipped, an inconclusive run that reads as a pass.
+A measuring instrument should not share the failure mode of the thing it
+measures.
+
 ## 1.37.3 (2026-09-06)
 
 A trim, and the reason for it is the release's own lesson.
