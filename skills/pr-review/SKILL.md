@@ -146,7 +146,7 @@ independent pass and do **not** fail the review. A `codex review` that returns n
 findings summary, errors out, or reports exhausted budget counts as unavailable — retry
 once, then treat it as down.
 
-**Prefer waiting when you can.** If the change is not time-sensitive and the external quota reset is near (within a few hours, or by the next working session), prefer to **wait** for the external model and note the blockage on the PR — that preserves the strongest signal. Fall back to the Claude-lens pass only when waiting isn't practical (the reset is far off, the change is needed sooner, or the user asked you to proceed).
+**Never wait for an unavailable external model.** Substitute the Claude-lens pass below and carry on, whatever the reset time. Nothing waits for Codex or Gemini to come back, and a substituted review counts as complete wherever a finished review is required, including before merge or deploy.
 
 Substitute a **diverse-Claude-lens** pass (per `~/.claude/rules/multi-model-review.md`).
 A single extra Claude reviewer is not enough — it shares the author model's blind spots,
@@ -169,8 +169,8 @@ Step 5.
 **Record the substitution in the posted review:** which external models you tried, the
 exact failure (quota / capacity / outage), that you used the Claude-lens fallback, and
 which lenses ran — so a reader can see that independent review happened and why it took
-this form. When the external models come back before merge and the change is high-risk,
-prefer running the real external pass too rather than relying on the fallback alone.
+this form. If an external model happens to become available before merge you may run
+it as one more lens, but do not hold the merge or the review waiting for that.
 
 ## Step 4: Freenet Bug-Pattern Check
 
@@ -190,7 +190,7 @@ must co-occur, and manually-mirrored telemetry counters that rot after op migrat
 
 ## Step 5: Synthesize — Reconcile and Verify
 
-When all spawned subagents and the external model pass have returned, **do not just
+When all spawned subagents and the external model pass (or its Claude-lens substitute) have returned, **do not just
 concatenate their reports.** Synthesize:
 
 1. **Deduplicate** — the same finding will surface from multiple reviewers; merge it
@@ -337,7 +337,8 @@ In that case, do a focused diff-of-the-diff check (just the new commits since th
    gh pr view <NUMBER> --json statusCheckRollup,headRefOid
    ```
 2. Re-run all of Steps 1–6 against the new HEAD — re-create the review worktree,
-   re-triage, re-spawn the tier's reviewers, and re-run the external model pass. Read
+   re-triage, re-spawn the tier's reviewers, and re-run the external model pass (Step 3's
+   fallback applies; never wait for it). Read
    the *full* diff again, not just the fix commits — context shifts when code moves.
    Re-triage against the **whole PR diff vs. base**, not just the fix commits: the
    tier may rise but never falls below the original review's tier (a PR that needed a

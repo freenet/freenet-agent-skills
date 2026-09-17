@@ -203,7 +203,9 @@ Once the PR is complete, code is simplified, and CI is passing, run four paralle
 
 ### External Skeptical Review with Codex
 
-After the internal review agents complete, ask Codex to do a skeptical review of the PR. Codex uses a different model and catches different classes of issues — having an independent perspective reduces blind spots. Share the PR number and ask it to look for bugs, race conditions, edge cases, and failure modes.
+After the internal review agents complete, ask Codex to do a skeptical review of the PR. Codex uses a different model and catches different classes of issues, so an independent perspective reduces blind spots. Share the PR number and ask it to look for bugs, race conditions, edge cases, and failure modes.
+
+If Codex is unavailable (quota, capacity, outage), use the fallback in the `pr-review` skill's Step 3: substitute Claude lenses, record the substitution, and proceed. Never wait for Codex to come back.
 
 ### Handling Review Feedback
 
@@ -310,7 +312,7 @@ Full rules: `.claude/rules/code-style.md`, `.claude/rules/ring.md`, `.claude/rul
 - [ ] **Simulation health tested** if PR touches routing/topology/operations/subscriptions — key metrics (subscribe rate, GET rate, tree formation) asserted in simulation tests
 - [ ] **Bug-prevention patterns checked** — if PR touches select!/spawn/cleanup/backoff/deployment, verify compliance with the 5 rules above
 - [ ] CI passing
-- [ ] **PR review completed** (code-first, testing, skeptical, big-picture review agents + Codex skeptical review)
+- [ ] **PR review completed** (code-first, testing, skeptical, big-picture review agents + Codex skeptical review, or the recorded Claude-lens substitution when Codex is unavailable)
 - [ ] All review feedback addressed (fixed or explained why not applicable)
 - [ ] All human review feedback addressed
 - [ ] Responses posted to review comments
