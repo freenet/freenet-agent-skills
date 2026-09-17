@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.37.5 (2026-09-17)
+
+**pr-review: never wait for an unavailable external model.** The skill told a
+reviewer to *prefer waiting* for Codex or Gemini when the quota reset was
+"near", and to prefer running the real external pass before merging a
+high-risk change even after a Claude-lens substitution. The global review rule
+already said availability is not a blocker, so the two disagreed, and the skill
+won. An agent held a reviewed PR with green CI for a Codex quota reset two days
+away, and put the choice to the maintainer, who answered: "don't wait on codex -
+if codex is unavailable you can use claude instead".
+
+Both sentences are replaced. When an external model is unavailable, substitute
+the diverse-Claude-lens pass and proceed. That review is complete for the merge
+gate, and an external model that comes back later is optional, never something
+to wait for.
+
 ## 1.37.4 (2026-09-08)
 
 The previous release said a claim about mechanism expires. This one is that
