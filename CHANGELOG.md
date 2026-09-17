@@ -18,6 +18,10 @@ the diverse-Claude-lens pass and proceed. That review is complete for the merge
 gate, and an external model that comes back later is optional, never something
 to wait for.
 
+`pr-creation`'s "External Skeptical Review with Codex" step and its merge
+checklist required Codex with no fallback, so they now point at the same
+substitution.
+
 ## 1.37.4 (2026-09-08)
 
 The previous release said a claim about mechanism expires. This one is that
