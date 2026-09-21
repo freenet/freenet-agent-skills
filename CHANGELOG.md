@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.38.0 (2026-09-21)
+
+**The delegate host functions these skills told authors to call do not exist.**
+`dapp-builder`'s `references/delegate-patterns.md` documented
+`ctx.put_contract_state`, `ctx.update_contract_state` and
+`ctx.subscribe_contract` as the "V2" way to reach contract state, and
+`local-dev` repeated two of them as the things that still work under `freenet
+local`. freenet-core withdrew all three from the wasmtime linker (#5638), and
+freenet-stdlib removed the `DelegateCtx` wrappers in 0.11.0 along with
+`subscribe_contract_checked`, `list_subscriptions` and `schedule_wakeup` —
+three that no released node ever registered, and one of which 0.10.0's own
+documentation told authors to *prefer*.
+
+The failure mode is what makes this worth a release on its own: a delegate
+calling one of those wrappers compiles and links, and then fails at module
+*instantiation*. The node stays healthy and the app is silently dead, after
+publishing. On 0.11.0 it is a compile error at the call site instead.
+
+The guidance is replaced rather than deleted. Writing and subscribing is done by
+emitting `PutContractRequest`, `UpdateContractRequest` or
+`SubscribeContractRequest`; `list_subscriptions` and `schedule_wakeup` have no
+replacement and never had a host implementation to replace.
+`DelegateCtx::get_contract_state` survives and is unchanged — and is NOT the
+synchronous spelling of `GetContractRequest`, because it reads only state this
+node already holds.
+
+The "two live delegate API versions" framing goes with them. There is one
+contract API now, so `## V2 Host Functions: Direct Contract Access` is
+`## Host Functions on DelegateCtx`, and the V1/V2 qualifiers elsewhere in the
+file are gone.
+
+Four adjacent claims were re-verified against freenet-core `7fa2c6605`
+(v0.2.136) while fixing the above, and all four had gone stale:
+
+- A delegate GET now falls through to a real network GET on a local miss, and a
+  delegate SUBSCRIBE now takes a real network subscription and registers demand
+  (freenet-core#5615). The capability table said neither reached the network at
+  all. What freenet-core#4669 still tracks is durability across a restart.
+- Emitting `UnsubscribeContractRequest` is not a no-op — the node fails the
+  whole delegate run naming freenet-core#5600, deliberately, so it cannot read
+  as a successful unsubscribe.
+- Delegate execution does now get the wall-clock backstop and panic capture
+  (freenet-core#5480, closed); the file listed their absence under "no guard
+  today".
+- The subscription registry is bounded at 256 contracts per delegate. It was
+  documented as unbounded. It is still process-global (freenet-core#4824).
+
+**Version pins.** `0.8.5` is River's pin, not the current release — 0.9.0 and
+0.10.0 followed it, and `dapp-builder` said in three places that it was current.
+The example manifests still mirror River, because that is what they are for, but
+they now say so and carry the delegate caveat: a delegate crate wants 0.11.0 or
+later. A note claiming 0.9.0 was unpublished was also corrected.
+
 ## 1.37.5 (2026-09-17)
 
 **pr-review: never wait for an unavailable external model.** The skill told a
