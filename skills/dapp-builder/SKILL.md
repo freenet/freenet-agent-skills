@@ -296,10 +296,16 @@ Determine what private data each user needs stored locally and split it across d
 
 > **Know the limits before you lean on a delegate for background work.** A
 > delegate runs only when something pokes it: there is no scheduled wakeup
-> (freenet-core#3972). Its contract GET reads the local store only, and its
-> contract subscribe registers no network demand, so subscribing does not keep a
-> contract alive in the network (freenet-core#4669). Both are open with no fix
-> merged as of 2026-08-30.
+> (freenet-core#3972), and freenet-stdlib 0.11.0 removed the
+> `DelegateCtx::schedule_wakeup` wrapper that no node ever implemented.
+> Contract GET and SUBSCRIBE do reach the network now (freenet-core#5615), but a
+> subscription is not re-registered after the node restarts, so it does not keep
+> a contract alive across one (freenet-core#4669, open).
+> **Contract access is by message only.** `ctx.put_contract_state`,
+> `ctx.update_contract_state` and `ctx.subscribe_contract` are gone — emit
+> `PutContractRequest` / `UpdateContractRequest` / `SubscribeContractRequest`
+> instead. On stdlib 0.10.0 and earlier those wrappers still compile and then
+> fail at module instantiation, which is why 0.11.0 removed them.
 > Test that work against a real node: `freenet local` never runs the loop that
 > services a delegate's contract requests, so a delegate's GET, PUT, UPDATE and
 > SUBSCRIBE all silently do nothing there (freenet-core#5273).
@@ -544,10 +550,15 @@ deserialization failures, missing features, and "variant index out of range"
 errors. Check [River's workspace Cargo.toml](https://github.com/freenet/river/blob/main/Cargo.toml)
 before pinning.
 
-As of August 2026 — River pins `freenet-stdlib = "0.8.5"`, which is the
-current crates.io release, so River and upstream no longer diverge. If you
-are moving code off an older pin, the step is 0.6 → 0.8 (no 0.7 was ever
-published to crates.io): it added Base58-stringified `contract_states` keys
+As of September 2026 — River pins `freenet-stdlib = "0.8.5"`. That is no
+longer the latest crates.io release: 0.9.0 and 0.10.0 followed, and **0.11.0
+is the one a DELEGATE crate wants**, because it removes the `DelegateCtx`
+write and subscribe methods that 0.8.5 through 0.10.0 expose and no node
+implements — calling one compiles, publishes, and then fails at module
+instantiation (see `references/delegate-patterns.md`). For contract and UI
+crates, River's pin is still the version to mirror. If you are moving code off
+an older pin, the step is 0.6 → 0.8 (no 0.7 was ever published to crates.io):
+it added Base58-stringified `contract_states` keys
 in `NodeDiagnosticsResponse`, hardened wire-boundary enums with
 `#[non_exhaustive]`, and removed the world-known `DEFAULT_CIPHER` /
 `DEFAULT_NONCE` constants, so you need the wildcard match arms / random

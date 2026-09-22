@@ -506,28 +506,37 @@ does not service a delegate's contract requests at all.
 
 The loop that handles `GetContractRequest`, `PutContractRequest`,
 `UpdateContractRequest` and `SubscribeContractRequest` from a delegate is
-`handle_delegate_with_contract_requests` (`crates/core/src/contract.rs:537`).
-Both of its call sites are reached from `contract_handling` (`:1268`), through
-`handle_delegate_notification` (`:2076`) and `handle_contract_event` (`:2209`),
-and `contract_handling` is spawned from one production site,
-`crates/core/src/node/p2p_impl.rs:948`, the network node. `run_local_node` (`crates/core/src/node.rs:5768`) handles
-`ClientRequest::DelegateOp` by calling `executor.delegate_request(...)` straight
-through (`:5851`), which runs the delegate's `process()` and hands back its
-outbound messages without acting on any of them. Nothing reports an error, so
-the delegate looks healthy and simply has no effect.
+`handle_delegate_with_contract_requests` (`crates/core/src/contract.rs`). Both
+of its call sites are reached from `contract_handling`, through
+`handle_delegate_notification` and `handle_contract_event`, and
+`contract_handling` is spawned from one production site,
+`crates/core/src/node/p2p_impl.rs`, the network node. `run_local_node`
+(`crates/core/src/node.rs`) handles `ClientRequest::DelegateOp` by calling
+`executor.delegate_request(...)` straight through, which runs the delegate's
+`process()` and hands back its outbound messages without acting on any of them.
+Nothing reports an error, so the delegate looks healthy and simply has no
+effect.
 
 Delegate notification is dead in local mode too, for the same reason:
 `send_delegate_contract_notifications` returns immediately when
-`delegate_notification_tx` is `None` (`executor_impl.rs:2169-2172`), and that
-field is set only by `RuntimePool`, which local mode does not build.
-`RequestUserInput` is lost the same way, which is freenet-core#5273.
+`delegate_notification_tx` is `None` (`executor_impl.rs`), and that field is set
+only by `RuntimePool`, which local mode does not build. `RequestUserInput` is
+lost the same way, which is freenet-core#5273.
 
-The V2 delegate host functions are the exception: `ctx.get_contract_state`,
-`ctx.put_contract_state` and `ctx.update_contract_state` are wasmtime imports
-resolved inside the delegate's own execution, so they do reach the local store
-under `freenet local`. `ctx.subscribe_contract` registers and can never fire.
+`DelegateCtx::get_contract_state` is the exception: it is a wasmtime import
+resolved inside the delegate's own execution rather than a message the node
+services afterwards, so a delegate's *reads* of state this node already holds do
+work under `freenet local`. There is no synchronous write or subscribe to go
+with it — freenet-core#5638 withdrew `put_contract_state`,
+`update_contract_state` and `subscribe_contract` from the node, and
+freenet-stdlib 0.11.0 removed the `DelegateCtx` wrappers, so on 0.11.0 calling
+one is a compile error rather than a delegate that instantiates and dies.
 
-Verified against freenet-core `main` @ `b863ee7c6` on 2026-08-30. The
+The practical upshot for local development is unchanged and now has no
+exception worth chasing: a delegate that writes or subscribes needs `freenet
+network`.
+
+Verified against freenet-core `main` @ `7fa2c6605` (v0.2.136) on 2026-09-21. The
 `dapp-builder` skill's `references/delegate-patterns.md` has the full picture,
 including what a delegate's contract access does and does not reach on a real
 network node.

@@ -374,8 +374,12 @@ resolver = "2"
 [workspace.dependencies]
 # Mirror River's pinned versions; bump together when upgrading. Check
 # https://github.com/freenet/river/blob/main/Cargo.toml before pinning.
-# stdlib 0.8.5 tracks the current freenet-stdlib release (0.6 → 0.8; no 0.7
-# was ever published to crates.io).
+# 0.8.5 is River's pin, NOT the latest release (0.9.0 and 0.10.0 followed;
+# no 0.7 was ever published to crates.io). For a CONTRACT crate that is fine.
+# A DELEGATE crate should be on 0.11.0 or later: 0.8.5 through 0.10.0 expose
+# DelegateCtx write/subscribe methods that no node implements, and calling one
+# compiles, publishes, and then fails at module instantiation. See
+# references/delegate-patterns.md.
 freenet-stdlib = { version = "0.8.5", features = ["contract"] }
 freenet-scaffold = "0.2.2"
 freenet-scaffold-macro = "0.2.2"

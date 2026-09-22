@@ -127,7 +127,7 @@ edition = "2021"
 
 [dependencies]
 # Mirror River's pinned versions; see https://github.com/freenet/river/blob/main/ui/Cargo.toml
-# stdlib 0.8.5 tracks the current freenet-stdlib release.
+# 0.8.5 is River's pin, not the latest release (0.9.0 and 0.10.0 followed).
 dioxus = { version = "0.7.9", features = ["web"] }
 dioxus-free-icons = { version = "0.10.0", features = ["font-awesome-solid"] }
 freenet-stdlib = { version = "0.8.5", features = ["net"] }
