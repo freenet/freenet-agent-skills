@@ -416,7 +416,7 @@ still do this.
 
 Put it where a user will find it without hunting, such as a footer or an
 "About" page, and ship it in the **first** release. Many people will only ever
-see that version. Make each link a plain `<a href>`, which the gateway opens in
+see that version. Make each web link a plain `<a href>`, which the gateway opens in
 a new tab (`target="_blank" rel="noopener"` is fine too). Do not navigate by
 assigning `window.location`: the shell's `frame-src 'self'` blocks it and the
 click silently does nothing.
