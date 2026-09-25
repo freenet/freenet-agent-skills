@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.38.1 (2026-09-25)
+
+**`dapp-builder` now strongly recommends that every dApp shows a way to reach
+its author and find its source.** Many sites on Freenet today offer no way to
+contact whoever made them, so users can't report bugs, ask questions or audit
+the code. Phase 3 gains a section that lists acceptable channels: a source
+repo, an email address, or a River member ID given with its full verifying key,
+because the short ID is a 40-bit truncation that two members can share. It says
+a pseudonymous channel is fine, and that the info belongs in the first release.
+Phase 4's publish step now checks for it before the first `fdev website publish`.
+
 ## 1.38.0 (2026-09-21)
 
 **The delegate host functions these skills told authors to call do not exist.**

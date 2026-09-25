@@ -388,6 +388,39 @@ For interactive debugging rather than scripted specs, the Playwright MCP browser
 tools drive a running `dx serve` or local node directly. See the `local-dev`
 skill, "Debugging with Playwright".
 
+#### Tell users who made it and where the source is (both options)
+
+**Strongly recommend that every dApp shows a way to reach its author and to
+find its source code.** Raise this with the developer before the first publish
+if they haven't planned for it. Many sites on Freenet today give no way to
+contact the person who made them. Nobody can report a bug, ask a question, or
+offer a fix, and nobody can audit what the app does with their data. On a
+network whose pitch is "you don't have to trust a server", source that can't be
+found is a real cost.
+
+Any one of these is enough, and more than one is better:
+
+- **Source repository**: a GitHub/Codeberg/etc. URL, or a repository hosted on
+  Freenet itself. If the app is open source, link the exact repo the published
+  WASM was built from.
+- **Email address**: a dedicated or pseudonymous address is fine.
+- **River member ID**: so users can find the author in a River room (the
+  Freenet Official room is the obvious one) and message them directly. Also
+  give the full verifying key (River's member info panel shows it). The short
+  member ID is a 40-bit truncation that two members can share, so on its own it
+  can be impersonated.
+
+A pseudonymous channel counts. The aim is to give users *a* channel to the
+author, not to reveal who the author is, so an author who wants anonymity can
+still do this.
+
+Put it where a user will find it without hunting, such as a footer or an
+"About" page, and ship it in the **first** release. Many people will only ever
+see that version. Make each link a plain `<a href>`, which the gateway opens in
+a new tab (`target="_blank" rel="noopener"` is fine too). Do not navigate by
+assigning `window.location`: the shell's `frame-src 'self'` blocks it and the
+click silently does nothing.
+
 References:
 - `references/ui-patterns.md` - WebSocket connection models, gateway CSP,
   serving large binary assets from a dedicated contract, framework-specific
@@ -443,6 +476,10 @@ Set up the build system, CI, and deployment pipeline.
    implementation) — read it before deciding. See
    `references/web-container-contract.md`. Do **not** build a redirect/pointer
    contract for stable URLs; you already have one.
+
+   Before the first `fdev website publish`, check that the UI shows a way to
+   contact the author and find the source (see Phase 3, "Tell users who made
+   it"). If it doesn't, stop and ask the developer.
 8. **Plan contract-WASM stability before the first release.** A
    `cargo update` in the workspace root must not silently rotate
    contract IDs. See `references/build-system.md` →
