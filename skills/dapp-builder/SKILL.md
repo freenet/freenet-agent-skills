@@ -658,7 +658,7 @@ The TS package v0.2.0 brought the API to parity with the Rust client:
 for payloads >512 KB. Callbacks still fire alongside the promise-based
 calls for backward compatibility; the default request timeout is 30 s.
 `subscribe` is also promise-based **from TS package 0.4.0** (resolves/
-rejects on the matching `SubscribeResponse`, and on npm since 2026-08-31);
+rejects on the matching `SubscribeResponse`; 0.4.0 has been on npm since 2026-08-31);
 on 0.3.0 and earlier it resolves as soon as the request is sent, never on the
 host's response — use the `ResponseHandler` callbacks to detect a refused
 subscribe on those versions. `disconnect` resolves on send in every

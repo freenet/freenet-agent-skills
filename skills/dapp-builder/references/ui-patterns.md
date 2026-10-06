@@ -441,9 +441,11 @@ await Promise.allSettled(
 
 Cap concurrency if you have dozens of keys; a handful in flight at once is
 plenty. Keep the ordering only where it carries meaning, such as a GET that
-must finish before an UPDATE to the same contract. The same applies to a Rust
-UI: start the reads together (for example `futures::future::join_all`) rather
-than awaiting them one by one.
+must finish before an UPDATE to the same contract. In a Rust UI, the
+browser `WebApi::send` completes once the request is sent and every response
+arrives at the single result handler passed to `WebApi::start`, so send each
+GET without waiting for the previous response and handle each `GetResponse` or
+`NotFound` in that handler as it arrives, matched by key.
 
 **This needs stdlib TS 0.4.0 or later.** From 0.4.0, `api.get()` matches each
 response to its request by contract, and a host error rejects only the
