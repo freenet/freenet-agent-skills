@@ -378,6 +378,74 @@ pin one version everywhere anyway.
 Without the `getrandom` js feature, `getrandom 0.2` emits a `compile_error!` on
 `wasm32-unknown-unknown`. River uses this exact pattern.
 
+## Reading Contracts Efficiently
+
+A GET is a search of the network, not a database lookup, and two read
+patterns make an app slow even when every contract it reads is small. Both
+showed up in one live directory app in October 2026. It sharded its data by
+month × category and derived each shard's key in the UI. On every page load it
+GETted about 13 shards that nobody had written yet, one at a time. Its last
+section appeared about 100 seconds after the page opened, even though every
+contract that existed was served in milliseconds.
+
+### A GET for a key nobody has PUT is the slowest read there is
+
+The node cannot tell "this contract does not exist" from "I have not reached
+a peer that has it yet", so a GET for a never-created key runs the whole
+search before it answers `NotFound`. Measured through the nova gateway
+(v0.2.142), that took 4–14 seconds per key, and one took over 60. A contract
+that exists and is cached on the user's node comes back in milliseconds. A
+missing key is often the most expensive read your app can make.
+
+So don't make readers find out what exists by GETting it. This matters most
+for derived keys: per-period or per-category shards, per-user inboxes, "the
+next version" of something.
+
+- **Keep a manifest.** When a writer creates a shard, have it also record the
+  shard in a contract readers already fetch, such as the app's root or index
+  contract. Readers GET only the shards listed there. One extra UPDATE when the
+  shard is created saves every reader a `NotFound` search on every load.
+- **Or create shards before anyone reads them.** If readers must find a shard
+  at a derived key, PUT it empty ahead of need: say, have the first writer
+  of a period create the period's other shards too, or have a scheduled
+  job create next month's shards in advance. An empty contract answers fast;
+  a missing one doesn't.
+- **If you must probe, remember the answer across loads.** Store "this key was
+  missing at time T" in `localStorage` or a delegate, with an expiry. Keeping
+  it in memory only spares the current page, so every reload and every new
+  visitor pays the full search again.
+- **Keep optional reads off the critical path.** Render what is known to
+  exist first, then look for older or optional data in the background.
+
+The legacy-key backward probe in `upgrade-and-migration.md` is the same kind
+of read. Its completion marker exists so a client stops paying for it.
+
+### Don't serialize independent reads
+
+Sending every GET through one promise chain, or awaiting each one in a loop,
+makes load time the *sum* of every read's latency, and one slow or missing key
+blocks everything behind it. Send independent GETs together and render each
+result as it arrives:
+
+```ts
+// Slow: total = sum of latencies, and one missing key stalls the rest
+for (const id of ids) render(await api.get(id));
+
+// Better: total ≈ the slowest read, and each section appears when ready
+await Promise.allSettled(ids.map((id) => api.get(id).then(render)));
+```
+
+Cap concurrency if you have dozens of keys; a handful in flight at once is
+plenty. Keep the ordering only where it carries meaning, such as a GET that
+must finish before an UPDATE to the same contract.
+
+If you wrap the stdlib's callback API in promises, match responses to requests
+by contract: `GetResponse` carries the key and `onContractNotFound` carries the
+instance id, so concurrent GETs resolve correctly. A generic `onErr` carries
+only a `cause` string and cannot be matched to the request that caused it, so
+decide up front what it does to the GETs in flight: fail them all, or let each
+one time out on its own. Don't fix it by serializing every read.
+
 ## Contract Synchronization
 
 ### Subscribing to Contracts
