@@ -386,16 +386,18 @@ showed up in one live directory app in October 2026. It sharded its data by
 month × category and derived each shard's key in the UI. On every page load it
 GETted about 13 shards that nobody had written yet, one at a time. Its last
 section appeared about 100 seconds after the page opened, even though every
-contract that existed was served in milliseconds.
+contract the gateway already held was served in milliseconds.
 
 ### A GET for a key nobody has PUT is the slowest read there is
 
 The node cannot tell "this contract does not exist" from "I have not reached
-a peer that has it yet", so a GET for a never-created key runs the whole
-search before it answers `NotFound`. Measured through the nova gateway
-(v0.2.142), that took 4–14 seconds per key, and one took over 60. A contract
-that exists and is cached on the user's node comes back in milliseconds. A
-missing key is often the most expensive read your app can make.
+a peer that has it yet", so a GET for a never-created key runs its whole
+search, retries included, before it answers `NotFound`. Measured through the nova
+gateway on v0.2.142, that took 4–14 seconds per key. One took 63 seconds,
+past the stdlib's 30-second default timeout, so the caller got a timeout
+instead of `NotFound`. A GET for a contract that exists stops at the first
+peer holding it, which is much faster. So a missing key is often the most
+expensive read your app makes.
 
 So don't make readers find out what exists by GETting it. This matters most
 for derived keys: per-period or per-category shards, per-user inboxes, "the
@@ -403,22 +405,22 @@ next version" of something.
 
 - **Keep a manifest.** When a writer creates a shard, have it also record the
   shard in a contract readers already fetch, such as the app's root or index
-  contract. Readers GET only the shards listed there. One extra UPDATE when the
-  shard is created saves every reader a `NotFound` search on every load.
-- **Or create shards before anyone reads them.** If readers must find a shard
-  at a derived key, PUT it empty ahead of need: say, have the first writer
-  of a period create the period's other shards too, or have a scheduled
-  job create next month's shards in advance. An empty contract answers fast;
-  a missing one doesn't.
-- **If you must probe, remember the answer across loads.** Store "this key was
-  missing at time T" in `localStorage` or a delegate, with an expiry. Keeping
-  it in memory only spares the current page, so every reload and every new
-  visitor pays the full search again.
+  contract. Readers GET only the shards listed there. That writer must be
+  allowed to UPDATE the manifest, and entries need a commutative merge. If
+  anyone can add entries, anyone can list never-PUT keys and push every reader
+  into slow `NotFound`s.
 - **Keep optional reads off the critical path.** Render what is known to
   exist first, then look for older or optional data in the background.
+- **If you must probe, treat a `NotFound` as a hint, not a fact.** A
+  `NotFound` doesn't prove the contract is absent, so it can't be a durable
+  "nothing there". Cache it only with a short expiry, and never let it hide a
+  shard the manifest lists. A published webapp has no browser storage (the
+  sandboxed iframe has an opaque origin, so `localStorage` throws; see
+  `upgrade-and-migration.md`), so a cache that has to survive a reload belongs
+  in a delegate.
 
 The legacy-key backward probe in `upgrade-and-migration.md` is the same kind
-of read. Its completion marker exists so a client stops paying for it.
+of read. Read the marker rules there before caching its outcome.
 
 ### Don't serialize independent reads
 
@@ -429,22 +431,27 @@ result as it arrives:
 
 ```ts
 // Slow: total = sum of latencies, and one missing key stalls the rest
-for (const id of ids) render(await api.get(id));
+for (const key of keys) render(await api.get(new GetRequest(key)));
 
 // Better: total ≈ the slowest read, and each section appears when ready
-await Promise.allSettled(ids.map((id) => api.get(id).then(render)));
+await Promise.allSettled(
+  keys.map((key) => api.get(new GetRequest(key)).then(render)),
+);
 ```
 
 Cap concurrency if you have dozens of keys; a handful in flight at once is
 plenty. Keep the ordering only where it carries meaning, such as a GET that
-must finish before an UPDATE to the same contract.
+must finish before an UPDATE to the same contract. The same applies to a Rust
+UI: start the reads together (for example `futures::future::join_all`) rather
+than awaiting them one by one.
 
-If you wrap the stdlib's callback API in promises, match responses to requests
-by contract: `GetResponse` carries the key and `onContractNotFound` carries the
-instance id, so concurrent GETs resolve correctly. A generic `onErr` carries
-only a `cause` string and cannot be matched to the request that caused it, so
-decide up front what it does to the GETs in flight: fail them all, or let each
-one time out on its own. Don't fix it by serializing every read.
+**This needs stdlib TS 0.4.0 or later.** From 0.4.0, `api.get()` matches each
+response to its request by contract, and a host error rejects only the
+requests for the contract it names. Before 0.4.0, concurrent requests for
+different contracts could resolve with each other's responses, so one shard's
+state could render in another shard's place. On an older version, upgrade
+first. If you can't, match responses to requests by key in your own
+`ResponseHandler`.
 
 ## Contract Synchronization
 
@@ -789,8 +796,8 @@ const handler: ResponseHandler = {
   },
   // Added in stdlib v0.2.0: fired on SUBSCRIBE confirmation (subscribed flag = success).
   // On stdlib TS >= 0.4.0 this fires alongside the api.subscribe() promise, which now
-  // also resolves/rejects on this same response. On older versions (0.3.0 and below,
-  // still the published npm version as of 2026-08-22) this callback is the only way
+  // also resolves/rejects on this same response. On older versions (0.3.0 and below;
+  // npm has published 0.4.0 since 2026-08-31) this callback is the only way
   // to detect a refused subscribe. See "Contract Operations" below.
   onSubscribeResponse: (key, subscribed) => {
     console.log("[freenet] Subscribe:", key.encode(), "ok=", subscribed);
@@ -833,7 +840,7 @@ const contractKey = new ContractKey(instanceBytes, instanceBytes);
 
 stdlib TS v0.2.0 made `get`, `put`, and `update` **promise-based**. They resolve with the typed response, reject on timeout (default 30s), connection close, or host error. The legacy callbacks in `ResponseHandler` still fire for the same response — both APIs coexist for backward compatibility.
 
-**`subscribe` is version-dependent — check which stdlib TS version you're on.** As of freenet-stdlib PR #94 (merged 2026-08-22, ships as TS package **0.4.0**), `subscribe()` correlates to its response the same way: it resolves on `SubscribeResponse{subscribed:true}` and rejects on `subscribed:false`, a host error naming the contract, connection close, or timeout — the `try/catch` pattern in the example below is correct from 0.4.0 on. **Before 0.4.0** (every version published to npm as of 2026-08-22 — the registry's latest is still 0.3.0), `subscribe()` just calls the synchronous `sendRequest()` and returns: the promise resolves as soon as the request is *sent*, never on the host's response, so it can't reject on a refused subscribe (e.g. hitting the node's per-client subscription cap of 50). On a pre-0.4.0 version, detect the real outcome via the `ResponseHandler` callbacks instead — `onSubscribeResponse` for success/failure the host reports back, `onErr` for a host-level error.
+**`subscribe` is version-dependent — check which stdlib TS version you're on.** As of freenet-stdlib PR #94 (merged 2026-08-22, ships as TS package **0.4.0**), `subscribe()` correlates to its response the same way: it resolves on `SubscribeResponse{subscribed:true}` and rejects on `subscribed:false`, a host error naming the contract, connection close, or timeout — the `try/catch` pattern in the example below is correct from 0.4.0 on. **Before 0.4.0** (npm's latest until 0.4.0 was published on 2026-08-31), `subscribe()` just calls the synchronous `sendRequest()` and returns: the promise resolves as soon as the request is *sent*, never on the host's response, so it can't reject on a refused subscribe (e.g. hitting the node's per-client subscription cap of 50). On a pre-0.4.0 version, detect the real outcome via the `ResponseHandler` callbacks instead — `onSubscribeResponse` for success/failure the host reports back, `onErr` for a host-level error.
 
 `disconnect` is untouched by #94: in every version it resolves as soon as the request is sent, not on any response — there's no pending-request queue for it the way `pendingGets`/`pendingPuts`/`pendingUpdates`/`pendingSubscribes` back the others.
 

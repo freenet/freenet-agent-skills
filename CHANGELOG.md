@@ -8,15 +8,17 @@ All notable changes to this project will be documented in this file.
 is slow, and serialized GETs add up.** A live directory app took about 100
 seconds to show all its content. It sharded data by month × category, and on
 every load it GETted about 13 shards nobody had written yet, one after another.
-Each `NotFound` took 4–14 seconds at the node, while every contract that existed
-came back in milliseconds. The skill already told authors to shard by
-time-window, but said nothing about how readers find out which shards exist.
+Each `NotFound` took 4–14 seconds at the node, while every contract the gateway
+already held came back in milliseconds. The skill already told authors to shard
+by time-window, but said nothing about how readers find out which shards exist.
 `references/ui-patterns.md` gains a "Reading Contracts Efficiently" section:
-keep a manifest of shards or create them before anyone reads them, remember
-absences across page loads, keep optional reads off the critical path, and send
-independent GETs concurrently. It also covers how to match concurrent responses
-to their requests when wrapping the stdlib's callback API. The State Size Budget
-bullet in Phase 1 now points there.
+list shards in a manifest readers already fetch, keep optional reads off the
+critical path, treat a cached `NotFound` only as a short-lived hint (kept in a
+delegate, since a published webapp has no browser storage), and send independent
+GETs concurrently, which needs stdlib TS 0.4.0 or later. The State Size Budget
+bullet in Phase 1 now points there. Also corrects three places that still said
+npm's latest stdlib TS package was 0.3.0; 0.4.0 has been published since
+2026-08-31.
 
 ## 1.38.1 (2026-09-25)
 
