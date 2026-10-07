@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.38.4 (2026-10-07)
+
+**`dapp-builder` no longer says delegates have no scheduled wakeup.** A
+delegate can now declare periodic wake-ups in its manifest
+(`#[delegate(manifest(lifecycle = [NodeStarted], capabilities = [Background], wakeups = [heartbeat = 300]))]`,
+freenet-stdlib 0.12.1 / freenet-macros 0.3.1, freenet/freenet-stdlib#137) and
+receives `WakeupFired { tag }` on freenet-core v0.2.139+ (freenet-core#5747).
+It can also ask for `Installed` / `NodeStarted` lifecycle events
+(freenet-core#5730, v0.2.138). Both need the user's one-time Background grant
+and share one duty budget. `references/delegate-patterns.md` gains a
+"Background runs" section covering the bounds (interval clamped to 60 s..7 d,
+tags 1..=64 bytes, at most 4), re-arming at node start rather than
+persistence, the inter-delegate hop being suppressed on these runs, one build
+working on older nodes, and the manifest section surviving only if the build
+does not strip custom sections. The skill also no longer says a delegate's
+subscription is lost on node restart: freenet-core#5728 (v0.2.137) persists
+and restores it. The audit against v0.2.142 and stdlib 0.12.1 also corrected
+the `process()` signature (it takes `ctx` first), the UPDATE not-found error,
+the parked network GET and its per-run cap, the Resource Limits list (which
+now has the Background-run budget), the wire-tag pin test (every variant is
+pinned since stdlib 0.10.0), the stdlib release list in the version advice,
+the `local-dev` note that lifecycle events and wake-ups never fire under
+`freenet local`, and drifted file:line references.
+
 ## 1.38.3 (2026-10-07)
 
 **`dapp-builder` now says every system that shows users other people's content
