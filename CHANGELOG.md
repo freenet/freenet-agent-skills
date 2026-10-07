@@ -10,11 +10,12 @@ risks being delisted from Atlas and having its links banned from the Freenet
 Official River room. Images and video are where this matters most. Phase 3 gains
 a section that sets out the requirement and lists ways to identify material:
 curated publishing, active moderators, or user reports, where it notes that
-reports suit some services and not others. It also covers how to remove material,
-either by tombstoning it in the contract or with an author-signed denylist that
-the UI filters against, and says what removal does not do. For apps that take
-reports, it suggests ghost keys as an optional gate against floods and bad-faith
-reports, with the existing caveats. A Phase 1 key question asks who can remove an
+reports suit some services and not others. It also covers how to remove material:
+a tombstone that keeps a content-hash id, drops the bytes and is never evicted,
+or an author-signed denylist that the UI filters against. It also says what
+removal does not do. For apps that take reports, it suggests ghost keys as an
+optional gate against floods and bad-faith reports, while keeping a free
+proof-of-work path. A Phase 1 key question asks who can remove an
 item and whether the removal sticks across merges.
 
 ## 1.38.2 (2026-10-06)

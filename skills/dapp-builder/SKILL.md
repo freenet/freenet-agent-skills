@@ -274,7 +274,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 - If users reference each other (messaging, contacts, profiles), what is the user-facing identifier? It should be short, self-certifying, and stable across WASM upgrades — derived from a key, never a contract key. See `identity-and-addressing.md`.
 - How is each *record inside* this state identified, and does that id cover every term a reader will later rely on it to bind? A writer-supplied nonce, or an id that hashes only some of a record's terms, lets one author sign two different records under one id — and under a first-writer-wins merge that is **permanent divergence that cannot heal**, because both peers' summaries already name the id. Derive ids from content, compute them in the contract, and have exactly one function decide "are these the same thing". Get this right before launch: changing a derivation afterwards makes every published record unverifiable, which is a breaking change to users' data. See `contract-patterns.md` → "Record Identity".
 - Can strangers write to this contract? If so, what stops one attacker minting ten thousand keys and flooding it? There is no server to host a CAPTCHA, so the mechanisms available are proof-of-work and ghost keys (a blind-signed certificate proving an anonymous donation — a cost the attacker cannot beat with better hardware, and not burned as waste heat). **The recommended shape is both**: proof-of-work as the always-sufficient default, with a ghost key offered as a way to *skip the wait*, surfaced while the grind is running and the user is blocked anyway. That lets you set difficulty by what deters an attacker rather than by what your slowest device tolerates, while never pricing anyone out. See `identity-and-addressing.md` → "Cryptographic CAPTCHA". **Present the choice to the developer rather than picking silently**: ghost keys cost their users money, that money funds Freenet, and the mint is centralized (verification is not). Those are product and architecture decisions, not technical details to settle on the developer's behalf.
-- If this contract holds content other users will see (posts, files, listings, links), **who can remove an item, and does the removal stick?** Every system on Freenet needs a way to identify and remove illegal material (most critically images and video), or it risks being delisted from Atlas and having its links banned from the Freenet Official River room. If removal happens in the contract, design it in from v1: a key (owner or moderator) whose removals the contract accepts, recorded as a **tombstone**, because if the item is simply deleted, the next merge with a peer holding older state brings it back. Adding this after launch means a contract upgrade. See Phase 3 → "Have a way to remove illegal material" for the whole mechanism, and `state-authorization-patterns.md` → "Tombstones".
+- If this contract holds content other users will see (posts, files, listings, links), **who can remove an item, and does the removal stick?** Every system on Freenet needs a way to identify and remove illegal material (most critically images and video), or it risks being delisted from Atlas and having its links banned from the Freenet Official River room. If removal happens in the contract, design it in from v1: a key (owner or moderator) whose removals the contract accepts, recorded as a **tombstone** that keeps the item's id and drops its bytes, because if the item is simply deleted, the next merge with a peer holding older state brings it back. Adding this after launch means a contract upgrade. See Phase 3 → "Have a way to remove illegal material (both options)" for the whole mechanism, and `state-authorization-patterns.md` → "Tombstones".
 - How large can this contract's state realistically grow? **Keep each contract instance's state small — target well under 4 MB, not just under the host's 50 MiB hard cap.** A GET transfers the *entire* state before the UI can render anything, so state size is felt directly as load latency, and `validate_state`/`update_state`/`summarize_state` WASM execution cost scales with it too. If a kind of data can grow without bound (message history, uploaded files, a membership list that only grows), don't let one contract instance absorb all of it — shard by the natural unit of write concurrency instead (one contract per room, per user, per time-window, per shard-key, etc.), so each instance stays small regardless of how large the *dataset* gets in aggregate. See `state-authorization-patterns.md` → "State Size Budget". **Then decide how readers learn which shards exist.** A GET for a never-PUT key searches the network before answering `NotFound` (seconds, not milliseconds), so don't discover shards by GETting derived keys. See `ui-patterns.md` → "Reading Contracts Efficiently".
 
 **Implementation steps:**
@@ -430,12 +430,11 @@ being **delisted from Atlas**, Freenet's official search engine and discovery
 index, and **having its links banned from the Freenet Official River room**.
 For most dApps those are the main ways new users find them. **This is most
 critical for images and video**, where the worst illegal material (child sexual
-abuse material above all) is found, and where no amount of text filtering
-helps. An app that lets strangers publish media should have its removal
-mechanism working before launch, not added after the first incident. Raise this
-with the developer before the first publish, alongside the author-contact link above. Having
-no server does not exempt an app: its author still publishes the UI that
-displays the content, and decides what that UI shows.
+abuse material above all) is found. An app that lets strangers publish media
+should have its removal mechanism working before launch, not added after the
+first incident. Raise this
+with the developer before the first publish, alongside the author-contact link
+above.
 
 The mechanism has two halves.
 
@@ -445,9 +444,9 @@ choose it with the developer rather than defaulting to one:
 - **Curated publishing.** If only the author, or a small set of trusted keys,
   can publish, those publishers are the check. This only fits a curated site or
   an app whose content comes from one source, not one open to strangers.
-- **Moderators who watch the content.** River rooms work this way: the owner,
-  anyone above a member in the invite chain, or a deputy can ban that member,
-  so an active moderator removes material without anyone having to report it.
+- **Moderators who watch the content** and remove what breaks the rules
+  without waiting for a report. River rooms rely on this: the owner, anyone
+  above a member in the invite chain, or a deputy can ban that member.
 - **User reports.** A "Report" action on each item, sending the item's id and a
   reason to whoever moderates, usually through a report-inbox contract. This
   suits open services where strangers publish to strangers. It is not right
@@ -456,39 +455,36 @@ choose it with the developer rather than defaulting to one:
   believe they have told someone.
 
 **Removing it.** Where the moderator's key can write to the contract holding the
-content, it tombstones the item (see Phase 1). Where it can't, because the
-content lives in contracts each user owns or in an index anyone can write to,
-publish an author-signed denylist contract that the UI reads, and filter
-against it before rendering. Either way, the item has to disappear from what
-your app shows. Be accurate with users about what that means: it drops the item
-from the contract's current state and from every UI that honours the removal,
-but it does not erase copies that peers or users already hold. Say "removed",
-not "deleted from the network".
+content, it tombstones the item: keep the id (a content hash, so the same bytes
+cannot come back under a new id), drop the bytes, and reject the item on any
+later merge. Keep these tombstones out of any list you bound by evicting old
+entries, because an evicted tombstone lets the item return from a peer holding
+older state (`state-authorization-patterns.md` → "Tombstones"). Where the
+moderator can't write to the contract, because the content lives in contracts
+each user owns, in an index anyone can write to, or in a separate asset contract
+holding the media, publish an author-signed denylist contract that the UI reads,
+and filter against it before rendering. Either way, the item has to disappear
+from what your app shows. Be accurate with users about what that means: it drops
+the item from the contract's current state and from every UI that honours the
+removal, but it does not erase copies that peers or users already hold. Say
+"removed", not "deleted from the network".
 
 **If you take user reports, consider gating them with ghost keys.** A channel
 that strangers can write to invites abuse: junk reports bury real ones, and mass
 false reports are a cheap way to get legitimate content taken down. Asking for a
-[ghost key](https://freenet.org/ghostkey/) signature on each report helps
-with both:
+[ghost key](https://freenet.org/ghostkey/) signature on each report makes volume
+cost money that better hardware does not reduce, keeps the reporter anonymous,
+and lets the moderator weigh reports by the key's donation amount and age and
+ignore a key that has filed reports in bad faith. Verify the signature when the
+report is admitted in `update_state`, so unsigned reports never enter the
+inbox's state.
 
-- Volume costs money that better hardware does not reduce. Rate-limit per key
-  in the moderator's tooling, and ten thousand reporters cost ten thousand
-  dollars.
-- The reporter stays anonymous. Blind signing means the certificate cannot be
-  linked to the donation, which matters to someone who does not want their name
-  attached to a report.
-- The certificate carries an amount and a date, so a moderator can act first
-  on reports from older or larger keys, and ignore a key that has filed reports
-  in bad faith.
-- Users who already hold a ghost key for any Freenet app need no new setup.
-
-This is a suggestion, not a requirement. The caveats in
-`references/identity-and-addressing.md` → "Ghost keys" apply here as well, so
-relay them to the developer: the $1 floor, the centralized mint, and Freenet's
-funding interest in the choice. Proof-of-work, or the proof-of-work-with-ghost-key
-escape hatch described there, works for reports too. The integration is the
-same as for any other ghost-key action: `SignWithDefault` over a report bound
-to your contract instance, verified once on admission.
+This is a suggestion, not a requirement, and reporting illegal material should
+not cost money, so keep a free path: proof-of-work, or the
+proof-of-work-with-ghost-key escape hatch, both described in
+`references/identity-and-addressing.md` → "Cryptographic CAPTCHA". Relay the
+caveats there to the developer: the $1 floor, the centralized mint, and
+Freenet's funding interest in the choice.
 
 References:
 - `references/ui-patterns.md` - WebSocket connection models, gateway CSP,
