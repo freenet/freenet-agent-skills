@@ -1277,7 +1277,7 @@ derivable and a malicious web app *is* the client, so there was no sound way
 for the node to verify that a requester actually owned the predecessor's
 secrets rather than merely knowing its key. The wire variant was subsequently
 removed from freenet-stdlib `main` (freenet-stdlib#91, merged 2026-08-06,
-version bumped to 0.9.0). 0.9.0 and 0.10.0 have since been published, so the
+version bumped to 0.9.0). 0.9.0 through 0.12.1 have since been published, so the
 variant is gone from any current pin — but a crate still on 0.8.5 (River's
 pin) carries it. What protects production nodes either way is #5199's
 call-site disable, not the wire removal. The

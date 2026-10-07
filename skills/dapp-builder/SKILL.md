@@ -661,12 +661,14 @@ deserialization failures, missing features, and "variant index out of range"
 errors. Check [River's workspace Cargo.toml](https://github.com/freenet/river/blob/main/Cargo.toml)
 before pinning.
 
-As of September 2026 — River pins `freenet-stdlib = "0.8.5"`. That is no
-longer the latest crates.io release: 0.9.0 and 0.10.0 followed, and **0.11.0
-is the one a DELEGATE crate wants**, because it removes the `DelegateCtx`
-write and subscribe methods that 0.8.5 through 0.10.0 expose and no node
-implements — calling one compiles, publishes, and then fails at module
-instantiation (see `references/delegate-patterns.md`). For contract and UI
+As of October 2026 — River pins `freenet-stdlib = "0.8.5"`. That is no
+longer the latest crates.io release: 0.9.0 through 0.12.1 followed. **A
+DELEGATE crate wants 0.11.0 or later**, because 0.11.0 removes the
+`DelegateCtx` write and subscribe methods that 0.8.5 through 0.10.0 expose and
+no node implements — calling one compiles, publishes, and then fails at module
+instantiation (see `references/delegate-patterns.md`). A delegate that declares
+a manifest needs 0.12.0 for lifecycle events and 0.12.1 (which pulls in
+freenet-macros 0.3.1) for `wakeups`. For contract and UI
 crates, River's pin is still the version to mirror. If you are moving code off
 an older pin, the step is 0.6 → 0.8 (no 0.7 was ever published to crates.io):
 it added Base58-stringified `contract_states` keys
