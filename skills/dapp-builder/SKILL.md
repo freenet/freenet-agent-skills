@@ -39,7 +39,7 @@ A Freenet app may have **one or more delegates**, each handling a different loca
 - **Functionality:**
   - **Trust Zone:** Safely stores secrets, private keys, and user data
   - **Computation:** Performs signing, encryption, and complex logic before publishing to the network
-  - **Background Tasks:** Can run continuously to monitor contracts or handle notifications even when the UI is closed
+  - **Background Tasks:** Can act with the UI closed: on contract notifications, and, once the user grants the app Background, on install, at node start and on periodic wake-ups declared in its manifest (see Phase 2 below)
 
 ### 3. The User Interface (Frontend)
 
@@ -296,12 +296,20 @@ References:
 Determine what private data each user needs stored locally and split it across delegates by responsibility (e.g. one delegate per trust boundary or per long-running background task). Most apps need at least one delegate; many need several.
 
 > **Know the limits before you lean on a delegate for background work.** A
-> delegate runs only when something pokes it: there is no scheduled wakeup
-> (freenet-core#3972), and freenet-stdlib 0.11.0 removed the
-> `DelegateCtx::schedule_wakeup` wrapper that no node ever implemented.
-> Contract GET and SUBSCRIBE do reach the network now (freenet-core#5615), but a
-> subscription is not re-registered after the node restarts, so it does not keep
-> a contract alive across one (freenet-core#4669, open).
+> delegate runs only when something pokes it: an app message, a contract
+> notification, or an event its manifest declares. The manifest
+> (`#[delegate(manifest(lifecycle = [NodeStarted], capabilities = [Background], wakeups = [heartbeat = 300]))]`,
+> freenet-stdlib 0.12.1) asks for `Installed` / `NodeStarted` lifecycle events
+> (freenet-core#5730, v0.2.138) and periodic `WakeupFired { tag }` runs
+> (freenet-core#5747, v0.2.139), delivered with no tab open once the user grants
+> the registering app Background. Wake-ups are re-armed at node start, not
+> persisted, and these unprompted runs cannot message another delegate. There
+> is still no `DelegateCtx::schedule_wakeup`: 0.11.0 removed it and the
+> manifest replaced it.
+> Contract GET and SUBSCRIBE reach the network (freenet-core#5615), and a
+> delegate's subscriptions are persisted and restored when the node restarts
+> (freenet-core#5728, v0.2.137), though notifications for writes made while it
+> was down are not replayed.
 > **Contract access is by message only.** `ctx.put_contract_state`,
 > `ctx.update_contract_state` and `ctx.subscribe_contract` are gone — emit
 > `PutContractRequest` / `UpdateContractRequest` / `SubscribeContractRequest`
@@ -309,9 +317,10 @@ Determine what private data each user needs stored locally and split it across d
 > fail at module instantiation, which is why 0.11.0 removed them.
 > Test that work against a real node: `freenet local` never runs the loop that
 > services a delegate's contract requests, so a delegate's GET, PUT, UPDATE and
-> SUBSCRIBE all silently do nothing there (freenet-core#5273).
-> `references/delegate-patterns.md` → "Delegate Capabilities" has the verified
-> detail and the current state.
+> SUBSCRIBE all silently do nothing there (freenet-core#5273), and lifecycle
+> events and wake-ups never fire.
+> `references/delegate-patterns.md` → "Delegate Capabilities" and "Background
+> runs" have the verified detail and the current state.
 
 **Key questions (per delegate):**
 - What user-specific data needs persistence? (keys, preferences, cached data)
