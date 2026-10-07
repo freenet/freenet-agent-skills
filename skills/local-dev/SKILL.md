@@ -495,7 +495,7 @@ the WebSocket connection.
 | Blank page (cached old WASM) | Mobile browser caches aggressively | Clear cache, force close browser, or use `?_v=timestamp` |
 | `sed -i` fails on macOS | BSD sed requires backup extension | Use build tools directly instead of sed |
 | `cargo make` targets Linux | Cross-compilation for web-container-tool | Build natively: `cargo build --release -p web-container-tool` |
-| A delegate's contract GET/PUT/UPDATE/SUBSCRIBE silently does nothing | Node started with `freenet local` | Start with `freenet network` as every recipe here does. See [Delegates need network mode](#delegates-need-network-mode) |
+| A delegate's contract GET/PUT/UPDATE/SUBSCRIBE silently does nothing, or its lifecycle events / wake-ups never arrive | Node started with `freenet local` | Start with `freenet network` as every recipe here does. See [Delegates need network mode](#delegates-need-network-mode) |
 
 ### Delegates need network mode
 
@@ -506,10 +506,10 @@ does not service a delegate's contract requests at all.
 
 The loop that handles `GetContractRequest`, `PutContractRequest`,
 `UpdateContractRequest` and `SubscribeContractRequest` from a delegate is
-`handle_delegate_with_contract_requests` (`crates/core/src/contract.rs`). Both
-of its call sites are reached from `contract_handling`, through
-`handle_delegate_notification` and `handle_contract_event`, and
-`contract_handling` is spawned from one production site,
+`handle_delegate_with_contract_requests` (`crates/core/src/contract.rs`). Every
+one of its call sites (client-driven, resumed after a park,
+contract-notification-driven, and lifecycle/wake-up runs) is reached only from
+`contract_handling`, and `contract_handling` is spawned from one production site,
 `crates/core/src/node/p2p_impl.rs`, the network node. `run_local_node`
 (`crates/core/src/node.rs`) handles `ClientRequest::DelegateOp` by calling
 `executor.delegate_request(...)` straight through, which runs the delegate's
@@ -521,7 +521,10 @@ Delegate notification is dead in local mode too, for the same reason:
 `send_delegate_contract_notifications` returns immediately when
 `delegate_notification_tx` is `None` (`executor_impl.rs`), and that field is set
 only by `RuntimePool`, which local mode does not build. `RequestUserInput` is
-lost the same way, which is freenet-core#5273.
+lost the same way, which is freenet-core#5273. So are a manifest delegate's
+lifecycle events and wake-ups (freenet-core#5730, #5747): they are scheduled on
+`contract_handling`, from capability state only `RuntimePool` builds, so they
+never fire under `freenet local`.
 
 `DelegateCtx::get_contract_state` is the exception: it is a wasmtime import
 resolved inside the delegate's own execution rather than a message the node
@@ -536,7 +539,7 @@ The practical upshot for local development is unchanged and now has no
 exception worth chasing: a delegate that writes or subscribes needs `freenet
 network`.
 
-Verified against freenet-core `main` @ `7fa2c6605` (v0.2.136) on 2026-09-21. The
+Verified against freenet-core v0.2.142 on 2026-10-07. The
 `dapp-builder` skill's `references/delegate-patterns.md` has the full picture,
 including what a delegate's contract access does and does not reach on a real
 network node.
