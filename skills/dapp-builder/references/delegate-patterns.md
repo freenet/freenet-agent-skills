@@ -167,9 +167,10 @@ Two limits remain, and both are worth designing around:
   commit — which has already landed on disk by then. A delegate that needs
   certainty has to poll the contract state as well.
 - **Notifications are not replayed across a restart.** The subscription
-  itself is restored at node start (freenet-core#5728), but a write that
-  landed while the node was down is never notified. A delegate that must not
-  miss one re-reads the contract after a restart, e.g. on a `NodeStarted`
+  itself is restored at node start (freenet-core#5728), but individual writes
+  made while the node was down are not replayed, and a catch-up notification
+  for the newer state is not guaranteed. A delegate that must not miss one
+  re-reads the contract after a restart, e.g. on a `NodeStarted`
   lifecycle run (see [Background runs](#background-runs-manifest-lifecycle-events-and-wake-ups)).
 
 The narrower "misses initial-state install and resync-driven applies" gap
@@ -355,8 +356,8 @@ reordering either enum is a wire break. Since stdlib 0.10.0,
 `delegate_msg_variant_tags_are_pinned` (stdlib `delegate_interface.rs:1794`)
 pins the tag of every variant of both enums, so a reorder fails stdlib's CI.
 
-Check the attribute in the stdlib version you build against rather than trusting
-the listings here. If a later stdlib marks `OutboundDelegateMsg`
+Check the `#[non_exhaustive]` attribute shown in the listings above against the
+stdlib version you build against rather than trusting them. If a later stdlib marks `OutboundDelegateMsg`
 `#[non_exhaustive]` too, an exhaustive match on it stops compiling and a wildcard
 arm becomes required on both sides.
 
@@ -476,7 +477,7 @@ it guards nothing today.
   (`crates/core/src/contract/delegate_app_registry.rs:55-88`).
 - **Unprompted runs of a delegate whose app holds the Background grant** are
   budgeted (freenet-core#5730, v0.2.138; `BudgetLimits` in
-  `crates/core/src/contract/delegate_capabilities.rs:684-697`). Loop time is
+  `crates/core/src/contract/delegate_capabilities.rs:685-698`). Loop time is
   charged to a per-delegate duty balance (1% of wall time, 10 s burst) and,
   for lifecycle and wake-up runs, a node-wide one (10%, 30 s burst); a spent
   balance defers lifecycle and wake-up runs, while notification runs are
@@ -598,11 +599,12 @@ match origin {
 **Security note:** Do not trust `MessageOrigin::Delegate` for sensitive operations unless you whitelist the caller's `DelegateKey`. Per the stdlib docs, an inter-delegate message *replaces* rather than composes with any inherited `WebApp` origin the calling delegate may itself hold — the receiver sees only `Delegate(caller_key)` for the duration of the call and does not gain contract access on behalf of any web app the caller was acting for. Authorize on the calling delegate's identity alone.
 
 **Only a client-driven run can message another delegate.** A
-`SendDelegateMessage` emitted from a run the node started on its own (a
-contract notification, a lifecycle event or a wake-up) is dropped, with only an
-`info` log line, and the target's own `SendDelegateMessage`s are filtered out,
-so delivery is single-hop (freenet-core `contract.rs`,
-`InterDelegateDispatch::Suppressed`; freenet-core#5730, #5747).
+`SendDelegateMessage` emitted from a run the node started on its own is
+dropped, with only an `info` log line (freenet-core `contract.rs`,
+`InterDelegateDispatch::Suppressed`). That has applied to contract-notification
+runs since an earlier security fix, and to lifecycle and wake-up runs since
+freenet-core#5730 and #5747. Delivery from a client-driven run is single-hop:
+the target's own `SendDelegateMessage`s are filtered out.
 
 ## Check the Origin at the Boundary, Not Per Handler
 
