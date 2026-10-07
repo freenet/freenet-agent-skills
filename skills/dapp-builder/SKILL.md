@@ -442,9 +442,9 @@ The mechanism has two halves.
 **Identifying illegal material.** Which approach fits depends on the service, so
 choose it with the developer rather than defaulting to one:
 
-- **Nothing gets in without review.** If only the author, or a small set of
-  trusted keys, can publish, the gate is that review. This is the simplest
-  answer for a curated site or an app whose content comes from one source.
+- **Curated publishing.** If only the author, or a small set of trusted keys,
+  can publish, those publishers are the check. This only fits a curated site or
+  an app whose content comes from one source, not one open to strangers.
 - **Moderators who watch the content.** River rooms work this way: the owner,
   anyone above a member in the invite chain, or a deputy can ban that member,
   so an active moderator removes material without anyone having to report it.

@@ -9,7 +9,7 @@ needs a way to identify and remove illegal material.** Without one, a system
 risks being delisted from Atlas and having its links banned from the Freenet
 Official River room. Images and video are where this matters most. Phase 3 gains
 a section that sets out the requirement and lists ways to identify material:
-review before publishing, active moderators, or user reports, where it notes that
+curated publishing, active moderators, or user reports, where it notes that
 reports suit some services and not others. It also covers how to remove material,
 either by tombstoning it in the contract or with an author-signed denylist that
 the UI filters against, and says what removal does not do. For apps that take
