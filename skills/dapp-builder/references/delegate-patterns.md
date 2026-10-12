@@ -1240,7 +1240,7 @@ Rather than hand-roll the registry, the `build.rs` codegen, and the backward
 probe, a reusable crate — `freenet/freenet-migrate` — packages all of it (the
 legacy-key registry, build-time codegen, the backward probe, the delegate
 carry-forward, and the preconditions as enforced types). It is
-**`freenet-migrate` 0.6.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
+**`freenet-migrate` 0.7.0 on crates.io** (with `freenet-migrate-build` 0.2.0):
 `cargo add freenet-migrate` / `cargo add --build freenet-migrate-build`. 0.6.0 is
 breaking on the **contract** half only (silence is no longer read as absence; see
 `contract-patterns.md`); the delegate surface is unchanged from 0.5.0. Adopting
@@ -1258,6 +1258,18 @@ and `register_delegate_with_migration` (the `delegate_migrate` module) are the
 app-facing entry points, and River, Delta and ghostkeys all drive them on `main`
 at 0.5.0. Delegate secrets still have no core-level equivalent and never will;
 see the next section for the full history and current guidance.
+
+0.7.0 (2026-10-12) adds an opt-in **completeness journal** to the delegate half, so
+the app knows on every load whether every predecessor was dealt with. Call
+`begin_migration_journal` on every load (an `Err` means write nothing migrated
+this load) and `migrate_delegate_secrets_journaled` for the walk. If the app
+writes migrated data itself, `note_app_import_started` returns an `AppImport`:
+`Flagged` means write; `AlreadyImported` means write again only if your merge
+cannot resurrect a deleted key; any other variant means do not write; **any
+`Err`: skip, retry on a later load**. While `interrupted_import()` is true the
+successor may not hold everything the user had. Adopt it only if `fetch_secrets`
+fails loudly and your predecessors are frozen (README "Knowing when the
+migration is done").
 
 **Adopting them is not retroactive.** The walk can only recover from a
 predecessor whose deployed WASM answers — see "A delegate migration is

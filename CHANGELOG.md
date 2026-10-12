@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.38.5 (2026-10-12)
+
+**`dapp-builder` teaches the `freenet-migrate` 0.7.0 completeness journal.**
+`delegate-patterns.md` now names 0.7.0 and the `AppImport` outcomes
+(`Flagged`, `AlreadyImported`, any other variant: do not write) and the rule
+"any `Err`: skip, retry later".
+
 ## 1.38.4 (2026-10-07)
 
 **`dapp-builder` no longer says delegates have no scheduled wakeup.** A
