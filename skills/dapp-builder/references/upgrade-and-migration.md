@@ -780,7 +780,11 @@ fed its stale notifications. Instead post the shell a same-contract
 `{__freenet_shell__: true, type: 'navigate', href}`. The shell closes every
 proxied socket and replaces the frame, keeping your query (`__sandbox=1`
 included). Suppress your own reconnect logic while the reload is in flight, or
-the departing page opens a new socket that leaks the same way. If your app
+the departing page opens a new socket that leaks the same way. Once the reload
+is posted, never reconnect at all, even if it never lands: the shell closed the
+sockets on accepting it, and a closing socket can look open for up to a minute,
+so "still connected" is no proof it was ignored. Give up after about a minute
+with a "refresh this tab" banner instead. If your app
 keeps state in the URL fragment and updates the top-level URL through the
 shell (`replaceState` never reaches the iframe), rebuild the fragment from your
 in-memory copy, not from the iframe's stale `location.hash`.
@@ -816,6 +820,20 @@ out, and flush pending delegate writes before navigating. A visible tab gets a
 short countdown with "Not now", and "Not now" must stick across tab switches.
 A hidden tab reloads after a jittered delay, so every open tab does not migrate
 at the same moment.
+
+**Never reload while disconnected, or before a reconnect has caught up.** A
+reload against a node that is down replaces the app with the browser's error
+page, and until the reconnect has re-registered your delegate and re-synced,
+what the reader did offline may not have left. "Connected" should mean "the
+reconnect has finished catching up", set at the end of your post-connect work
+and cleared wherever the connection is torn down; a status field that also
+reads "error" on a live socket is not a substitute. While offline, show a
+banner that says so and offers no button that cannot work, and keep it tied to
+connection events (a driver that has stopped will not refresh it). A countdown
+that ran out offline should restart on reconnect rather than reload at once.
+A Reload the reader clicks should skip the busy wait (they decided) but not the
+offline one, and if it cannot proceed, restore exactly what was there before
+the click.
 
 **Test it.** Write the decisions as pure functions (verdict, caps, timing, and
 response-to-plan routing) and unit-test them, then mutate each guard and
