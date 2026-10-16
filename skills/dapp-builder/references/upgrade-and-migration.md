@@ -714,7 +714,125 @@ failure a green test suite let through.
    address — a feature-branch publish silently ships stale or unreviewed code.
 3. Keep the previous artifact for **rollback**, and expect **old and new clients
    to coexist** for an unbounded window (clients refresh lazily). Versioned
-   coexistence is the normal state during a rollout, not an edge case.
+   coexistence is the normal state during a rollout, not an edge case. An
+   already-open tab never refreshes on its own; see the next section.
+
+## An open tab cannot upgrade itself: detect the re-key and reload
+
+"Old and new clients coexist" has a sharp special case: a browser tab that was
+already open when you published. It runs the build it loaded, with the
+contract and delegate WASM compiled in, so after a re-key it keeps using the
+OLD keys. Coexistence for that tab lasts until the user happens to refresh,
+which for a tab left open can be days.
+
+- **Old contract key:** the tab stays subscribed to a contract everyone else
+  has left. Its rooms or documents look like they have gone quiet, and what it
+  writes reaches nobody. Neither side sees an error.
+- **Old delegate key:** the tab keeps writing to the old delegate after a
+  new-build load has migrated from it. A post-resolve top-up may catch new
+  entries, but changes to entries the new build already holds are stranded.
+
+So a dApp that re-keys needs the open tab to notice and reload. River does this
+in `ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#580,
+PR #792); copy its shape rather than reinventing it, because most of the
+failure modes below were found the hard way in that PR's review and end-to-end
+tests.
+
+**Signal: your pointer records, not your web container.** Publish one pointer
+record per re-keying artifact (`freenet-migrate`'s `pointer` module; see
+`building-on-other-apps.md`) and have the UI watch them. They are 100 bytes and
+move only on a re-key. Watching the web container instead would push the whole
+UI archive (MBs) to every open tab on every publish, including UI-only
+publishes that strand nobody.
+
+**Transport: GET + subscribe on every (re)connect, plus a slow GET backstop.**
+A client subscription does not survive a WebSocket reconnect (the client gets a
+new id), so re-subscribe each time. Do not rely on polling GETs alone: once the
+node holds the contract, a client GET is answered from its local copy, so a
+poll never forces a network check. Handle both `UpdateData::State` and
+`Delta`; the pointer contract's delta is the whole record. Note that
+`freenet local` ignores `subscribe` on a GET, so test the push path against a
+network-mode node.
+
+**Judgement: seed the resolver with the build's own record.** Bake the build's
+pointer `version` and `code_hash` in at build time from the same records file
+your signer and CI use. At runtime, check the embedded WASM really hashes to
+that `code_hash`; if not (a local rebuild), turn the watch off for that pointer.
+Seed `PointerResolver` with `PointerFloor::at(version, hash)`, and treat only a
+signature-verified record with a **strictly higher version** as "reload".
+`PointerOutcome::Resolved` alone is not enough: it also covers a different
+record at the build's own version that wins the equal-version tiebreak, which
+no build can satisfy. A pointer BEHIND the build is normal, since the pointer
+is published after the UI, and must never trigger a reload.
+
+**Action: reload; do not follow the new key in place.** The old build can
+derive the new address, but its code may misread the new generation's state or
+send deltas the new contract rejects (format and validation changes are why
+you re-keyed), and a delegate cannot be followed at all without the new
+build's migration. A fresh load already does everything a re-key needs.
+
+**How to reload a node-served app.** It runs in the shell's sandboxed iframe,
+with no `allow-top-navigation`, and the shell ignores app-initiated reload
+requests. Do not just `location.replace` the iframe: the shell keeps the old
+document's proxied WebSockets open, and the shim numbers sockets from 1 in
+every document, so the new page's socket collides with the leaked one and is
+fed its stale notifications. Instead post the shell a same-contract
+`{__freenet_shell__: true, type: 'navigate', href}`. The shell closes every
+proxied socket and replaces the frame, keeping your query (`__sandbox=1`
+included). Suppress your own reconnect logic while the reload is in flight, or
+the departing page opens a new socket that leaks the same way. If your app
+keeps state in the URL fragment and updates the top-level URL through the
+shell (`replaceState` never reaches the iframe), rebuild the fragment from your
+in-memory copy, not from the iframe's stale `location.hash`.
+
+**Loop guards: a reload is only as good as what it loads.** The UI archive is
+far larger than the pointer, so a node can learn of the re-key before it holds
+the new UI, and the reloaded page sees the same newer pointer again. River
+measured this over seven publishes: the ~1.2 MB container reached a median
+peer in ~20 s, 80% within 5 min, p90 ~10 min, with a tail of reconnecting peers
+out to ~2 h; the pointer arrives in under 0.5 s.
+
+- Keep the cap state in a URL parameter, not storage. Storage in the sandboxed
+  iframe is unreliable, and a cap that silently resets fails open.
+- Allow a few tries per target with backoff sized to that propagation (River:
+  5 tries over ~67 min), then stop.
+- Key the tries **per artifact**, not on a combined string. Two pointers answer
+  milliseconds apart, so a page briefly knows only one of them; if that partial
+  target counts as new, alternate loads reset the count forever.
+- Re-plan on every target move, never shortening a wait.
+- One reload per page: once a reload is issued, never issue another. A driver
+  that keeps ticking re-navigates every second and each attempt aborts the last.
+- Add an hourly ceiling across all targets as a backstop. Past any cap, show a
+  banner with a manual Reload and nothing automatic.
+- Do not reload a page younger than the node's bundle-refresh window (30 s on
+  freenet-core): within it the node serves the bundle this page came from.
+
+**Never lose the user's work.** No automatic reload while the user is busy:
+unsent text in a composer, an edit in progress, any open dialog (River treats
+any visible full-screen modal overlay as busy, which covers every modal at
+once), a focused field with text, or an in-flight action such as an invitation
+accept. Wait a few seconds after the user stops, so a just-sent message gets
+out, and flush pending delegate writes before navigating. A visible tab gets a
+short countdown with "Not now", and "Not now" must stick across tab switches.
+A hidden tab reloads after a jittered delay, so every open tab does not migrate
+at the same moment.
+
+**Test it.** Write the decisions as pure functions (verdict, caps, timing, and
+response-to-plan routing) and unit-test them, then mutate each guard and
+confirm a test goes red. Then run it end to end: a throwaway pointer key, a
+test build pointed at test records, an isolated network-mode node, and a
+browser driver. Check the node's client count is unchanged after a reload. That
+is how River found the socket leak and the partial-target reset. Refuse to
+publish a UI built against test records, by checking the built archive (not
+the publishing shell's environment) before anything irreversible, such as a
+version-counter bump.
+
+**Publish order.** Publish the UI first and the pointer after it, and gate the
+pointer publish on the live UI carrying the new WASM (River's
+`publish-pointer-records.sh` checks this from the publishing node). Then wait
+a couple of minutes, which clears the fast majority of peers. The pointer
+publish is now the step that reloads your users' open tabs, so it is not
+optional after a re-key, and nothing in CI will notice if you skip it.
 
 ## Hash + artifact hygiene (cheap mistakes that lost rooms)
 

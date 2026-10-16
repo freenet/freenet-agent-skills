@@ -581,7 +581,9 @@ References:
 - `references/upgrade-and-migration.md` — operational discipline for safe
   contract/delegate upgrades: the five migration properties (idempotent,
   resumable, non-destructive, regression-gated, observable), enumerating
-  dynamic key families, the upgrade test harness, and staged reversible rollout.
+  dynamic key families, the upgrade test harness, staged reversible rollout, and
+  detecting a re-key in an already-open tab and reloading it safely (pointer
+  records, loop guards).
 - `references/building-on-other-apps.md` — the *consumer* side: integrating with
   a contract or delegate you do not own, resolving the author's pointer instead
   of pinning a key, the seven outcome arms, and what a pointer does not tell you.
