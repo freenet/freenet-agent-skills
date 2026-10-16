@@ -8,7 +8,8 @@ All notable changes to this project will be documented in this file.
 A new section in `references/upgrade-and-migration.md` covers detecting a
 re-key in an already-open tab and reloading it safely (pointer records, loop
 guards, never losing the user's work), from freenet/river#580 and
-freenet/river#792.
+freenet/river#792. Covers the transport, the reload through the shell's
+`navigate`, loop guards, and waiting for a reconnect to catch up.
 
 ## 1.38.5 (2026-10-12)
 

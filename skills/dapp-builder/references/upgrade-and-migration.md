@@ -729,14 +729,16 @@ which for a tab left open can be days.
   has left. Its rooms or documents look like they have gone quiet, and what it
   writes reaches nobody. Neither side sees an error.
 - **Old delegate key:** the tab keeps writing to the old delegate after a
-  new-build load has migrated from it. A post-resolve top-up may catch new
-  entries, but changes to entries the new build already holds are stranded.
+  new-build load has migrated from it. If your migration only re-imports
+  entries the new build has never seen (River's "top-up"), changes to entries
+  it already holds are stranded.
 
 So a dApp that re-keys needs the open tab to notice and reload. River does this
-in `ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#580,
-PR #792); copy its shape rather than reinventing it, because most of the
-failure modes below were found the hard way in that PR's review and end-to-end
-tests.
+in `ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#580;
+the implementation is freenet/river#792, so read it on that PR's branch until
+it merges). Copy its shape rather than reinventing it: most of the failure
+modes below were found the hard way in that PR's eight review rounds and three
+end-to-end runs.
 
 **Signal: your pointer records, not your web container.** Publish one pointer
 record per re-keying artifact (`freenet-migrate`'s `pointer` module; see
@@ -748,22 +750,26 @@ publishes that strand nobody.
 **Transport: GET + subscribe on every (re)connect, plus a slow GET backstop.**
 A client subscription does not survive a WebSocket reconnect (the client gets a
 new id), so re-subscribe each time. Do not rely on polling GETs alone: once the
-node holds the contract, a client GET is answered from its local copy, so a
-poll never forces a network check. Handle both `UpdateData::State` and
-`Delta`; the pointer contract's delta is the whole record. Note that
+node is subscribed to the contract or otherwise interested in it (which a tab
+watching it makes it), a client GET is answered from the node's local copy, so
+a poll never forces a network check. Handle `UpdateData::State`, `Delta` and
+`StateAndDelta`; the pointer contract's delta is the whole record. Note that
 `freenet local` ignores `subscribe` on a GET, so test the push path against a
 network-mode node.
 
 **Judgement: seed the resolver with the build's own record.** Bake the build's
 pointer `version` and `code_hash` in at build time from the same records file
-your signer and CI use. At runtime, check the embedded WASM really hashes to
-that `code_hash`; if not (a local rebuild), turn the watch off for that pointer.
-Seed `PointerResolver` with `PointerFloor::at(version, hash)`, and treat only a
-signature-verified record with a **strictly higher version** as "reload".
-`PointerOutcome::Resolved` alone is not enough: it also covers a different
-record at the build's own version that wins the equal-version tiebreak, which
-no build can satisfy. A pointer BEHIND the build is normal, since the pointer
-is published after the UI, and must never trigger a reload.
+your signer and CI use. At runtime, check that `BLAKE3(raw WASM bytes the UI
+embeds)` equals that `code_hash` (the raw contract or delegate code, not a
+packaged container); if not (a local rebuild), turn the watch off for that
+pointer. That check fails silently, so add a test that the shipped build
+watches every pointer. Seed `PointerResolver` with
+`PointerFloor::at(version, hash)`, and treat only a signature-verified record
+with a **strictly higher version** as "reload". `PointerOutcome::Resolved`
+alone is not enough: it also covers a different record at the build's own
+version that wins the equal-version tiebreak, which no build can satisfy. A
+pointer BEHIND the build is normal, since the pointer is published after the
+UI, and must never trigger a reload.
 
 **Action: reload; do not follow the new key in place.** The old build can
 derive the new address, but its code may misread the new generation's state or
@@ -779,37 +785,45 @@ every document, so the new page's socket collides with the leaked one and is
 fed its stale notifications. Instead post the shell a same-contract
 `{__freenet_shell__: true, type: 'navigate', href}`. The shell closes every
 proxied socket and replaces the frame, keeping your query (`__sandbox=1`
-included). Suppress your own reconnect logic while the reload is in flight, or
-the departing page opens a new socket that leaks the same way. Once the reload
-is posted, never reconnect at all, even if it never lands: the shell closed the
+included). Build `href` from the iframe's own `location.pathname` and query
+(same origin, your own contract path), and keep it within 4096 characters: the
+shell silently ignores an href that is longer, cross-origin or not a contract
+path, so treat one you could not keep within the limit as never posted.
+Suppress your own reconnect logic while the reload is in flight, or the
+departing page opens a new socket that leaks the same way. Once the reload is
+posted, never reconnect at all, even if it never lands: the shell closed the
 sockets on accepting it, and a closing socket can look open for up to a minute,
 so "still connected" is no proof it was ignored. Give up after about a minute
-with a "refresh this tab" banner instead. If your app
-keeps state in the URL fragment and updates the top-level URL through the
-shell (`replaceState` never reaches the iframe), rebuild the fragment from your
-in-memory copy, not from the iframe's stale `location.hash`.
+with a "refresh this tab" banner that also says anything sent before refreshing
+may not be delivered. (The shell's `navigate` also pushes a browser history
+entry per reload; freenet/freenet-core#5910.) If your app keeps state in the
+URL fragment and updates the top-level URL through the shell (`replaceState`
+never reaches the iframe), rebuild the fragment from your in-memory copy, not
+from the iframe's stale `location.hash`.
 
 **Loop guards: a reload is only as good as what it loads.** The UI archive is
 far larger than the pointer, so a node can learn of the re-key before it holds
 the new UI, and the reloaded page sees the same newer pointer again. River
 measured this over seven publishes: the ~1.2 MB container reached a median
-peer in ~20 s, 80% within 5 min, p90 ~10 min, with a tail of reconnecting peers
-out to ~2 h; the pointer arrives in under 0.5 s.
+peer in ~20 s, 80% within 5 min, p90 ~10 min, with a tail out to ~2 h (which
+looked like peers reconnecting); the pointer arrives in under 0.5 s.
 
 - Keep the cap state in a URL parameter, not storage. Storage in the sandboxed
   iframe is unreliable, and a cap that silently resets fails open.
 - Allow a few tries per target with backoff sized to that propagation (River:
   5 tries over ~67 min), then stop.
-- Key the tries **per artifact**, not on a combined string. Two pointers answer
-  milliseconds apart, so a page briefly knows only one of them; if that partial
-  target counts as new, alternate loads reset the count forever.
+- Compare targets per artifact. Two pointers answer milliseconds apart, so a
+  page briefly knows only one of them; a target that is no newer in any
+  artifact than the one being retried must count as the same target, or
+  alternate loads reset the count forever.
 - Re-plan on every target move, never shortening a wait.
 - One reload per page: once a reload is issued, never issue another. A driver
   that keeps ticking re-navigates every second and each attempt aborts the last.
 - Add an hourly ceiling across all targets as a backstop. Past any cap, show a
   banner with a manual Reload and nothing automatic.
-- Do not reload a page younger than the node's bundle-refresh window (30 s on
-  freenet-core): within it the node serves the bundle this page came from.
+- Do not reload a page younger than the node's bundle-refresh window plus a
+  margin (River: 35 s against freenet-core's 30 s): within it the node serves
+  the bundle this page came from.
 
 **Never lose the user's work.** No automatic reload while the user is busy:
 unsent text in a composer, an edit in progress, any open dialog (River treats
@@ -817,9 +831,10 @@ any visible full-screen modal overlay as busy, which covers every modal at
 once), a focused field with text, or an in-flight action such as an invitation
 accept. Wait a few seconds after the user stops, so a just-sent message gets
 out, and flush pending delegate writes before navigating. A visible tab gets a
-short countdown with "Not now", and "Not now" must stick across tab switches.
-A hidden tab reloads after a jittered delay, so every open tab does not migrate
-at the same moment.
+short countdown with "Not now". "Not now" should stick across tab switches
+(no new countdown while visible); River still reloads a snoozed tab once it has
+been hidden for a while, when nobody is looking. A hidden tab reloads after a
+jittered delay, so every open tab does not migrate at the same moment.
 
 **Never reload while disconnected, or before a reconnect has caught up.** A
 reload against a node that is down replaces the app with the browser's error
