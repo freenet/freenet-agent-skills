@@ -713,13 +713,14 @@ failure a green test suite let through.
    green CI on the exact commit. Every production publish hits the same shared
    address — a feature-branch publish silently ships stale or unreviewed code.
 3. Keep the previous artifact for **rollback**, and expect **old and new clients
-   to coexist** for an unbounded window (clients refresh lazily). Versioned
+   to coexist** for an unbounded window (clients refresh lazily), unless the
+   dApp reloads open tabs as described in the next section. Versioned
    coexistence is the normal state during a rollout, not an edge case. An
    already-open tab never refreshes on its own; see the next section.
 
 ## An open tab cannot upgrade itself: detect the re-key and reload
 
-"Old and new clients coexist" has a sharp special case: a browser tab that was
+"Old and new clients coexist" has a special case with a worse failure: a browser tab that was
 already open when you published. It runs the build it loaded, with the
 contract and delegate WASM compiled in, so after a re-key it keeps using the
 OLD keys. Coexistence for that tab lasts until the user happens to refresh,
@@ -734,11 +735,10 @@ which for a tab left open can be days.
   it already holds are stranded.
 
 So a dApp that re-keys needs the open tab to notice and reload. River does this
-in `ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#580;
-the implementation is freenet/river#792, so read it on that PR's branch until
-it merges). Copy its shape rather than reinventing it: most of the failure
-modes below were found the hard way in that PR's eight review rounds and three
-end-to-end runs.
+in `ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#580,
+implemented in freenet/river#792). Copy its shape rather than reinventing it:
+most of the failure modes below were found in that PR's reviews and end-to-end
+runs.
 
 **Signal: your pointer records, not your web container.** Publish one pointer
 record per re-keying artifact (`freenet-migrate`'s `pointer` module; see
@@ -747,14 +747,16 @@ move only on a re-key. Watching the web container instead would push the whole
 UI archive (MBs) to every open tab on every publish, including UI-only
 publishes that strand nobody.
 
-**Transport: GET + subscribe on every (re)connect, plus a slow GET backstop.**
+**Transport: GET + subscribe on every (re)connect, plus a slow GET backstop**
+(River's: every 15 minutes, ±20% jitter).
 A client subscription does not survive a WebSocket reconnect (the client gets a
-new id), so re-subscribe each time. Do not rely on polling GETs alone: once the
+new id), so re-subscribe each time. Do not rely on polling GETs alone. River
+found that once the
 node is subscribed to the contract or otherwise interested in it (which a tab
 watching it makes it), a client GET is answered from the node's local copy, so
 a poll never forces a network check. Handle `UpdateData::State`, `Delta` and
-`StateAndDelta`; the pointer contract's delta is the whole record. Note that
-`freenet local` ignores `subscribe` on a GET, so test the push path against a
+`StateAndDelta`; the pointer contract's delta is the whole record. River also
+found that `freenet local` ignores `subscribe` on a GET, so test the push path against a
 network-mode node.
 
 **Judgement: seed the resolver with the build's own record.** Bake the build's
@@ -762,7 +764,7 @@ pointer `version` and `code_hash` in at build time from the same records file
 your signer and CI use. At runtime, check that `BLAKE3(raw WASM bytes the UI
 embeds)` equals that `code_hash` (the raw contract or delegate code, not a
 packaged container); if not (a local rebuild), turn the watch off for that
-pointer. That check fails silently, so add a test that the shipped build
+pointer. That check fails without telling the user (only a log warning), so add a test that the shipped build
 watches every pointer. Seed `PointerResolver` with
 `PointerFloor::at(version, hash)`, and treat only a signature-verified record
 with a **strictly higher version** as "reload". `PointerOutcome::Resolved`

@@ -2,14 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.38.6 (2026-10-16)
+## 1.38.6 (2026-10-17)
 
 **`dapp-builder` documents reloading an open tab after a re-key.**
-A new section in `references/upgrade-and-migration.md` covers detecting a
-re-key in an already-open tab and reloading it safely (pointer records, loop
-guards, never losing the user's work), from freenet/river#580 and
-freenet/river#792. Covers the transport, the reload through the shell's
-`navigate`, loop guards, and waiting for a reconnect to catch up.
+A new section in `references/upgrade-and-migration.md` covers how an
+already-open tab detects a re-key and reloads safely, from freenet/river#580
+and freenet/river#792: watching pointer records as the signal, GET + subscribe
+transport, the strictly-higher-version judgement, reloading through the
+shell's `navigate`, loop guards, not losing the user's work, testing, and
+publishing the pointer after the UI.
 
 ## 1.38.5 (2026-10-12)
 
