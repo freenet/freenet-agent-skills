@@ -348,7 +348,7 @@ practice, a commutative monoid that is also **idempotent**. This means:
 
 This ensures that regardless of the order peers receive and apply updates, they all converge to the same final state.
 
-A contract with bounded retention (caps, eviction) cannot be strictly associative; the network accepts that only when the two groupings converge (freenet-core#5924). It also checks absorption, `merge(merge(A, B), B) == merge(A, B)`. See `merge-law-compliance.md` for the exact rules and for how caps, removals, work bounds and summaries break them.
+A contract whose cap or eviction can free a slot (through a removal or a raised cap) may not be strictly associative; the network accepts that only when the two groupings converge (freenet-core#5924). Test absorption, `merge(merge(A, B), B) == merge(A, B)`, directly as well: the network checks it only inside that convergence step. See `merge-law-compliance.md` for the exact rules and for how caps, removals, work bounds and summaries break them.
 
 **Idempotence is the one most often missed, and the one the network gives you no
 way to avoid.** Delivery is at-least-once: the same state or delta legitimately
