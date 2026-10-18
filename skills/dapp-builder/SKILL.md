@@ -79,6 +79,7 @@ Freenet solves "Eventual Consistency" using a specific mathematical requirement:
 - Order Independent: It shouldn't matter what order updates arrive in
 - If Peer A merges Update X then Y, and Peer B merges Update Y then X, they must end up with the same result
 - Redelivery-safe: `merge(A, A) == A`. Delivery is at-least-once, so the same update *will* arrive twice — after a retry, a re-subscribe, or anti-entropy. A merge that changes the state on re-application never settles. This is the requirement most often missed; see `references/contract-patterns.md` → "Merge Law Requirements" for why identity is not the same thing, and for the property tests.
+- Bounded retention: a contract that caps or evicts cannot be strictly associative, and the network accepts that only if the two groupings converge. Caps, removals, work bounds and summaries are where merges break the laws once they are more than a plain union; read `references/merge-law-compliance.md` before adding any of them.
 
 **A contract must not read the host clock.** `freenet_stdlib::time::now()` is deprecated for contracts as of freenet-core **v0.2.132**. The merge has to be a function of its inputs — that requirement *is* why replicas converge — so a merge that reads the wall clock isn't merely breaking the laws above; they stop being well-formed statements about it. Two peers eleven minutes apart can produce different states from the same delta and neither is wrong. Today a node logs a warning on loading such a contract and `fdev verify-merge` reports a `host_clock_import` diagnostic; nothing traps *yet*, but the call is staged to **trap** (freenet-core#5465), and when it does the failure is per-call rather than a refusal to load, so no re-key is needed. Carry a client-signed timestamp in state and enforce only monotonicity instead — with clear eyes about what that costs, since a client timestamp is an untrusted hint and can't do anti-grief. **Delegates are unaffected.** See `references/state-authorization-patterns.md` → "Time Handling".
 
@@ -288,6 +289,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 
 References:
 - `references/contract-patterns.md` — `ContractInterface`, the merge laws, composable state, basic signatures.
+- `references/merge-law-compliance.md`: keeping a merge lawful once it has caps, removals, work bounds and summaries: the laws as the network checks them, one canonical procedure, dedup, summary content, work bounds, testing.
 - `references/state-authorization-patterns.md` — authentication, replay protection, signed-payload hygiene, time (contracts must not read the host clock), related-contracts, wire-format stability, common pitfalls.
 - `references/identity-and-addressing.md` — short self-certifying user-facing addresses, keeping large (post-quantum) keys out of identifiers, identity that survives WASM upgrades, and blocking bots without a server (ghost keys vs proof-of-work).
 

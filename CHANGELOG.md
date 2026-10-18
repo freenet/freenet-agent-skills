@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.38.7 (2026-10-18)
+
+**`dapp-builder` documents merge-law compliance.** A new
+`references/merge-law-compliance.md`, linked from `SKILL.md` and
+`contract-patterns.md`, covers the laws as freenet-core checks them
+(freenet-core#5320), including absorption and heal-guarded associativity for
+bounded-retention contracts (freenet-core#5924); building a merge as one
+canonical procedure with every cap as its last filter and removals and caps in
+one loop to a fixpoint; deduplicating within a delta; summaries that tell
+different content apart; work bounds that do not break the laws; never failing
+a merge on a validly signed record; and testing with a merge-law fuzzer, fork
+tests across many seeds, `fdev verify-merge` on real states, and mutation
+checks of the fuzzer.
+
 ## 1.38.6 (2026-10-17)
 
 **`dapp-builder` documents reloading an open tab after a re-key.**
