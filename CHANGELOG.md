@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.2 (2026-10-19)
+
+- release: the ship-vs-soak check allows `apps/freenet-ping/Cargo.lock` (re-synced by the bump once freenet-core#5935 lands) and fails closed if either SHA cannot be read or the diff fails.
+
 ## 1.39.1 (2026-10-19)
 
 **`release` checks ship-vs-soak before the tag is pushed.** The check that the

@@ -225,7 +225,20 @@ until [[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]]; do
 done
 # 4. The diff must be exactly the version files. Anything else: cancel before the tag.
 git fetch -q origin
-EXTRA=$(git diff --name-only "$SOAKED" "$MERGE_SHA" | grep -vxE 'Cargo\.lock|crates/core/Cargo\.toml|crates/fdev/Cargo\.toml')
+# Fail closed: an unreadable SHA or a failed diff must cancel, never print OK.
+if ! git cat-file -e "$SOAKED^{commit}" || ! git cat-file -e "$MERGE_SHA^{commit}" \
+   || ! CHANGED=$(git diff --name-only "$SOAKED" "$MERGE_SHA"); then
+  gh run cancel "$RUN_ID" --repo freenet/freenet-core --force
+  echo "SOAK CHECK FAILED: cannot diff $SOAKED..$MERGE_SHA; cancelled the release run"; exit 1
+fi
+# Version files the bump may touch (apps/freenet-ping/Cargo.lock is re-synced by the bump).
+EXTRA=$(printf '%s\n' "$CHANGED" | sed '/^$/d' \
+  | command grep -vxE 'Cargo\.lock|crates/core/Cargo\.toml|crates/fdev/Cargo\.toml|apps/freenet-ping/Cargo\.lock')
+RC=$?   # grep: 0 = extra files found, 1 = none, >=2 = error -> fail closed
+if [ "$RC" -ge 2 ]; then
+  gh run cancel "$RUN_ID" --repo freenet/freenet-core --force
+  echo "SOAK CHECK FAILED: file filter errored; cancelled the release run"; exit 1
+fi
 if [ -n "$EXTRA" ]; then
   gh run cancel "$RUN_ID" --repo freenet/freenet-core --force
   echo "SOAK MISMATCH: release SHA $MERGE_SHA differs from soaked $SOAKED in:"; echo "$EXTRA"
