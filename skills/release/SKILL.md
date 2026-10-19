@@ -13,7 +13,9 @@ This is the **single entry point** for cutting a freenet-core release. The order
 2. Steps 1-5: version, trigger, watch, verify artifacts, River smoke test.
 3. **Step 6 (precondition P5): post-cut telemetry monitoring** through the 0-4h auto-update stagger.
 
-**Do not trigger `release.yml` or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only thing you may run beforehand is a `dry_run=true` dispatch or `release.sh --dry-run`.
+**Do not dispatch `release.yml` or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only thing you may run beforehand is `scripts/release.sh --dry-run`.
+
+**A `dry_run=true` dispatch of `release.yml` is NOT side-effect free.** Its version-bump job has no dry-run guard, so it pushes a release branch, opens a real `build: release X.Y.Z` PR and auto-merges it into `main`. That makes it a trigger: it needs the preconditions too, and it moves `main` past the SHA you soaked.
 
 The release pipeline runs entirely in GitHub Actions: version bump, then release PR, CI gate, crates.io publish, GitHub release, and cross-compiled binaries. The `release.published` event then auto-triggers `gateway-update.yml` (which HMAC-POSTs each gateway's release-agent) and `release-announce.yml` (Matrix and River posts). CI does **not** exercise a real NATed peer, and it does not exercise the shipping binary's own updater. That is why the preconditions exist.
 
@@ -35,16 +37,19 @@ Two cuts racing each other produce conflicting release PRs and version bumps. Ch
 ```bash
 gh run list --workflow release.yml --repo freenet/freenet-core --limit 5 \
     --json databaseId,status,conclusion,createdAt,displayTitle
+gh run list --workflow cross-compile.yml --repo freenet/freenet-core --limit 5 \
+    --json databaseId,status,headBranch,event,createdAt   # the previous tag's publish/un-draft
 gh pr list --repo freenet/freenet-core --state open --search 'build: release in:title'
 ```
 
 **Stop** in any of these cases:
 
-- a run is `queued` or `in_progress`
+- a `release.yml` run is `queued` or `in_progress`
+- a tag's `cross-compile.yml` run is still running (that is where the previous release publishes and un-drafts)
 - a `build: release` PR is open
-- someone else is mid-soak for a different SHA
+- another maintainer is mid-soak or mid-cut (ask in the dev channel if unsure)
 
-Coordinate first.
+Coordinate first. **Re-run these checks immediately before Step 2**: the soak takes 30+ minutes, and the state can change during it.
 
 ### P1: Auto-update is not broken (updater diff + BOTH canary suites)
 
@@ -54,36 +59,37 @@ Auto-update is the highest-consequence subsystem in a release because a peer's u
 
 ```bash
 R=<your freenet-core checkout>
-git -C $R fetch -q origin
-LAST_TAG=$(git -C $R describe --tags --abbrev=0 origin/main)
-git -C $R diff --stat "$LAST_TAG"..origin/main -- \
+git -C "$R" fetch -q origin
+LAST_TAG=$(git -C "$R" describe --tags --abbrev=0 origin/main)
+git -C "$R" diff --stat "$LAST_TAG"..origin/main -- \
   crates/core/src/bin/commands/auto_update.rs \
-  crates/core/src/bin/commands/update.rs \
+  crates/core/src/bin/commands/update.rs crates/core/src/bin/commands/update/ \
   crates/core/src/bin/freenet.rs \
-  crates/core/src/bin/commands/service.rs \
+  crates/core/src/bin/commands/service.rs crates/core/src/bin/commands/service/ \
+  crates/core/src/bin/commands/rollback.rs \
   scripts/auto-update-canary.sh scripts/auto-update-canary_test.sh \
-  scripts/auto-update-canary_lifecycle_test.sh \
+  scripts/auto-update-canary_lifecycle_test.sh scripts/release_canary_wiring_test.sh \
   .github/workflows/cross-compile.yml .github/workflows/release.yml
 ```
 
-If any file changed, read the change. A diff that is entirely comments is not a behaviour change, but **prove** that rather than eyeballing it. For example:
+If any file changed, read the full diff. A diff that is entirely comments is not a behaviour change, but **prove** that rather than eyeballing it. For a shell script, strip whole-line comments only. Stripping everything after a `#` would also delete executable `${x##*/}` and `${1#v}` expansions, and could falsely report "identical".
 
 ```bash
 f=scripts/auto-update-canary.sh
-diff <(git -C $R show "$LAST_TAG:$f" | sed 's/#.*$//;/^[[:space:]]*$/d') \
-     <(git -C $R show "origin/main:$f" | sed 's/#.*$//;/^[[:space:]]*$/d') \
-  && echo "IDENTICAL - no executable line changed"
+diff <(git -C "$R" show "$LAST_TAG:$f" | sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d') \
+     <(git -C "$R" show "origin/main:$f" | sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d') \
+  && echo "IDENTICAL apart from whole-line comments"
 ```
 
 **Step 2: run BOTH canary self-test suites.** They are fast and hermetic, and need no node. A failure blocks the cut.
 
 ```bash
-cd $R
+cd "$R"
 bash scripts/auto-update-canary_test.sh            # wiring pins: markers, trigger sites, frozen constants
 bash scripts/auto-update-canary_lifecycle_test.sh  # Gate B retries INDETERMINATE, never a real failure
 ```
 
-**Step 3: know what CI's gates do not cover.** During the release, Gate A (pre-flight) and Gate B (self-update canary, previous release to this one) run automatically. They have two structural gaps that no green tick reveals:
+**Step 3: know what CI's gates do not cover.** Gate A (pre-flight, which blocks the crates.io publish) and Gate B (self-update canary from the previous release to this one, post-publish and non-blocking) run automatically in the **`cross-compile.yml` run for the release tag**, not in `release.yml`. They have two structural gaps that no green tick reveals:
 
 - **Gate B runs the PREVIOUS release's updater.** The shipping binary's own installer half (checksum, signature, extract, swap, restart) is never exercised in its own release.
 - **The canary is Linux musl x86_64 only.** macOS has partial cover through the dmg-swap E2E. **Windows has no auto-update gate at all** (#5341).
@@ -98,19 +104,24 @@ Unit, simulation and CI tests miss regressions that only real subscription and U
 - **Clean, non-dirty build.** `git status --short` must be empty, **including untracked files**. `build.rs` stamps the build from `git status --porcelain`, and **a `-dirty` build has auto-update DISABLED**, so a soak of a dirty binary proves nothing about the updater (freenet-core#5613). Check the **artifact**: `freenet --version` on the soak peer must show the ship SHA with no `-dirty` suffix.
 - **A real NATed peer, upgraded to that binary.** It must not be a gateway, a loopback simulation or a datacenter host with a public IP. Auto-update must stay enabled on it (see P1).
 - **River room check.** On the soak peer's own node, the Freenet Official room must load: members render, the composer is present, it is not stuck on "Subscribing…", and there is no WASM panic. River renders inside an **iframe**, so assertions against the top-level document see an empty page and report a healthy room as dead. Select the content frame.
-- **Subscribe/UPDATE test message.** Send one innocuous message to the Freenet Official room as owner (see the `river-official-room` skill, or ask the room owner). Confirm it appears in the soak peer's UI. This proves the new binary applies a contract UPDATE over its live subscription.
+- **Subscribe/UPDATE test message.** Send one innocuous message to the Freenet Official room as owner (maintainers: the local `river-official-room` skill; otherwise ask the room owner). Confirm it appears in the soak peer's UI. This proves the new binary applies a contract UPDATE over its live subscription.
 - **A 30-minute log and behaviour watch on the new binary.** This is the standard duration. Shorter does not count. Watch for panics or service restarts, the #4345 stream-assembly signature, connection failures and timeouts, and log spam (one message repeating hundreds of times). Save the log excerpt; it becomes the pre-release baseline that Step 6 compares gateways against.
 
-**If no real-NAT peer is available**, fall back by risk tier:
+**If no real-NAT peer is available**, the default is to **wait**. A weaker fallback exists for one narrow case only, and it needs the user's **explicit approval**:
 
-- **Config, telemetry or CI-only releases** with no transport, subscribe, UPDATE or contract-runtime change MAY ship on a weaker fallback, provided the real-NAT gap is stated in the release report. The fallback is: the full simulation suite green, a 30-minute smoke test of the ship binary on a **non-service test instance** next to a gateway (never overwrite a gateway's service binary) that exercises River, and heightened Step 6 monitoring.
-- **Anything touching those runtime paths:** do not ship without real-NAT validation. Wait for a NATed peer, or stand one up (a cloud VM behind NAT, or a netns/container peer).
+- **Eligibility:** config, telemetry or CI-only releases, with no transport, subscribe, UPDATE or contract-runtime change. Show the user the changed files and why each one qualifies.
+- **The fallback:**
+  - the full simulation suite green
+  - a 30-minute smoke test of the ship binary on a **non-service test instance** next to a gateway (never overwrite a gateway's service binary), exercising River
+  - heightened Step 6 monitoring
+  - the real-NAT gap stated in the release report
+- **Anything touching those runtime paths:** do not ship without real-NAT validation. Wait for a NATed peer, or stand one up: a real NATed host, such as a cloud VM behind a NAT gateway. A loopback, netns or container "NAT" simulation does not count.
 
 **Gate:** if anything regressed, **do not release**. Roll the soak peer back to its previous binary and investigate.
 
 ### P3: Pre-cut telemetry baseline
 
-Step 6 is only meaningful against a baseline taken **before** the cut. Using the `freenet-telemetry-monitor` skill (or the dashboard at telemetry.freenet.org), record and save the following:
+Step 6 is only meaningful against a baseline taken **before** the cut. Using the dashboard at telemetry.freenet.org (or the maintainer-local `freenet-telemetry-monitor` skill), record and save the following:
 
 - GET, PUT, SUBSCRIBE and UPDATE success rates and latency
 - peer and connection counts
@@ -155,7 +166,7 @@ Inputs (see `gh workflow view release.yml --yaml`):
 
 - `version`: leave blank to auto-patch-bump from the latest crates.io release.
 - `skip_tests`: skips the pre-release local tests (CI still runs on the PR).
-- `dry_run`: shows what would happen without publishing. This is the only dispatch allowed before the preconditions pass.
+- `dry_run`: skips the tag and the GitHub release, **but still opens and auto-merges the version-bump PR**. Treat it as a real trigger.
 
 Confirm the run started:
 
@@ -174,7 +185,22 @@ gh run watch "$RUN_ID" --repo freenet/freenet-core --interval 30 --exit-status
 gh run view "$RUN_ID" --repo freenet/freenet-core --log-failed | tail -100   # on failure
 ```
 
-Watch Gate A and Gate B (P1) in this run. They are the end-to-end updater test.
+`release.yml` going green is **not** the end. The tag push starts a `cross-compile.yml` run, and that run builds the binaries, runs **Gate A** (which blocks publish), publishes to crates.io, un-drafts the release and runs **Gate B**. Watch that run too:
+
+```bash
+gh run list --workflow cross-compile.yml --repo freenet/freenet-core --branch "v$VER" --limit 1 \
+    --json databaseId,status,conclusion
+gh run watch <that id> --repo freenet/freenet-core --interval 30 --exit-status
+```
+
+**Check that what shipped is what you soaked.** The tag is the commit the version-bump PR merged as, and that PR waits roughly 20-75 minutes in the merge queue. Anything that landed on `main` in that window ships too.
+
+```bash
+git fetch --tags origin
+git diff --stat <soaked-sha> "v$VER"   # must touch only version files (Cargo.toml/Cargo.lock/changelog)
+```
+
+If the diff touches anything else, the soak did not cover the release. Treat that like a soak failure: tell the user, and decide between soaking the tag and watching closely, or rolling back.
 
 ## Step 4: Verify the Release Artifacts
 
@@ -215,7 +241,7 @@ A bincode deserialization error means **STOP**: roll back (see "Rollback"), file
 
 Peers adopt a release over a **0-4h decentralised-discovery stagger**, so a regression in the shipped binary keeps spreading for hours after the gateways look fine. Keep monitoring until the stagger has fully elapsed. The release is not done when the workflow goes green.
 
-1. **Gateways (+10-15 min):** each gateway runs the new version, and its logs are clean against the P2 baseline. Use your local `freenet-release` skill and `freenet-gateway-ops` for host access. Grep for signatures specific to the subsystems **this** release touched, not just generic errors.
+1. **Gateways (+10-15 min):** each gateway runs the new version, and its logs are clean against the P2 baseline. Maintainers: host access is in the local `freenet-release` and `freenet-gateway-ops` skills. Grep for signatures specific to the subsystems **this** release touched, not just generic errors.
 2. **Telemetry at roughly +30 min, +1 h, +2 h and +4 h**, compared with the P3 baseline:
    - version adoption is climbing
    - GET/SUBSCRIBE/UPDATE success rates and latency hold
@@ -230,7 +256,7 @@ Watch for log spam (it can fill disks within hours), new error patterns, connect
 
 ```bash
 ./scripts/release-rollback.sh --version <VERSION>                # keeps crates.io
-./scripts/release-rollback.sh --version <VERSION> --yank-crates  # irreversible
+./scripts/release-rollback.sh --version <VERSION> --yank-crates  # disruptive; undo with cargo yank --undo
 ./scripts/release-rollback.sh --version <VERSION> --dry-run
 ```
 
@@ -239,7 +265,8 @@ Watch for log spam (it can fill disks within hours), new error patterns, connect
 - **PR title fails Conventional Commits.** The release PR title must be `build: release X.Y.Z`. Patch it with `gh api repos/freenet/freenet-core/pulls/<PR> --method PATCH -f title="build: release X.Y.Z"`.
 - **Merge queue is slow on the release PR.** Release `merge_group` entries run the full suite (Unit & Integration, Simulation, NAT Validation) as the pre-publish gate (#3973). Expect 20-30 min. Do not merge by hand to skip it.
 - **The cascade didn't fire after `release.published`.** `RELEASE_PAT` is missing or expired. The manual fallback is `gh workflow run gateway-update.yml --field version=X.Y.Z` and `gh workflow run release-announce.yml --field version=X.Y.Z`.
-- **Cross-compile attached partial binaries.** Find the failed target with `gh run view <run-id> --log-failed`, then re-run that platform.
+- **Cross-compile attached partial binaries.** Find the failed target with `gh run view <run-id> --log-failed`, then re-run it with `gh run rerun <run-id> --failed`, or with `gh workflow run cross-compile.yml`.
+- **Re-announcing by hand.** Check that every required binary is attached first. The automatic cascade waits for `release.published`, which fires only after the binaries exist; a manual re-trigger does not wait.
 - **A draft release has NO Windows assets.** Windows Authenticode signing is fail-closed by design. The `Verify signatures` step throws before upload, so an empty Windows slot is the expected shape of a signing failure. Read that step's output first. **Never strip the signing steps** to force a release through.
 
 ## Version Scheme
@@ -263,7 +290,8 @@ Watch for log spam (it can fill disks within hours), new error patterns, connect
 The release is complete when all of these hold:
 
 - ✓ P0-P4 passed and were reported **before** the trigger, and the soak covered the exact ship SHA for 30 minutes
-- ✓ the `release.yml` workflow succeeded, including Gate A and Gate B
+- ✓ the `release.yml` workflow succeeded, AND the tag's `cross-compile.yml` run succeeded, including Gate A and Gate B
+- ✓ `git diff <soaked-sha> vX.Y.Z` touches only version files
 - ✓ crates.io shows the new version for both `freenet` and `fdev`
 - ✓ the GitHub release is tagged, with all required binaries attached
 - ✓ the `gateway-update.yml` and `release-announce.yml` cascade runs succeeded

@@ -15,8 +15,13 @@ subscribe/UPDATE test message, log and behaviour watch); P3 a pre-cut telemetry
 baseline; P4 reporting each gate. Post-cut telemetry monitoring through the
 0-4h auto-update stagger is now Step 6 (P5) and part of the success criteria.
 Environment-specific soak recipes stay in maintainers' local `freenet-release`
-skill, which this skill points to. Also: generic Windows-signing failure note
-added, and the retired `technic`/`vega` gateway names removed.
+skill, which this skill points to. Also: a `dry_run=true` dispatch is
+documented as a real trigger (its version-bump job still opens and auto-merges
+the release PR); Step 3 watches the tag's `cross-compile.yml` run, where Gate A,
+Gate B and the crates.io publish actually run, and checks that the shipped tag
+differs from the soaked SHA only in version files; the updater diff covers
+`update/`, `service/`, `rollback.rs` and the wiring test; machine-specific
+gateway names were removed; and a generic Windows-signing failure note was added.
 
 ## 1.38.7 (2026-10-18)
 
