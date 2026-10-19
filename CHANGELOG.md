@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.1 (2026-10-19)
+
+**`release` checks ship-vs-soak before the tag is pushed.** The check that the
+shipped commit differs from the soaked SHA only in version files ran after the
+tag's `cross-compile.yml` run, by which point crates.io was published and the
+auto-update stagger had begun. Step 3 now runs it as soon as the bump PR merges,
+before `create_release` pushes the tag, using the PR's merge commit. It says how
+to stop on failure: `gh run cancel` on the `release.yml` run, or, if the tag is
+already pushed, cancel the tag's `cross-compile.yml` run before
+`attach-to-release` and delete the tag and draft release with
+`release-rollback.sh`. Also: P2 now says to soak the SHA the bump PR will sit on
+top of (the tag lands on the bump PR's merge commit, not on that SHA); agents
+must always pass `version=` explicitly, because a blank input auto-bumps from
+crates.io rather than `Cargo.toml`; Step 6 is no longer labelled as a
+precondition ("P5"); and Step 5 says where `$ROOM_VK` comes from.
+
 ## 1.39.0 (2026-10-19)
 
 **`release` now opens with MANDATORY PRECONDITIONS before any trigger step.**

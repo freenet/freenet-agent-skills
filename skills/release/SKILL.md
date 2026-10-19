@@ -10,8 +10,8 @@ license: LGPL-3.0
 This is the **single entry point** for cutting a freenet-core release. The order is fixed:
 
 1. **MANDATORY PRECONDITIONS** P0-P4 (below). Every one must pass, and you must report each result.
-2. Steps 1-5: version, trigger, watch, verify artifacts, River smoke test.
-3. **Step 6 (precondition P5): post-cut telemetry monitoring** through the 0-4h auto-update stagger.
+2. Steps 1-5: version, trigger, watch (including the ship-vs-soak check **before** the tag is pushed), verify artifacts, River smoke test.
+3. **Step 6: post-cut telemetry monitoring** through the 0-4h auto-update stagger.
 
 **Do not dispatch `release.yml` or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only thing you may run beforehand is `scripts/release.sh --dry-run`.
 
@@ -100,7 +100,7 @@ The P2 soak peer runs with auto-update **enabled**. It is the only real-NAT obse
 
 Unit, simulation and CI tests miss regressions that only real subscription and UPDATE traffic over a NAT link surface. Examples are the #4345 GET-stream-assembly failures, connection-teardown bugs and log spam. All of the following are required:
 
-- **Exact ship SHA.** Build the `origin/main` HEAD that the release will tag. If `main` moves before you trigger, the soak no longer covers what ships, so re-soak the new SHA.
+- **Exact ship SHA.** Build the SHA the bump PR will sit on top of: the current `origin/main` HEAD. The release is tagged on the bump PR's merge commit, so the version bump should be the only thing separating the tag from what you soaked. If `main` moves before you trigger, the soak no longer covers what ships, so re-soak the new SHA. Step 3 checks this again the moment the bump PR merges.
 - **Clean, non-dirty build.** `git status --short` must be empty, **including untracked files**. `build.rs` stamps the build from `git status --porcelain`, and **a `-dirty` build has auto-update DISABLED**, so a soak of a dirty binary proves nothing about the updater (freenet-core#5613). Check the **artifact**: `freenet --version` on the soak peer must show the ship SHA with no `-dirty` suffix.
 - **A real NATed peer, upgraded to that binary.** It must not be a gateway, a loopback simulation or a datacenter host with a public IP. Auto-update must stay enabled on it (see P1).
 - **River room check.** On the soak peer's own node, the Freenet Official room must load: members render, the composer is present, it is not stuck on "Subscribing…", and there is no WASM panic. River renders inside an **iframe**, so assertions against the top-level document see an empty page and report a healthy room as dead. Select the content frame.
@@ -137,7 +137,8 @@ Before Step 2, tell the user which gates ran and what each returned: P0-P3, plus
 ## Arguments
 
 - If an argument is provided (e.g., `/release 0.2.65`), use it as the target version.
-- If no argument is provided, auto-detect: increment the patch of the version currently in `crates/core/Cargo.toml`. If unreleased PRs have already bumped it past the last tag, **use the current Cargo.toml version as-is** rather than incrementing again. That is the version those PRs were intended for.
+- If no argument is provided, work it out from `crates/core/Cargo.toml`: increment its patch. If unreleased PRs have already bumped it past the last tag, **use the current Cargo.toml version as-is** rather than incrementing again. That is the version those PRs were intended for.
+- **Always pass the chosen version to the workflow explicitly (`--field version=X.Y.Z`). Never leave `version` blank.** A blank input makes `release.yml` auto-bump the patch of the latest **crates.io** release, which ignores `Cargo.toml` and can differ from the version you confirmed with the user.
 
 ## Step 1: Determine Version and Show Changelog
 
@@ -164,7 +165,7 @@ gh workflow run release.yml --repo freenet/freenet-core --field version=X.Y.Z
 
 Inputs (see `gh workflow view release.yml --yaml`):
 
-- `version`: leave blank to auto-patch-bump from the latest crates.io release.
+- `version`: **always set it explicitly** to the version confirmed in Step 1. Never leave it blank: blank auto-bumps from the latest crates.io release, not from `Cargo.toml` (see Arguments).
 - `skip_tests`: skips the pre-release local tests (CI still runs on the PR).
 - `dry_run`: skips the tag and the GitHub release, **but still opens and auto-merges the version-bump PR**. Treat it as a real trigger.
 
@@ -181,10 +182,55 @@ The workflow takes about 20-30 minutes. Use `gh run watch` in a backgrounded cal
 
 ```bash
 VER=X.Y.Z                                                      # the version being released; used below
+SOAKED=<the SHA you soaked in P2>
 RUN_ID=$(gh run list --workflow release.yml --repo freenet/freenet-core --limit 1 --json databaseId -q '.[0].databaseId')
 gh run watch "$RUN_ID" --repo freenet/freenet-core --interval 30 --exit-status
 gh run view "$RUN_ID" --repo freenet/freenet-core --log-failed | tail -100   # on failure
 ```
+
+### Check that what ships is what you soaked, BEFORE the tag is pushed
+
+`release.yml` runs these jobs in order:
+
+1. `validate`
+2. `update_versions` opens the `build: release X.Y.Z` PR and enables auto-merge.
+3. `wait_for_pr` waits roughly 20-75 minutes for the merge queue, then resolves the PR's merge commit as the release SHA.
+4. `verify_publishable` runs `cargo publish --dry-run` (a few minutes).
+5. `create_release` pushes the `vX.Y.Z` tag on the release SHA and creates the draft release.
+
+The tag push starts the tag's `cross-compile.yml` run, which publishes to crates.io and un-drafts the release; that starts the 0-4h auto-update stagger. Anything that landed on `main` while the bump PR sat in the queue is in the release SHA. So run this check **as soon as the bump PR merges**, while `verify_publishable` is still running. Start it in a backgrounded call right after the trigger:
+
+```bash
+PR=$(gh pr list --repo freenet/freenet-core --state all --search "build: release $VER in:title" \
+    --json number -q '.[0].number')
+until [ "$(gh pr view "$PR" --repo freenet/freenet-core --json state -q .state)" = MERGED ]; do sleep 20; done
+MERGE_SHA=$(gh pr view "$PR" --repo freenet/freenet-core --json mergeCommit -q .mergeCommit.oid)
+git fetch -q origin
+git diff --stat "$SOAKED" "$MERGE_SHA"   # must touch only version files: crates/core/Cargo.toml, crates/fdev/Cargo.toml, Cargo.lock
+```
+
+**If the diff touches anything else, the soak did not cover the release. Stop the run before the tag is pushed:**
+
+```bash
+gh run cancel "$RUN_ID" --repo freenet/freenet-core
+gh run view "$RUN_ID" --repo freenet/freenet-core --json status,jobs \
+    -q '.status, (.jobs[] | "\(.name): \(.status) \(.conclusion)")'    # "Create GitHub release" must not be success
+git ls-remote --tags origin "v$VER"                                       # must print nothing
+```
+
+If the cancel lost the race and `v$VER` exists, cancel the tag's `cross-compile.yml` run before its `attach-to-release` job. That job runs Gate A and then publishes to crates.io, after builds that take about an hour. Then delete the tag and the draft release:
+
+```bash
+CC_ID=$(gh run list --workflow cross-compile.yml --repo freenet/freenet-core --branch "v$VER" --limit 1 \
+    --json databaseId -q '.[0].databaseId')
+gh run cancel "$CC_ID" --repo freenet/freenet-core
+cargo search freenet --limit 1                     # must still show the PREVIOUS version
+./scripts/release-rollback.sh --version "$VER"     # deletes the tag and the GitHub release; no --yank-crates
+```
+
+Either way, the version-bump commit stays on `main`. Tell the user what happened. Any re-cut is a new release: start again from P0 with a soak of the new `origin/main` HEAD, and agree the version with the user, because `main` already carries the `$VER` bump.
+
+### Watch the tag's cross-compile run
 
 `release.yml` going green is **not** the end. The tag push starts a `cross-compile.yml` run, and that run builds the binaries, runs **Gate A** (which blocks publish), publishes to crates.io, un-drafts the release and runs **Gate B**. Watch that run too:
 
@@ -193,15 +239,6 @@ gh run list --workflow cross-compile.yml --repo freenet/freenet-core --branch "v
     --json databaseId,status,conclusion
 gh run watch <that id> --repo freenet/freenet-core --interval 30 --exit-status
 ```
-
-**Check that what shipped is what you soaked.** The tag is the commit the version-bump PR merged as, and that PR waits roughly 20-75 minutes in the merge queue. Anything that landed on `main` in that window ships too.
-
-```bash
-git fetch --tags origin
-git diff --stat <soaked-sha> "v$VER"   # must touch only version files (Cargo.toml/Cargo.lock/changelog)
-```
-
-If the diff touches anything else, the soak did not cover the release. Treat that like a soak failure: tell the user, and decide between soaking the tag and watching closely, or rolling back.
 
 ## Step 4: Verify the Release Artifacts
 
@@ -229,16 +266,19 @@ Both cascade runs should show recent runs started after the release. If either i
 
 ## Step 5: River Compatibility Smoke Test
 
-Protocol changes can silently break River clients even when every freenet-core test passes. Examples are new wire variants, streaming defaults and serialization changes. Get the current Freenet Official room owner VK from the `river-official-room` skill; it rotates, so do not hardcode it.
+Protocol changes can silently break River clients even when every freenet-core test passes. Examples are new wire variants, streaming defaults and serialization changes.
+
+`ROOM_VK` is the Freenet Official room's **owner verifying key**. Take it from the "Room Owner VK" entry in the maintainer-local `river-official-room` skill; without that skill, ask the room owner. It changes when the room is re-created, so look it up each release and do not hardcode it.
 
 ```bash
+ROOM_VK=<Room Owner VK from the river-official-room skill>
 cd <your river checkout>
 cargo run -p riverctl -- member list "$ROOM_VK"
 ```
 
 A bincode deserialization error means **STOP**: roll back (see "Rollback"), file an issue, and rebuild River against the new stdlib. In v0.2.11, enabling WebSocket streaming by default broke riverctl, which was pinned to stdlib 0.1.40.
 
-## Step 6 (precondition P5): Post-cut telemetry monitoring through the 0-4h stagger
+## Step 6: Post-cut telemetry monitoring through the 0-4h stagger
 
 Peers adopt a release over a **0-4h decentralised-discovery stagger**, so a regression in the shipped binary keeps spreading for hours after the gateways look fine. Keep monitoring until the stagger has fully elapsed. The release is not done when the workflow goes green.
 
@@ -292,7 +332,7 @@ The release is complete when all of these hold:
 
 - ✓ P0-P4 passed and were reported **before** the trigger, and the soak covered the exact ship SHA for 30 minutes
 - ✓ the `release.yml` workflow succeeded, AND the tag's `cross-compile.yml` run succeeded, including Gate A and Gate B
-- ✓ `git diff <soaked-sha> vX.Y.Z` touches only version files
+- ✓ `git diff <soaked-sha> <bump PR merge commit>` touched only version files, checked **before** the tag was pushed
 - ✓ crates.io shows the new version for both `freenet` and `fdev`
 - ✓ the GitHub release is tagged, with all required binaries attached
 - ✓ the `gateway-update.yml` and `release-announce.yml` cascade runs succeeded
