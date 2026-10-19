@@ -9,7 +9,9 @@ what goes wrong once a merge is more than a plain union.
 ## Design state so the merge is lawful by construction
 
 The rest of this file is about making a given merge lawful. These rules come
-first: a state shaped this way leaves the merge little room to break the laws.
+first, because most violations come from how the state is shaped. They do not
+remove the need for the checks below: a cap combined with any removal still
+needs the heal-guarded form of associativity.
 
 1. **Assume any state `validate_state` accepts can reach your merge.** Why: a
    full-state PUT runs only validation, so peers hand your merge states your
@@ -17,40 +19,47 @@ first: a state shaped this way leaves the merge little room to break the laws.
    with crafted valid states (duplicates, over-cap sets, records whose
    dependencies are missing), not only states your client produces.
 2. **Dependencies point toward authority, and removal cascades down only.**
-   Why: if keeping or dropping a record depends on the records below it, the
-   result depends on which of those arrived first. How: a record may depend
-   only on records closer to the authority (owner key -> authorized writers ->
-   their posts -> replies). A record may be dropped because something it
-   depends on was dropped, never kept or dropped because of what depends on
-   it. Do not drop a record others depend on while those dependents remain:
-   drop the dependents first, or drop the whole subtree as one unit.
+   Why: if keeping or dropping a record depends on which records below it are
+   present, caps and cleanup change the answer, and re-merging a dropped
+   dependent changes the result. How: a record may depend only on records
+   closer to the authority (owner key -> authors -> their posts -> replies).
+   A record may be dropped because something it depends on was dropped, never
+   kept or dropped because of what depends on it. Do not drop a record others
+   depend on while those dependents remain: drop the dependents first, or drop
+   the whole subtree as one unit.
 3. **Decide liveness from a record's own fields.** Why: neighbouring records
    come and go with caps and cleanup, so a rule that reads them gives
    different answers on different peers. How: put the fact the rule needs in
    the record itself, signed by its author and merged monotonically (for
    example a `last_active` timestamp merged by max), and read only that.
 4. **Bound size with an order fixed when a record is created.** Why: a cap
-   that ranks records by something fixed at creation keeps the same records
-   whatever else is present, which keeps the merge lawful. How: keep the top N
-   by creation timestamp (with a fixed rule for equal timestamps), or cap per
-   author, so each author's records compete only with each other.
+   that ranks by something fixed at creation never readmits a record it
+   dropped, however much more is merged in. How: keep the top N by creation
+   timestamp (with a fixed rule for equal timestamps), and cap per author so
+   each author's records compete only with each other. A creation timestamp is
+   the author's claim, so an author can future-date records to hold top slots;
+   the per-author cap limits that to the author's own records. A per-author
+   cap bounds total size only if the number of authors is bounded too.
 5. **Make further pruning an authority's signed act.** Why: when peers prune
    by local judgement over different sets, they disagree. How: if you need to
    prune beyond per-record caps, have the owner (or another key the parameters
-   name) sign a versioned checkpoint stating the cut, for example "drop
-   records older than T"; the merge keeps the newest checkpoint and applies
-   it, so every peer applies the same cut.
-6. **Make every stored record verifiable from its own bytes plus the
-   parameters.** Why: a record whose validity depends on other records changes
-   validity as those come and go, and a stored record that is never
+   name) sign a checkpoint stating the cut, for example "drop records older
+   than T". The merge keeps the checkpoint with the latest cutoff, so the cut
+   only moves forward and every peer applies the same one. The owner must
+   never sign two different checkpoints with the same cutoff.
+6. **Make every stored record's signature and authorization verifiable from
+   its own bytes plus the parameters.** Why: a check that reads other records
+   changes its answer as those come and go, and a stored record that is never
    re-verified lets a forgery persist. How: carry any authorization proof in
    the record, root it in the contract parameters, and verify stored records
-   by the same rule as arriving ones.
+   by the same rule as arriving ones. Whether a valid record is *kept* may
+   still depend on the records it depends on (rule 2).
 7. **Accept only states your merge produces.** Why: a valid state that
    `merge(S, S)` rewrites is reported under state idempotence. How: have
    `validate_state` reject any state that the merge's cleanup would change,
    unless an upgrade path needs it to accept states already held on the
-   network (see "Merge = one canonical procedure over the union" below).
+   network (see "Merge = one canonical procedure over the union" below). That
+   check runs the cleanup, so count it against the work bounds below.
 8. **Judge by freenet-core's own verdicts.** Why: a test you wrote against
    your own idea of the laws can pass while the network's verifier reports a
    violation. How: fuzz with crafted states and run `fdev verify-merge` on the
@@ -58,16 +67,24 @@ first: a state shaped this way leaves the merge little room to break the laws.
 
 **Worked example: inactivity pruning.**
 
-- Bad: "drop an author and their posts once they have had no post stored for
-  30 days." Whether a post is still stored depends on the post cap and on what
-  else has arrived, so two peers holding the same records can reach
-  different results, and re-merging a dropped post can bring its author back.
+- Bad: drop an author, and their posts, when the posts the state currently
+  holds show no recent activity from them. Which posts are held depends on
+  the post cap and on what else has arrived, so two peers holding the same
+  records can reach different results, and re-merging a dropped post can
+  bring its author back.
 - Good: each author signs a `last_active` timestamp in their own record,
   merged by max. The owner signs a checkpoint with a cutoff time. The merge
-  drops an author whose `last_active` is older than the newest checkpoint's
+  drops an author whose `last_active` is older than the latest checkpoint
   cutoff, together with everything that depends on that author, as one unit.
   The rule reads one field of the record and one authority fact, neither of
   which depends on what else is present, and it reads no clock.
+- Limits of the good version: `last_active` is the author's claim, so an
+  author who future-dates it is never pruned this way; the owner needs a
+  separate signed removal for that case. The cascade drop is not a
+  tombstone: an author who later signs a newer `last_active` comes back, with
+  any of their posts a peer still holds. A removal that must stick, such as a
+  moderation removal, needs a tombstone (see `state-authorization-patterns.md`
+  → "Tombstones").
 
 ## The laws, as the network checks them
 
