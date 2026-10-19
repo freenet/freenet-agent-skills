@@ -7,13 +7,19 @@ All notable changes to this project will be documented in this file.
 **`release` checks ship-vs-soak before the tag is pushed.** The check that the
 shipped commit differs from the soaked SHA only in version files ran after the
 tag's `cross-compile.yml` run, by which point crates.io was published and the
-auto-update stagger had begun. Step 3 now runs it as soon as the bump PR merges,
-before `create_release` pushes the tag, using the PR's merge commit. It says how
-to stop on failure: `gh run cancel` on the `release.yml` run, or, if the tag is
-already pushed, cancel the tag's `cross-compile.yml` run before
-`attach-to-release` and delete the tag and draft release with
-`release-rollback.sh`. Also: P2 now says to soak the SHA the bump PR will sit on
-top of (the tag lands on the bump PR's merge commit, not on that SHA); agents
+auto-update stagger had begun. Step 3 now runs it in a backgrounded script as
+soon as the bump PR merges, before `create_release` pushes the tag, using the
+PR's merge commit, and the script itself force-cancels the `release.yml` run on
+a mismatch (the window is only `verify_publishable`'s 4-5 minutes). The run and
+the bump PR are found by a pre-trigger timestamp and the `release/v$VER` head
+branch, so the lookup cannot pick up an earlier attempt or spin on a PR that
+does not exist yet. If the tag is already pushed, the skill says to
+force-cancel the tag's `cross-compile.yml` run before `attach-to-release`, to
+stop and escalate if crates.io already has the version, and otherwise to run
+`release-rollback.sh` from a checkout with `yes` piped in. P2 adds a merge
+freeze on `main` from soak start until the bump PR merges. Also: P2 now says to
+soak the SHA the bump PR will sit on top of (the tag lands on the bump PR's
+merge commit, not on that SHA); agents
 must always pass `version=` explicitly, because a blank input auto-bumps from
 crates.io rather than `Cargo.toml`; Step 6 is no longer labelled as a
 precondition ("P5"); and Step 5 says where `$ROOM_VK` comes from.
