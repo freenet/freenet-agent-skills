@@ -180,6 +180,7 @@ gh run list --workflow release.yml --repo freenet/freenet-core --limit 1 \
 The workflow takes about 20-30 minutes. Use `gh run watch` in a backgrounded call so you are notified on completion; never poll by hand.
 
 ```bash
+VER=X.Y.Z                                                      # the version being released; used below
 RUN_ID=$(gh run list --workflow release.yml --repo freenet/freenet-core --limit 1 --json databaseId -q '.[0].databaseId')
 gh run watch "$RUN_ID" --repo freenet/freenet-core --interval 30 --exit-status
 gh run view "$RUN_ID" --repo freenet/freenet-core --log-failed | tail -100   # on failure
