@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.3 (2026-10-19)
+
+**`dapp-builder` adds state-design rules that keep a merge lawful by
+construction.** A new section at the top of
+`references/merge-law-compliance.md`, linked from the Phase 1 key questions in
+`SKILL.md`: assume any valid state reaches the merge; dependencies point toward
+authority and removal cascades down only; liveness from a record's own fields;
+caps ordered by creation; wider pruning as a signed checkpoint; records
+verifiable from their own bytes plus parameters; accept only states the merge
+produces; judge by freenet-core's verdicts. Includes a worked inactivity-pruning
+example.
+
 ## 1.39.2 (2026-10-19)
 
 - release: the ship-vs-soak check allows `apps/freenet-ping/Cargo.lock` (re-synced by the bump once freenet-core#5935 lands) and fails closed if either SHA cannot be read or the diff fails.
