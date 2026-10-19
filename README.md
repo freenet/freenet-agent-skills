@@ -37,8 +37,11 @@ risk, then posts a consolidated review to the PR.
 
 ### [release](./skills/release/)
 
-Orchestrates a Freenet release: determines the next version, shows the changelog, confirms with
-the user, and triggers the release pipeline via GitHub Actions.
+Orchestrates a Freenet release. It runs the mandatory pre-cut gates first: no concurrent cut,
+the auto-update updater diff and canary suites, a 30-minute real-NAT soak of the exact ship
+SHA, and a telemetry baseline. Then it determines the next version, shows the changelog,
+confirms with the user, triggers the release pipeline via GitHub Actions, and monitors
+telemetry through the 0-4h auto-update stagger.
 
 ### [linux-test](./skills/linux-test/)
 
