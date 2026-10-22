@@ -21,9 +21,10 @@ needs the heal-guarded form of associativity.
    and unions of records from different histories, duplicates, older signed
    versions of a record. A law failure on such a state is a real convergence
    failure, because the same state can be put on the network and honest peers
-   then disagree. Once enforcement is enabled (freenet-core#5320, now in
-   shadow mode), it is also grounds for removing the contract, and removal is
-   permanent for that contract key. "Our client never produces that state" is
+   then disagree. It is also removal-eligible under the current policy: once
+   enforcement is enabled (freenet-core#5320, now in shadow mode), a peer
+   that reproduces it removes the contract and remembers its id so ordinary
+   traffic does not bring it back. "Our client never produces that state" is
    not a defence. How: state each law over every valid state, make
    `validate_state` reject what your merge cannot handle (rule 7), and fuzz
    with crafted valid states as well as client-produced ones (see "Testing").
@@ -100,9 +101,13 @@ needs the heal-guarded form of associativity.
 
 All comparisons are on exact canonical bytes. `fdev verify-merge` and peers
 run the same checks; only Violation-severity laws can lead to a contract's
-removal. Each law must hold for every state `validate_state` accepts, wherever
-that state came from: a peer re-runs the case itself and does not ask who
-built the inputs. For valid states `A`, `B`, `C` and a delta `D`:
+removal. The state laws (idempotence, commutativity, associativity, emitted
+state validity, determinism, path agreement, reconciliation) must hold for
+every state `validate_state` accepts, wherever that state came from: a peer
+re-runs the case itself and does not ask who built the inputs. Delta order and
+transition path agreement are judged only on history a peer observed itself
+(deltas computed against the same base, an observed `base -> result` step).
+For valid states `A`, `B`, `C` and a delta `D`:
 
 | Law | Statement | Severity |
 |---|---|---|
