@@ -16,8 +16,9 @@ All notable changes to this project will be documented in this file.
   the same.
 - Rules 2 to 4 keep their advice with new reasons, each from a measured case:
   a member kept only because other records need it, under a member cap, gives
-  merge results the verifier reports as a violation; and a cap whose order or admission reads
-  which records are present ranks differently once cleanup removes them. A
+  merge results the verifier reports as a violation; and a cap whose order or
+  admission reads which records are present ranks differently once cleanup
+  removes them. A
   ban cap ranks and admits by the ban record alone and carries the proof of
   its issuer's authority. Two small worked examples show both; the
   inactivity example says when its bad version fails.

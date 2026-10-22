@@ -76,8 +76,12 @@ needs the heal-guarded form of associativity.
    Separately, to stop one author crowding out the others, cap per author so
    each author's records compete only with each other. A creation timestamp is
    the author's claim, so an author can future-date records to hold top slots;
-   the per-author cap limits that to the author's own records. A per-author
-   cap bounds total size only if the number of authors is bounded too.
+   the per-author cap limits that to the author's own records. A cap across
+   all authors that ranks by these timestamps is still lawful, but lets one
+   author take slots from others by future-dating (see
+   `state-authorization-patterns.md` → "A Value One Party Supplies…"). A
+   per-author cap bounds total size only if the number of authors is bounded
+   too.
 5. **Make further pruning an authority's signed act.** This is a design
    sketch: no published contract uses it, and it has been checked only in a
    small exhaustive model, where every associativity failure healed. Why: when
