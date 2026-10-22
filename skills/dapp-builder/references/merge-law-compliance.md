@@ -13,11 +13,20 @@ first, because most violations come from how the state is shaped. They do not
 remove the need for the checks below: a cap combined with any removal still
 needs the heal-guarded form of associativity.
 
-1. **Assume any state `validate_state` accepts can reach your merge.** Why: a
-   full-state PUT runs only validation, so peers hand your merge states your
-   client never makes. How: state each law over every valid state, and fuzz
-   with crafted valid states (duplicates, over-cap sets, records whose
-   dependencies are missing), not only states your client produces.
+1. **Treat everything `validate_state` accepts as input to your merge.**
+   Why: the network checks each law over every state `validate_state`
+   accepts, not only over states your clients produce. A full-state PUT runs
+   only validation, and anyone can build valid states offline, without any
+   key, by replaying and recombining your contract's public records: subsets
+   and unions of records from different histories, duplicates, older signed
+   versions of a record. A law failure on such a state is a real convergence
+   failure, because the same state can be put on the network and honest peers
+   then disagree. Once enforcement is enabled (freenet-core#5320, now in
+   shadow mode), it is also grounds for removing the contract, and removal is
+   permanent for that contract key. "Our client never produces that state" is
+   not a defence. How: state each law over every valid state, make
+   `validate_state` reject what your merge cannot handle (rule 7), and fuzz
+   with crafted valid states as well as client-produced ones (see "Testing").
 2. **Dependencies point toward authority, and removal cascades down only.**
    Why: if keeping or dropping a record depends on which records below it are
    present, caps and cleanup change the answer, and re-merging a dropped
@@ -56,10 +65,11 @@ needs the heal-guarded form of associativity.
    still depend on the records it depends on (rule 2).
 7. **Accept only states your merge produces.** Why: a valid state that
    `merge(S, S)` rewrites is reported under state idempotence. How: have
-   `validate_state` reject any state that the merge's cleanup would change,
-   unless an upgrade path needs it to accept states already held on the
-   network (see "Merge = one canonical procedure over the union" below). That
-   check runs the cleanup, so count it against the work bounds below.
+   `validate_state` reject any state that the merge's cleanup would change.
+   If an upgrade path forces you to accept states already held on the
+   network, every such state remains a violation that anyone can submit, so
+   treat that as temporary and close it at the next re-key. The check runs the
+   cleanup, so count it against the work bounds below.
 8. **Judge by freenet-core's own verdicts.** Why: a test you wrote against
    your own idea of the laws can pass while the network's verifier reports a
    violation. How: fuzz with crafted states and run `fdev verify-merge` on the
@@ -90,7 +100,9 @@ needs the heal-guarded form of associativity.
 
 All comparisons are on exact canonical bytes. `fdev verify-merge` and peers
 run the same checks; only Violation-severity laws can lead to a contract's
-removal. For valid states `A`, `B`, `C` and a delta `D`:
+removal. Each law must hold for every state `validate_state` accepts, wherever
+that state came from: a peer re-runs the case itself and does not ask who
+built the inputs. For valid states `A`, `B`, `C` and a delta `D`:
 
 | Law | Statement | Severity |
 |---|---|---|
@@ -166,10 +178,10 @@ Rules that follow from it:
   states no merge produces (a full-state PUT runs only validation): duplicates,
   records over a cap, records whose dependencies are gone. Run the same
   cleanup over held state on every apply, so every state a merge produces is a
-  fixpoint of `merge(S, S)`. A valid state that is not such a fixpoint is
-  reported under state idempotence, so prefer a `validate_state` that rejects
-  states cleanup would change, where an upgrade path does not need it to
-  accept them.
+  fixpoint of `merge(S, S)`. Normalizing held state does not make a valid
+  non-fixpoint state acceptable: it is still reported under state idempotence
+  when anyone submits it, so `validate_state` must also reject states cleanup
+  would change (rule 7).
 
 ## Deduplicate within one delta
 
@@ -230,8 +242,11 @@ Write these before trusting the merge, and run them on every change to it:
 
 - **A merge-law fuzzer.** Generate pairs and triples of valid states,
   including adversarial ones (duplicates, records over caps, colliding
-  versions), and check idempotence, commutativity, absorption, heal-guarded
-  associativity, and apply-twice equals apply-once for deltas.
+  versions, records in a non-canonical order, subsets and unions of records
+  taken from different histories, older signed versions of a record), and
+  check idempotence, commutativity, absorption, heal-guarded associativity,
+  and apply-twice equals apply-once for deltas. Feed raw generated states to
+  the laws as well as merge outputs: the network checks raw valid states.
 - **Fork tests across many seeds.** Grow two forks from a common ancestor with
   random operations, exchange states and deltas, and require convergence, a
   commutative first exchange, and a `merge(S, S)` fixpoint after every apply.

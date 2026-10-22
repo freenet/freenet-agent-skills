@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.4 (2026-10-22)
+
+**`dapp-builder` states the validity rule the network enforces.** In
+`references/merge-law-compliance.md`: each merge law must hold for every state
+`validate_state` accepts, including states anyone can assemble offline from a
+contract's public records, and a law failure there is grounds for permanent
+removal of the contract key once enforcement is enabled. `validate_state` must reject states the merge
+would rewrite; an upgrade-path exception stays a violation until the next
+re-key. The fuzzer guidance adds non-canonical order, recombined records and
+older signed versions, and asks for raw valid states as well as merge outputs.
+
 ## 1.39.3 (2026-10-19)
 
 **`dapp-builder` adds state-design rules that keep a merge lawful by
