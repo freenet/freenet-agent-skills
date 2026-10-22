@@ -204,10 +204,14 @@ Four details that ride along with the same loop:
     cleanup.** Let the message depend on its author's member record, drop it
     when that record is absent, and decide that in the cleanup that runs over
     the whole merged state, so a whole-state merge is a function of the union of
-    the two states. A network delta must then carry the records its entries
-    depend on, or a peer that applies it before the member record drops the
-    message. See `merge-law-compliance.md`, rule 6 and "A trimmed network delta
-    must make progress every round".
+    the two states. Every delta must then carry the records its entries
+    depend on, including a delta a client builds for an UPDATE, or a node that
+    applies it before the member record drops the message. In freenet-core
+    today the node the client is connected to applies the client's delta, and
+    what travels on to other peers is the merged state or a delta your
+    `get_state_delta` computed against the receiving peer's summary. See
+    `merge-law-compliance.md`, rule 6 and "A trimmed network delta must make
+    progress every round".
   - **Carry the authorization proof in the entry** (a signed invite chain rooted
     in the contract's parameters), which turns the predicate back into one that
     reads only the entry.
@@ -360,7 +364,8 @@ This ensures that regardless of the order peers receive and apply updates, they 
 
 A contract whose cap or eviction can free a slot (through a removal or a raised cap) may not be strictly associative; the network accepts that only when the two groupings converge (freenet-core#5924). Test absorption, `merge(merge(A, B), B) == merge(A, B)`, directly as well: the network checks it only inside that convergence step. See `merge-law-compliance.md` for the exact rules and for how caps, removals, work bounds and summaries break them.
 
-**Idempotence is the one the network gives you no way to avoid.** Delivery is at-least-once: the same state or delta legitimately
+**Idempotence and absorption are the ones the network gives you no way to
+avoid.** Delivery is at-least-once: the same state or delta legitimately
 arrives more than once, after a retry, a re-subscribe, or anti-entropy healing a
 divergence. A merge that changes the state when re-applied therefore never
 settles — each redelivery mutates it again, which produces an endless stream of
@@ -402,9 +407,10 @@ mod tests {
         }
 
         /// Grouping doesn't matter: (A merge B) merge C == A merge (B merge C).
-        /// Strict equality only holds for a merge with no cap that a removal
-        /// or a raised cap can free; for one that has such a cap, check the
-        /// heal-guarded form in `merge-law-compliance.md` instead.
+        /// Expect strict equality only when no cap can free a slot through a
+        /// removal or a raised cap. For a merge with such a cap, the network
+        /// checks the heal-guarded form in `merge-law-compliance.md`; run
+        /// `fdev verify-merge` on your states to check it.
         #[test]
         fn merge_is_associative(a in arb_state(), b in arb_state(), c in arb_state()) {
             let ab_c = a.clone().merge(&b).merge(&c);
@@ -483,7 +489,7 @@ mod tests {
    from the host clock at merge time. Reading the clock inside a merge is
    deprecated outright as of freenet-core v0.2.132 — see "WASM Environment
    Utilities" below and `state-authorization-patterns.md` → "Time Handling".
-2. **Order-dependent collections:** Using `Vec` where order matters instead of `HashMap`/`BTreeMap`
+2. **Order-dependent collections:** Using `Vec` where order matters instead of `BTreeMap`/`BTreeSet` (not `HashMap`; see below)
 3. **Mutation during iteration:** Modifying state while iterating can produce different results
 4. **Missing items in merge:** Only keeping "newer" items without proper conflict resolution
 
@@ -513,8 +519,9 @@ mod tests {
 > ```
 >
 > Pass the contract's parameters with `--params`: without it fdev uses empty
-> parameters, a contract that reads its parameters rejects or fails on every state, every
-> case comes back inconclusive, and the command still exits 0.
+> parameters, a contract whose parameters do not decode from empty bytes, or
+> fail its checks, rejects or fails on every state, every case comes back
+> inconclusive, and the command still exits 0.
 >
 > Give it a corpus (`--state` samples, `--transition BASE RESULT` pairs, or a
 > `--bundle`) and it exercises the laws against real states. It also emits

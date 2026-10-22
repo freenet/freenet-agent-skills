@@ -8,38 +8,48 @@ All notable changes to this project will be documented in this file.
 
 - Rule 6 allows dependencies toward the authority: a record may be verified
   against the records it depends on (a message against its author's member
-  record). It now says which record counts when one id has several, reads
-  only a dependency's fixed key, bounds the walk to the authority, drops an
-  orphan inside the canonical cleanup, never fails the merge for it, and has
-  `validate_state` reject a state that still holds one, which removes a
-  contradiction with rule 7.
+  record). It says how to choose among several records for one id, to read
+  only a dependency's fixed key, to bound the walk to the authority, and to
+  drop an orphan inside the canonical cleanup. A delta's orphan is skipped
+  and never a reason for `Err`; `validate_state` rejects a whole state that
+  holds one, and the merge may refuse such a state. The `Err` section says
+  the same.
 - Rules 2 to 4 keep their advice with new reasons, each from a measured case:
-  a member kept only because other records need it, under a member cap, can
-  leave a set of states with two different merge results; and a cap whose
-  order or admission reads which records are present ranks differently once
-  cleanup removes them. A ban cap ranks and admits by the ban record alone.
-  Two small worked examples show both; the inactivity example now says when
-  its bad version fails.
+  a member kept only because other records need it, under a member cap, gives
+  merge results the verifier reports as a violation; and a cap whose order or admission reads
+  which records are present ranks differently once cleanup removes them. A
+  ban cap ranks and admits by the ban record alone and carries the proof of
+  its issuer's authority. Two small worked examples show both; the
+  inactivity example says when its bad version fails.
+- A new list of design choices the file does not settle: who may ban whom,
+  why a capped ban list is not a lasting removal, whether removing an inviter
+  removes their invitees, the order of member cap, orphan drop and message
+  cap (the order that passed in a small model is given), which members a
+  member cap keeps, and configuration changes to caps.
 - Rule 5 (owner-signed pruning checkpoint) is marked as an unbuilt sketch and
   breaks equal cutoffs by signature bytes instead of relying on the owner.
-- Rule 1 says what runs today (`fdev verify-merge` and opt-in shadow peers,
-  which remove nothing) and that a PUT runs only validation only on a peer
-  that does not yet hold the contract.
+- Rule 1 says what runs today: `fdev verify-merge` and opt-in shadow peers,
+  which remove nothing, plus a node check that stops broadcasting a contract
+  whose state never stops changing when merged with itself. Planned removal
+  is per peer. A PUT skips the merge only on a peer that does not yet hold
+  the contract.
 - Every `fdev verify-merge` example passes `--params`: without it fdev uses
-  empty parameters and a contract that reads them comes back all
-  inconclusive with exit 0.
+  empty parameters, and a contract whose parameters do not decode from empty
+  bytes comes back all inconclusive with exit 0.
 - Smaller corrections: the reason delta idempotence is a diagnostic, path and
   transition path agreement as checked, absorption follows from strict
-  associativity, the fdev version that has the heal check, `--transition`
-  argument order, greedy admission and associativity, related-contract
-  citations without line numbers.
-- `contract-patterns.md` matches rule 6, drops an unsupported claim about a
-  survey of live contracts, cites freenet-core#5153 as commutativity
-  failures, and its test templates test `merge(a, a) == a` and say when
-  strict associativity applies.
+  associativity, the freenet and fdev versions that have the heal check,
+  `--transition` argument order, greedy admission and associativity, and
+  related-contract citations by function name instead of line number.
+- `contract-patterns.md` matches rule 6 and says client-built UPDATE deltas
+  must carry their dependencies, drops an unsupported claim about a survey of
+  live contracts, cites freenet-core#5153 as commutativity failures, stops
+  suggesting `HashMap` for ordered collections, and its test templates test
+  `merge(a, a) == a` and say when strict associativity applies.
 - `state-authorization-patterns.md`: the signed-timestamp example ignores a
-  state that is not newer instead of returning `Err`, and a replayed older
-  version or a banned member's record is dropped rather than "rejected".
+  state that is not newer instead of returning `Err` and breaks ties on the
+  whole state's bytes; a replayed older version or a banned member's record
+  is dropped rather than "rejected".
 
 ## 1.39.4 (2026-10-21)
 

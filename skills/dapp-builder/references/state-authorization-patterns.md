@@ -277,9 +277,10 @@ Put the timestamp **inside the state, in the client-signed payload**, and have t
 // update sees the same value and reaches the same state. A state that is not
 // newer is ignored rather than refused: returning Err here would make
 // merge(A, A) and merge(newer, older) fail. Equal timestamps are broken by the
-// signature bytes so the result does not depend on arrival order.
-let incoming_wins = (new_beacon.timestamp_ms, new_beacon.signature.to_bytes())
-    > (current.timestamp_ms, current.signature.to_bytes());
+// whole state's bytes, so the result does not depend on arrival order even if
+// some field is not covered by the signature.
+let incoming_wins = (new_beacon.timestamp_ms, incoming_state.as_ref())
+    > (current.timestamp_ms, current_state.as_ref());
 let next = if incoming_wins { incoming_state } else { current_state };
 Ok(UpdateModification::valid(next))
 ```
@@ -326,7 +327,7 @@ fdev verify-merge --wasm your_contract.wasm --params params.bin \
   --state s1.bin --state s2.bin
 ```
 
-Pass the contract's parameters with `--params`: without it fdev uses empty parameters, a contract that reads its parameters rejects or fails on every state, every case comes back inconclusive, and the command still exits 0.
+Pass the contract's parameters with `--params`: without it fdev uses empty parameters, a contract whose parameters do not decode from empty bytes, or fail its checks, rejects or fails on every state, every case comes back inconclusive, and the command still exits 0.
 
 It reports a `host_clock_import` **code diagnostic** when the module imports the clock. That is a diagnostic about the code, not a law the contract broke: it does not fail the command, and it is never grounds for removing a contract from the network. The node's warning and this diagnostic come from the same detector, so the developer-facing answer and the node-facing answer cannot disagree.
 
