@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.5 (2026-10-21)
+
+**`dapp-builder` rule 6 allows dependencies toward the authority.** A record
+may be verified against the records it depends on (a message against its
+author's member record), not only its own bytes and the parameters, provided
+each dependency is bound to fixed data and an absent dependency drops the
+dependent record instead of rejecting the state or failing the merge.
+
 ## 1.39.4 (2026-10-21)
 
 **`dapp-builder` states the validity rule the network enforces.** In

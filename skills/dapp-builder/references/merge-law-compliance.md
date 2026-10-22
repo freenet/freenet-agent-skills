@@ -58,12 +58,17 @@ needs the heal-guarded form of associativity.
    only moves forward and every peer applies the same one. The owner must
    never sign two different checkpoints with the same cutoff.
 6. **Make every stored record's signature and authorization verifiable from
-   its own bytes plus the parameters.** Why: a check that reads other records
-   changes its answer as those come and go, and a stored record that is never
-   re-verified lets a forgery persist. How: carry any authorization proof in
-   the record, root it in the contract parameters, and verify stored records
-   by the same rule as arriving ones. Whether a valid record is *kept* may
-   still depend on the records it depends on (rule 2).
+   its own bytes, the parameters, and the records it depends on.** Why: a
+   check whose answer can change while its inputs stay present gives
+   different answers on different peers, and a stored record that is never
+   re-verified lets a forgery persist. How: a record may depend on records
+   closer to the authority (rule 2), for example a message on its author's
+   member record, which depends on its inviter's, up to the owner key in the
+   parameters. Bind each dependency to fixed data, such as an id derived from
+   the key that signs, so the check gives the same answer whenever the
+   dependency is present. When a dependency is absent, drop the dependent
+   record; never reject the state or fail the merge because of it. Verify
+   stored records by the same rule as arriving ones.
 7. **Accept only states your merge produces.** Why: a valid state that
    `merge(S, S)` rewrites is reported under state idempotence. How: have
    `validate_state` reject any state that the merge's cleanup would change.
