@@ -474,7 +474,7 @@ choose it with the developer rather than defaulting to one:
 
 **Removing it.** Where the moderator's key can write to the contract holding the
 content, it tombstones the item: keep the id (a content hash, so the same bytes
-cannot come back under a new id), drop the bytes, and reject the item on any
+cannot come back under a new id), drop the bytes, and drop the item on any
 later merge. Keep these tombstones out of any list you bound by evicting old
 entries, because an evicted tombstone lets the item return from a peer holding
 older state (`state-authorization-patterns.md` → "Tombstones"). Where the

@@ -24,9 +24,13 @@ needs the heal-guarded form of associativity.
    state is a real convergence failure, because the same state can be put on
    the network and honest peers then disagree. Today the verifier runs in
    `fdev verify-merge` and on peers whose operator enables conformance
-   capture, and it removes nothing. Separately, a node already re-applies a
-   contract's own state to itself, and if the result never stops changing it
-   flags the contract and stops broadcasting its changes. The planned
+   capture, and it removes nothing. Separately, every node already runs two
+   checks with live consequences: on about one in 32 whole-state merges it
+   re-applies the same incoming state to the result (absorption, below), and
+   when an incoming state equals the stored one it re-applies it until the
+   state stops changing. If either check fails, the node flags the contract,
+   and while the flag lasts (it expires, and is persisted across restarts)
+   the node stops committing and sending that contract's state. The planned
    enforcement (freenet-core#5320) removes a contract on the peer that
    reproduces a violation (that peer stops hosting it), and that peer
    remembers its id so ordinary traffic does not bring it back. "Our client
@@ -67,8 +71,8 @@ needs the heal-guarded form of associativity.
    rather than from whether the issuer's member record is held: unlike the
    author of a message, a ban's issuer can itself be removed by another ban,
    and if that removal changed which bans count, the cap's answer would change
-   with it (in a small model this gave invalid merge results and absorption
-   failures; carrying the proof with the ban made every case heal).
+   with it (in a small model this gave absorption failures and cycles;
+   carrying the proof with the ban made every case heal).
    Separately, to stop one author crowding out the others, cap per author so
    each author's records compete only with each other. A creation timestamp is
    the author's claim, so an author can future-date records to hold top slots;
@@ -198,8 +202,10 @@ exhaustive model using the verifier's heal rule, not a deployed contract.
 - **A capped ban list is not a lasting removal.** A cap keeps at most N bans,
   so admitting one more evicts a held ban, and the evicted ban's target can
   return from any peer that still holds the target's record. If a removal must
-  last, keep it as a tombstone that no cap evicts (and bound its size another
-  way; see `state-authorization-patterns.md` → "Tombstones"), or accept that a
+  last, it needs a record that no cap evicts, and then the state's size is not
+  bounded by that cap; this file does not give a lawful way to bound it. The
+  bounded tombstone list in `state-authorization-patterns.md` → "Tombstones"
+  evicts its oldest entries, so it has the same limit. Otherwise accept that a
   banned member can return after their ban is evicted.
 - **Whether removing an inviter removes the members they invited.** Under rule
   6 a member record depends on its inviter's record, so pruning or banning an
@@ -211,13 +217,17 @@ exhaustive model using the verifier's heal rule, not a deployed contract.
   (rule 3) and messages: cap the members, drop messages whose author is no
   longer a member, then cap the messages over the ones left. In the model this
   order gave no absorption failures and every associativity failure healed,
-  with and without uncapped owner bans. Capping the messages first, over every
+  with and without uncapped owner bans. It is not strictly associative even
+  without bans, because evicting a member frees message slots, so a fuzzer
+  must check the heal-guarded form. Capping the messages first, over every
   held message, and then dropping orphans gave cycles and absorption failures.
 - **Which members a member cap keeps.** Keeping the earliest members refuses
   new members once the cap is reached; keeping the newest lets new members
   evict existing ones; ranking by `last_active` merged by max evicts the least
   recently active member, and a member who future-dates `last_active` keeps a
-  slot. In the model, ranking by a fixed creation order and ranking by
+  slot, which is the cross-party ranking `state-authorization-patterns.md` →
+  "A Value One Party Supplies…" warns against: lawful, but open to that abuse.
+  In the model, ranking by a fixed creation order and ranking by
   `last_active` both healed every associativity failure. Whether to cap
   members per inviter, and how to bound the number of inviters, was not
   modelled.
@@ -261,9 +271,9 @@ delivery is at-least-once.
 
 **Absorption**, `merge(merge(A, B), B) == merge(A, B)`, follows from strict
 associativity and idempotence, and is the one most cap and cleanup designs
-break. The network checks it
-only inside the associativity heal step, so test it directly in your own
-fuzzer.
+break. The verifier checks it inside the associativity heal step, and every
+node already samples it on live whole-state merges and stops propagating a
+contract that fails it (rule 1). Test it directly in your own fuzzer.
 
 **Heal-guarded associativity** (freenet-core#5924, in freenet-core v0.2.147
 and later; fdev 0.3.309 requires that release, and an fdev built against an

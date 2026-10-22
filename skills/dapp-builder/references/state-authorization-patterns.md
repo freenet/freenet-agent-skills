@@ -113,7 +113,7 @@ For "forgotten but must not return" state. River bans persist as tombstones: whi
 pub struct RecipientState {
     pub version: u64,
     /// Truncated fast_hash of purged message signatures.
-    /// AppendMessages whose hash matches an entry here are rejected.
+    /// AppendMessages whose hash matches an entry here are dropped.
     pub purged: Vec<u32>,
 }
 ```
@@ -291,7 +291,7 @@ Ok(UpdateModification::valid(next))
 
 The two shapes that show up in practice:
 
-- **Anti-grief on a per-author log** (the common case): cap the log by *count*, or key it on a monotonic counter. A client-supplied timestamp must not be an eviction key.
+- **Anti-grief on a per-author log** (the common case): cap the log by *count*, or key it on a monotonic counter. A client-supplied timestamp must not decide whose records are evicted; within one author's own records it may, because an author who future-dates only displaces their own entries.
 - **Capability expiry** (rare, and the genuinely hard one): there is no clean in-contract substitute, because the party asserting the time is the party being checked. The available shapes are a sequence number plus a revocation record, or enforcing expiry outside the contract.
 
 **The sharp edge in the usual replacement.** The obvious substitute for a retention window is to derive it from the state's own newest timestamp — a logical clock. That has a real failure mode: one future-dated entry sets the reference permanently, degrading every peer's view from then on with nothing to heal it, where a wall-clock rule would have recovered on its own once real time caught up. If you take this route, bound how far the reference may advance in one update, or use a count cap instead. The migration off the clock is not free; budget for it.
@@ -376,7 +376,7 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
-- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and and the limit is not yours to enforce anyway — the **host** rejects the request outright when a contract asks for more than ten, so the operation fails rather than your `validate_state` returning `Invalid`. Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
+- **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and the limit is not yours to enforce anyway — the **host** rejects the request outright when a contract asks for more than ten, so the operation fails rather than your `validate_state` returning `Invalid`. Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
 
 ### Requesting Related State From `update_state`
