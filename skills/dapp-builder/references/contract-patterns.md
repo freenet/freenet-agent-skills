@@ -196,21 +196,30 @@ Four details that ride along with the same loop:
   answer. A filter that reads only the entry is trivially safe; one that reads
   how full the state has got is not. The one that catches people out is
   authorization, because it usually reads state: "is this author a member?"
-  answers differently depending on whether *add member M* has been applied yet —
+  answers differently depending on whether *add member M* has been applied yet,
   and not only within one delta, since the two facts can arrive in separate
-  deltas in either order. There is no ordering discipline that fixes that. Two
-  shapes do converge: have each entry **carry its own authorization proof** (a
-  signed invite chain rooted in the contract's parameters), which turns the
-  predicate back into one that reads only the entry; or **keep the entry and
-  authorize at read time**, so the merge is a plain union and the question "is
-  this author a member?" is answered by a view over the merged state rather than
-  by whether the loop had got to *add M* yet.
+  deltas in either order. Three shapes converge:
 
-  Making membership add-only is worth doing but does **not** by itself fix this,
-  and it is easy to believe it does. It makes *acceptance* stable — once a
-  message is in, it stays in — so a peer that dropped it can pick it up again
-  through anti-entropy. The merge is still order-dependent in the meantime, and
-  `fdev verify-merge` will say so.
+  - **Depend on the record closer to the authority, inside the one canonical
+    cleanup.** Let the message depend on its author's member record, drop it
+    when that record is absent, and decide that in the cleanup that runs over
+    the whole merged state, so a whole-state merge is a function of the union of
+    the two states. A network delta must then carry the records its entries
+    depend on, or a peer that applies it before the member record drops the
+    message. See `merge-law-compliance.md`, rule 6 and "A trimmed network delta
+    must make progress every round".
+  - **Carry the authorization proof in the entry** (a signed invite chain rooted
+    in the contract's parameters), which turns the predicate back into one that
+    reads only the entry.
+  - **Keep the entry and authorize at read time**, so the merge is a plain union
+    and the question "is this author a member?" is answered by a view over the
+    merged state rather than by whether the loop had got to *add M* yet.
+
+  Making membership add-only is worth doing but does **not** by itself fix this.
+  It makes *acceptance* stable (once a message is in, it stays in), so a peer
+  that dropped it can pick it up again through anti-entropy. A delta that drops
+  the message because its author's record has not arrived yet still gives a
+  different result in one order than in the other.
 - **Dedup-as-you-go is the same shape with a happier ending.** Its answers *are*
   order-dependent, yet the result is not — **provided the id covers every term of
   the record** (see "Record Identity"), because two entries sharing an id are
@@ -338,20 +347,20 @@ already have it will end up suppressed rather than merely slow.
 
 ## Merge Law Requirements
 
-Contract state must form a **join-semilattice** under the merge operation — in
-practice, a commutative monoid that is also **idempotent**. This means:
+Aim for contract state that forms a **join-semilattice** under the merge
+operation: a commutative monoid that is also **idempotent**. This means:
 
 1. **Associativity:** `merge(merge(A, B), C) == merge(A, merge(B, C))`
 2. **Commutativity:** `merge(A, B) == merge(B, A)`
 3. **Idempotence:** `merge(A, A) == A`
 4. **Identity:** There exists an empty/initial state `I` where `merge(A, I) == A`
+   (a design convenience; the network does not check it)
 
 This ensures that regardless of the order peers receive and apply updates, they all converge to the same final state.
 
 A contract whose cap or eviction can free a slot (through a removal or a raised cap) may not be strictly associative; the network accepts that only when the two groupings converge (freenet-core#5924). Test absorption, `merge(merge(A, B), B) == merge(A, B)`, directly as well: the network checks it only inside that convergence step. See `merge-law-compliance.md` for the exact rules and for how caps, removals, work bounds and summaries break them.
 
-**Idempotence is the one most often missed, and the one the network gives you no
-way to avoid.** Delivery is at-least-once: the same state or delta legitimately
+**Idempotence is the one the network gives you no way to avoid.** Delivery is at-least-once: the same state or delta legitimately
 arrives more than once, after a retry, a re-subscribe, or anti-entropy healing a
 divergence. A merge that changes the state when re-applied therefore never
 settles — each redelivery mutates it again, which produces an endless stream of
@@ -360,11 +369,10 @@ the network is.
 
 This is not hypothetical. Freenet telemetry attributed the largest single source
 of network traffic to contracts whose merges do not converge (freenet-core
-#5153), and a survey of live contracts found one whose `merge(A, A)` never reached
-a fixpoint at all (freenet-core #5320). Note that identity (`merge(A, I) == A`) does
-*not* imply idempotence (`merge(A, A) == A`): a merge that appends rather than
-unions satisfies the first and fails the second, which is exactly the shape of the
-defects found in the wild.
+#5153); the deployed contracts it examined had last-write-wins and mutually
+rejecting merges, which break commutativity. Note that identity
+(`merge(A, I) == A`) does *not* imply idempotence (`merge(A, A) == A`): a merge
+that appends rather than unions satisfies the first and fails the second.
 
 ### Testing Commutativity
 
@@ -393,7 +401,10 @@ mod tests {
             prop_assert_eq!(ab, ba);
         }
 
-        /// Grouping doesn't matter: (A merge B) merge C == A merge (B merge C)
+        /// Grouping doesn't matter: (A merge B) merge C == A merge (B merge C).
+        /// Strict equality only holds for a merge with no cap that a removal
+        /// or a raised cap can free; for one that has such a cap, check the
+        /// heal-guarded form in `merge-law-compliance.md` instead.
         #[test]
         fn merge_is_associative(a in arb_state(), b in arb_state(), c in arb_state()) {
             let ab_c = a.clone().merge(&b).merge(&c);
@@ -401,13 +412,19 @@ mod tests {
             prop_assert_eq!(ab_c, a_bc);
         }
 
-        /// Re-applying the same state changes nothing.
+        /// Merging a state with itself changes nothing.
+        #[test]
+        fn merge_is_idempotent(a in arb_state()) {
+            prop_assert_eq!(a.clone().merge(&a), a);
+        }
+
+        /// Re-delivering the same state changes nothing (absorption).
         ///
         /// Delivery is at-least-once, so this WILL happen in production. Merge
         /// twice as well as once: a merge that only settles after one application
         /// passes a naive test and still fails here.
         #[test]
-        fn merge_is_idempotent(a in arb_state(), b in arb_state()) {
+        fn merge_absorbs_redelivery(a in arb_state(), b in arb_state()) {
             let once = a.clone().merge(&b);
             let twice = once.clone().merge(&b);
             prop_assert_eq!(once, twice);
@@ -491,8 +508,13 @@ mod tests {
 > any of the claims in this section about your own contract:
 >
 > ```bash
-> fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin
+> fdev verify-merge --wasm your_contract.wasm --params params.bin \
+>   --state s1.bin --state s2.bin
 > ```
+>
+> Pass the contract's parameters with `--params`: without it fdev uses empty
+> parameters, a contract that reads its parameters rejects or fails on every state, every
+> case comes back inconclusive, and the command still exits 0.
 >
 > Give it a corpus (`--state` samples, `--transition BASE RESULT` pairs, or a
 > `--bundle`) and it exercises the laws against real states. It also emits

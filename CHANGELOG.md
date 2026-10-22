@@ -4,11 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## 1.39.5 (2026-10-21)
 
-**`dapp-builder` rule 6 allows dependencies toward the authority.** A record
-may be verified against the records it depends on (a message against its
-author's member record), not only its own bytes and the parameters, provided
-each dependency is bound to fixed data and an absent dependency drops the
-dependent record instead of rejecting the state or failing the merge.
+**`dapp-builder` merge-law guidance corrected after an accuracy audit.**
+
+- Rule 6 allows dependencies toward the authority: a record may be verified
+  against the records it depends on (a message against its author's member
+  record). It now says which record counts when one id has several, reads
+  only a dependency's fixed key, bounds the walk to the authority, drops an
+  orphan inside the canonical cleanup, never fails the merge for it, and has
+  `validate_state` reject a state that still holds one, which removes a
+  contradiction with rule 7.
+- Rules 2 to 4 keep their advice with new reasons, each from a measured case:
+  a member kept only because other records need it, under a member cap, can
+  leave a set of states with two different merge results; and a cap whose
+  order or admission reads which records are present ranks differently once
+  cleanup removes them. A ban cap ranks and admits by the ban record alone.
+  Two small worked examples show both; the inactivity example now says when
+  its bad version fails.
+- Rule 5 (owner-signed pruning checkpoint) is marked as an unbuilt sketch and
+  breaks equal cutoffs by signature bytes instead of relying on the owner.
+- Rule 1 says what runs today (`fdev verify-merge` and opt-in shadow peers,
+  which remove nothing) and that a PUT runs only validation only on a peer
+  that does not yet hold the contract.
+- Every `fdev verify-merge` example passes `--params`: without it fdev uses
+  empty parameters and a contract that reads them comes back all
+  inconclusive with exit 0.
+- Smaller corrections: the reason delta idempotence is a diagnostic, path and
+  transition path agreement as checked, absorption follows from strict
+  associativity, the fdev version that has the heal check, `--transition`
+  argument order, greedy admission and associativity, related-contract
+  citations without line numbers.
+- `contract-patterns.md` matches rule 6, drops an unsupported claim about a
+  survey of live contracts, cites freenet-core#5153 as commutativity
+  failures, and its test templates test `merge(a, a) == a` and say when
+  strict associativity applies.
+- `state-authorization-patterns.md`: the signed-timestamp example ignores a
+  state that is not newer instead of returning `Err`, and a replayed older
+  version or a banned member's record is dropped rather than "rejected".
 
 ## 1.39.4 (2026-10-21)
 

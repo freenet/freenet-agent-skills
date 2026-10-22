@@ -86,8 +86,11 @@ Freenet solves "Eventual Consistency" using a specific mathematical requirement:
 **Check your contract against all of this rather than trusting it:**
 
 ```bash
-fdev verify-merge --wasm your_contract.wasm --state s1.bin --state s2.bin
+fdev verify-merge --wasm your_contract.wasm --params params.bin \
+  --state s1.bin --state s2.bin
 ```
+
+Pass the contract's parameters with `--params`: without it fdev uses empty parameters, a contract that reads its parameters rejects or fails on every state, every case comes back inconclusive, and the command still exits 0.
 
 It exercises the merge laws against a real corpus, and separately reports code diagnostics — `host_clock_import` being the one that exists today. A code diagnostic never fails the command: it describes the code, not a law the contract broke.
 
@@ -198,18 +201,19 @@ Practical limits:
   confirm with `merge-base --is-ancestor <merge-sha> <tag>`.
 - **Judgeable is not judged.** The verifier never *fetches* related state; it replays
   only what the bundle already carries, mapping any `RequestRelated` straight to
-  `Inconclusive::RelatedRequired` (`conformance/verifier.rs:997-1005`). Production is
+  `Inconclusive::RelatedRequired` (`conformance/verifier.rs`, `require_valid`). Production is
   stricter — the executor fetches and re-validates once at depth=1
-  (`executor_impl.rs:2461`) — and that path is never exercised by the verifier.
+  (`executor_impl.rs`, `fetch_related_for_validation`) — and that path is never exercised by the verifier.
   Capture also keeps only the most-recently-observed state per related contract, so a
   defect needing a specific or older one yields no verdict at all: measured 1,567 of
   5,856 replayed cases inconclusive for want of related state, five contracts with no
-  verdict on *any* case (`conformance/capture.rs:108-125`). That file states the intent
+  verdict on *any* case, before the related-state budget was raised
+  (`conformance/capture.rs`, `related_budgets`). That file states the intent
   plainly — "depending on related state must not be a way to escape conformance
   checking" — and coverage starvation is how it still can.
 - **`fdev verify-merge --state <files>` is blind to related contracts.** The
   non-`--bundle` path leaves `related` unconditionally empty
-  (`fdev/src/conformance.rs:912-915`), so a contract of this shape comes back 100%
+  (`fdev/src/conformance.rs`, `load_inputs`), so a contract of this shape comes back 100%
   inconclusive on every property — which, skimmed for violations, reads as a clean
   bill. Check on the `--bundle` path, confirm the bundle reports `related_entries > 0`,
   count the explicit verdicts, and treat **inconclusive as not a pass**. Exit code 4
@@ -276,7 +280,7 @@ Start by listing each *kind* of shared state your app needs — each kind become
 - How is each *record inside* this state identified, and does that id cover every term a reader will later rely on it to bind? A writer-supplied nonce, or an id that hashes only some of a record's terms, lets one author sign two different records under one id — and under a first-writer-wins merge that is **permanent divergence that cannot heal**, because both peers' summaries already name the id. Derive ids from content, compute them in the contract, and have exactly one function decide "are these the same thing". Get this right before launch: changing a derivation afterwards makes every published record unverifiable, which is a breaking change to users' data. See `contract-patterns.md` → "Record Identity".
 - Can strangers write to this contract? If so, what stops one attacker minting ten thousand keys and flooding it? There is no server to host a CAPTCHA, so the mechanisms available are proof-of-work and ghost keys (a blind-signed certificate proving an anonymous donation — a cost the attacker cannot beat with better hardware, and not burned as waste heat). **The recommended shape is both**: proof-of-work as the always-sufficient default, with a ghost key offered as a way to *skip the wait*, surfaced while the grind is running and the user is blocked anyway. That lets you set difficulty by what deters an attacker rather than by what your slowest device tolerates, while never pricing anyone out. See `identity-and-addressing.md` → "Cryptographic CAPTCHA". **Present the choice to the developer rather than picking silently**: ghost keys cost their users money, that money funds Freenet, and the mint is centralized (verification is not). Those are product and architecture decisions, not technical details to settle on the developer's behalf.
 - If this contract holds content other users will see (posts, files, listings, links), **who can remove an item, and does the removal stick?** Every system on Freenet needs a way to identify and remove illegal material (most critically images and video), or it risks being delisted from Atlas and having its links banned from the Freenet Official River room. If removal happens in the contract, design it in from v1: a key (owner or moderator) whose removals the contract accepts, recorded as a **tombstone** that keeps the item's id and drops its bytes, because if the item is simply deleted, the next merge with a peer holding older state brings it back. Adding this after launch means a contract upgrade. See Phase 3 → "Have a way to remove illegal material (both options)" for the whole mechanism, and `state-authorization-patterns.md` → "Tombstones".
-- Is this state lawful by construction? Records depend only on records closer to the authority, removal cascades down only, liveness is read from a record's own fields, caps rank by an order fixed at creation, any wider pruning is a signed checkpoint whose cut only moves forward, and `validate_state` accepts only states the merge produces. See `merge-law-compliance.md` → "Design state so the merge is lawful by construction".
+- Is this state lawful by construction? Records depend only on records closer to the authority, removal cascades down only, no record is kept only because other records need it, liveness is read from a record's own fields, caps (including a cap on bans) rank and admit each record by its own fields, any wider pruning is an authority's signed act, and `validate_state` accepts only states the merge produces. See `merge-law-compliance.md` → "Design state so the merge is lawful by construction".
 - How large can this contract's state realistically grow? **Keep each contract instance's state small — target well under 4 MB, not just under the host's 50 MiB hard cap.** A GET transfers the *entire* state before the UI can render anything, so state size is felt directly as load latency, and `validate_state`/`update_state`/`summarize_state` WASM execution cost scales with it too. If a kind of data can grow without bound (message history, uploaded files, a membership list that only grows), don't let one contract instance absorb all of it — shard by the natural unit of write concurrency instead (one contract per room, per user, per time-window, per shard-key, etc.), so each instance stays small regardless of how large the *dataset* gets in aggregate. See `state-authorization-patterns.md` → "State Size Budget". **Then decide how readers learn which shards exist.** A GET for a never-PUT key searches the network before answering `NotFound` (seconds, not milliseconds), so don't discover shards by GETting derived keys. See `ui-patterns.md` → "Reading Contracts Efficiently".
 
 **Implementation steps:**
