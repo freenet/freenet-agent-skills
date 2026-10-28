@@ -434,3 +434,23 @@ Write these before trusting the merge, and run them on every change to it:
 - **Mutation-check the fuzzer.** Move a cap ahead of cleanup, delete a
   dedup, or drop the digest from a summary, and confirm the fuzzer fails. A
   fuzzer that stays green under those changes does not cover them.
+- **Measure whether the generated states reach every branch.** A passing
+  fuzzer does not show that its crafted states ever hit the cap path, the
+  overflow rule or a given filter arm. Run the fuzzer and unit tests under
+  branch coverage (`cargo llvm-cov --branch`, which currently needs a nightly
+  toolchain; a host test build, so committed wasm bytes are unaffected),
+  scoped to `merge`/`update_state`, `validate_state`, `summarize_state`,
+  `get_state_delta` and the filters, caps and pruning they call. Fail CI on
+  an unvisited branch. Allow an exception only with a stated reason in a
+  committed allowlist, and fail the job when an allowlisted line no longer
+  exists so exemptions cannot outlive the code. Coverage shows a branch was
+  reached, not that its result was checked; pair it with mutation.
+- **Add an automated mutation tool, but triage what survives.** Run
+  `cargo-mutants` scoped to the same functions and review every surviving
+  mutant. Before concluding the tests miss it, confirm the mutant actually
+  applied and compiled (its diff and build log): a reported survivor is often a
+  mutation that never took effect, and unviable or timed-out mutants are not
+  kills. Automated tools mostly delete code and flip operators, which is the
+  weakest kind of mutation (see `contract-patterns.md` → "Tests That Would
+  Have Caught It"), so keep the hand-written wrong-but-plausible mutations as
+  permanent tests alongside them.

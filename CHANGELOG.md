@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.7 (2026-10-28)
+
+**`dapp-builder`: check that merge-law tests reach every branch, and add automated mutation testing.**
+
+- `references/merge-law-compliance.md` → "Testing" gains two practices next to
+  "Mutation-check the fuzzer": run the fuzzer and unit tests under branch
+  coverage (`cargo llvm-cov --branch`) scoped to the merge, validate, summary,
+  delta, filter, cap and pruning code, failing CI on an unvisited branch with a
+  self-expiring allowlist; and run `cargo-mutants` on the same functions,
+  triaging every survivor after confirming the mutant actually applied and
+  compiled.
+- `references/contract-patterns.md` → "Tests That Would Have Caught It" notes
+  that automated tools mostly produce deletion mutations, so they supplement the
+  hand-written wrong-but-plausible mutants rather than replace them.
+
 ## 1.39.6 (2026-10-26)
 
 **`dapp-builder`: build signature and hash crates for speed in signature-heavy contracts.**

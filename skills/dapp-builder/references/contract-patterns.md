@@ -1254,6 +1254,10 @@ already passed.
   it with the check a careful person would have written by mistake — comparing
   the wrong field, taking the first match instead of the only match, ordering by
   the wrong key — usually does not, and that is the version that ships.
+  Automated mutation tools generate mostly the deletion kind, so they supplement
+  these hand-written mutants rather than replace them; for merge code, see
+  `merge-law-compliance.md` → "Testing", which also covers branch coverage of
+  the fuzzer.
 - **Test a guard against a *simulated future change*, not against the bug you
   already fixed.** The two are different inputs, and only the first exercises
   what the guard is for. `upgrade-and-migration.md` → "Test the upgrade path, not just the new version"
