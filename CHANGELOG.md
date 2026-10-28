@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.8 (2026-10-28)
+
+**`dapp-builder`: re-check the delegate capability claims against freenet-core v0.2.151.**
+
+- `references/delegate-patterns.md` "Delegate Capabilities": a delegate
+  subscription now counts as local hosting demand like a WebSocket client's
+  (freenet-core#5855, v0.2.145). The file said `contract_in_use` had no delegate
+  term. GET and SUBSCRIBE rows and prose now carry the release that made them
+  reach the network (v0.2.135; restart persistence v0.2.137), the 4-operation
+  cap names its source (`delegate_park.rs:242`) and the operations that share
+  it, and every `contract.rs` / `node.rs` / `p2p_impl.rs` line cite is
+  refreshed.
+- "Host Functions": the removed `put` / `update` / `subscribe_contract` imports
+  are dated to core v0.2.136 and stdlib 0.8.5 is named as affected; the message
+  path works on every stdlib version.
+- "Resource Limits": app registrations are bounded by count only. The 30-minute
+  `REGISTRATION_TTL` expiry was removed in v0.2.147 (freenet-core#5920).
+- `local-dev`: "Verified against" updated to the same freenet-core commit.
+
 ## 1.39.7 (2026-10-28)
 
 **`dapp-builder`: check that merge-law tests reach every branch, and add automated mutation testing.**

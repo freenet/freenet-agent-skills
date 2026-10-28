@@ -539,7 +539,7 @@ The practical upshot for local development is unchanged and now has no
 exception worth chasing: a delegate that writes or subscribes needs `freenet
 network`.
 
-Verified against freenet-core v0.2.142 on 2026-10-07. The
+Verified against freenet-core `main` at `b11d06c64` (one commit past v0.2.151) on 2026-10-28. The
 `dapp-builder` skill's `references/delegate-patterns.md` has the full picture,
 including what a delegate's contract access does and does not reach on a real
 network node.
