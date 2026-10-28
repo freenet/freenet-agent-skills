@@ -80,13 +80,15 @@ freenet-stdlib 0.12.1:
   network GET, which is what freenet-core#5615 added in v0.2.135; a node older
   than that answers from local state only. The GET is not awaited inline: the
   delegate run parks and the reply goes back to the delegate when it resumes.
-  Three conditions gate the fallthrough: the executor must have an `op_manager`
-  handle (the mock executors used in tests do not, and keep the old local-only
-  answer), the contract must not be on the node's ban list, and the run must
-  have fewer than `MAX_NETWORK_CONTRACT_OPS_PER_PARK` (4,
-  `crates/core/src/contract/delegate_park.rs:242`) network operations in flight;
-  past that the GET is refused. A parked SUBSCRIBE and UPDATE's background fetch
-  draw on the same 4. The response carries no error channel, so
+  Four conditions gate the fallthrough: the run must be able to park, the
+  executor must have an `op_manager` handle (the mock executors used in tests do
+  not, and keep the old local-only answer), the contract must not be on the
+  node's ban list, and the run must have fewer than
+  `MAX_NETWORK_CONTRACT_OPS_PER_PARK` (4,
+  `crates/core/src/contract/delegate_park.rs:242`) network operations in flight
+  (`contract.rs:1966-1969`); past that the GET is refused. A parked SUBSCRIBE
+  and UPDATE's background fetch draw on the same 4, and the background fetches
+  stay counted across the whole round trip. The response carries no error channel, so
   a refusal, a network `NotFound` and an unreachable network are all the same
   empty answer — read it as "could not get it", never as "it does not exist".
   **`DelegateCtx::get_contract_state` is a different question and still reads
@@ -127,7 +129,7 @@ freenet-stdlib 0.12.1:
   gates repeats behind an `already_subscribed` check rather than letting a
   delegate that re-subscribes in a loop accumulate demand that is never
   released. freenet-core#5855 (first released in v0.2.145) added the hosting
-  half through `record_delegate_demand` (`contract.rs`): the pair counts as
+  half through `record_delegate_demand` (`contract.rs:964`): the pair counts as
   local demand exactly like a WebSocket client's, so `contract_in_use`
   (`crates/core/src/ring/hosting.rs`) and the eviction ranking see it. It is not
   time-bounded: it ends on `UnregisterDelegate`, contract removal, notification
@@ -482,7 +484,9 @@ it guards nothing today.
   (`crates/core/src/contract/executor.rs:118-127`), with a 10 MiB cap on the
   submitted WASM (`native_api.rs:1411`).
 - **App registrations** are bounded by count, not age: `MAX_APPS_PER_DELEGATE =
-  128` and `MAX_DELEGATES_PER_CLIENT = 256`
+  128` per delegate (off-host clients only up to 96, the other
+  `LOCAL_RESERVED_SLOTS` = 32 being kept for local apps) and
+  `MAX_DELEGATES_PER_CLIENT = 256`
   (`crates/core/src/contract/delegate_app_registry.rs:112-137`). The 30-minute
   expiry this file used to list was removed in v0.2.147 (freenet-core#5920): a
   slot is held for the connection's life, a registration whose channel has
@@ -509,7 +513,7 @@ What has no guard today, so do not design as though it did:
 - **The epoch trap only interrupts guest code.** Wasmtime's epoch checks sit at
   wasm loop backedges and function entries, so a blocking host call in flight is
   never cut off; the trap fires only once control returns to guest code
-  (`wasmtime_engine.rs:703-706`). A delegate parked inside a host function (a
+  (`wasmtime_engine.rs:702-705`). A delegate parked inside a host function (a
   redb read, a secret-store write) runs to completion whatever the deadline
   says. This grows with the host-function surface, so it is a reason to keep
   that surface small.

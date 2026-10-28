@@ -12,8 +12,7 @@ All notable changes to this project will be documented in this file.
   term. GET and SUBSCRIBE rows and prose now carry the release that made them
   reach the network (v0.2.135; restart persistence v0.2.137), the 4-operation
   cap names its source (`delegate_park.rs:242`) and the operations that share
-  it, and every `contract.rs` / `node.rs` / `p2p_impl.rs` line cite is
-  refreshed.
+  it, and every drifted file:line cite is refreshed.
 - "Host Functions": the removed `put` / `update` / `subscribe_contract` imports
   are dated to core v0.2.136 and stdlib 0.8.5 is named as affected; the message
   path works on every stdlib version.
