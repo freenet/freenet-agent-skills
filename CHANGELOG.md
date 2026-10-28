@@ -8,14 +8,15 @@ All notable changes to this project will be documented in this file.
 
 - `references/merge-law-compliance.md` → "Testing" gains two practices next to
   "Mutation-check the fuzzer": run the fuzzer and unit tests under branch
-  coverage (`cargo llvm-cov --branch`) scoped to the merge, validate, summary,
-  delta, filter, cap and pruning code, failing CI on an unvisited branch with a
-  self-expiring allowlist; and run `cargo-mutants` on the same functions,
-  triaging every survivor after confirming the mutant actually applied and
-  compiled.
+  coverage (`cargo llvm-cov --branch`) on the update, validate, summary,
+  delta, filter, cap and pruning code, failing CI on an unvisited branch unless
+  it is listed with a reason; and run `cargo-mutants` on the same functions,
+  reviewing every missed mutant (cfg-gated or uncalled code says nothing about
+  the assertions; unviable and timed-out are not kills).
 - `references/contract-patterns.md` → "Tests That Would Have Caught It" notes
-  that automated tools mostly produce deletion mutations, so they supplement the
-  hand-written wrong-but-plausible mutants rather than replace them.
+  that automated tools mostly replace function bodies and flip operators, so
+  they supplement the hand-written wrong-but-plausible mutants rather than
+  replace them.
 
 ## 1.39.6 (2026-10-26)
 

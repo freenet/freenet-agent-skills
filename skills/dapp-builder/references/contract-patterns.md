@@ -1254,7 +1254,8 @@ already passed.
   it with the check a careful person would have written by mistake — comparing
   the wrong field, taking the first match instead of the only match, ordering by
   the wrong key — usually does not, and that is the version that ships.
-  Automated mutation tools generate mostly the deletion kind, so they supplement
+  Automated mutation tools mostly replace whole function bodies and flip
+  operators, a crude kind of mutation, so they supplement
   these hand-written mutants rather than replace them; for merge code, see
   `merge-law-compliance.md` → "Testing", which also covers branch coverage of
   the fuzzer.
