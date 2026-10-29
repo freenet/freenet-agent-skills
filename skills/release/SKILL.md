@@ -100,15 +100,16 @@ The P2 soak peer runs with auto-update **enabled**. It is the only real-NAT obse
 
 Unit, simulation and CI tests miss regressions that only real subscription and UPDATE traffic over a NAT link surface. Examples are the #4345 GET-stream-assembly failures, connection-teardown bugs and log spam. All of the following are required:
 
-- **Lib tests at the release version, before the soak starts.** Release-marker tests (the `*_SHIPPED_IN` pattern in freenet-core `docs/RELEASING.md`) pass on `main` and fail only once `Cargo.toml` carries the release version, so CI on `main` cannot see them. Run them in a throwaway clone or worktree of the ship SHA, never the tree you build the soak binary from, because the bump makes it dirty:
+- **Lib tests at the release version, before the soak starts.** Release-marker tests (the `*_SHIPPED_IN` pattern in freenet-core `docs/RELEASING.md`) pass on `main` and fail only once `Cargo.toml` carries the release version, so CI on `main` cannot see them. Run them in a throwaway worktree of the ship SHA, never the tree you build the soak binary from, because the bump makes it dirty:
 
   ```bash
-  VER=X.Y.Z   # the release version
-  sed -i "s/^version = \".*\"/version = \"$VER\"/" crates/core/Cargo.toml
+  VER=X.Y.Z; SHIP=$(git -C "$R" rev-parse origin/main); T=<scratch dir>
+  git -C "$R" worktree add --detach "$T" "$SHIP" && cd "$T"
+  sed -i "s/^version = \".*\"/version = \"$VER\"/" crates/core/Cargo.toml   # a minor bump also needs fdev's `freenet` dependency bumped
   cargo test -p freenet --lib
   ```
 
-  A failure blocks the soak: fix it on `main` (for a marker test, record what the release ships, as RELEASING.md describes), then soak the new SHA. Why: 0.2.151's marker test only failed at tag time, after the soak, which cost a fix PR (freenet-core#6014), a re-soak and five hours.
+  Any failure blocks the soak: fix it on `main` (for a marker test, record what the release ships, as RELEASING.md describes) and re-run. `$SHIP` must be the SHA you soak; if `main` moves first, re-run this step on the new HEAD. Why: 0.2.151's marker test failed in the bump PR's merge queue, after the soak, which cost a fix PR (freenet-core#6014), a re-soak and five hours.
 
 - **Exact ship SHA.** Build the SHA the bump PR will sit on top of: the current `origin/main` HEAD. The release is tagged on the bump PR's merge commit, so the version bump should be the only thing separating the tag from what you soaked. If `main` moves before you trigger, the soak no longer covers what ships, so re-soak the new SHA. Step 3 checks this again the moment the bump PR merges.
 - **Merge freeze from soak start until the bump PR merges.** Nothing may merge to freenet-core `main` in that window, including PRs queued ahead of the bump PR in the merge queue. Any such merge moves `main` off the soaked SHA, so the release would ship code the soak never ran, and a soak-gate hook will refuse the cut. Ask the user to declare a merge freeze before you start the soak. Do not enqueue or auto-merge your own PRs in that window, and disable auto-merge on any that are pending (`gh pr merge <N> --repo freenet/freenet-core --disable-auto`). If anything merges in the window anyway, re-soak the new `origin/main` HEAD.

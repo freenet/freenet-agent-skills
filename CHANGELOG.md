@@ -7,12 +7,12 @@ All notable changes to this project will be documented in this file.
 **`release`: run the freenet-core lib tests at the bumped version before the soak.**
 
 - P2 now starts by bumping `crates/core/Cargo.toml` to the release version in a
-  throwaway tree and running `cargo test -p freenet --lib`. Release-marker tests
+  throwaway worktree of the ship SHA and running `cargo test -p freenet --lib`. Release-marker tests
   (the `*_SHIPPED_IN` pattern in freenet-core `docs/RELEASING.md`) pass on
   `main` and fail only at the release version, and the skill never ran tests
   there. 0.2.151 went out five hours late because its marker test
-  (freenet-core#6011) failed at tag time, after the soak, which took a fix PR
-  (freenet-core#6014) and a re-soak.
+  (added by freenet-core#6011) failed in the bump PR's merge queue, after the
+  soak, which took a fix PR (freenet-core#6014) and a re-soak.
 
 ## 1.39.8 (2026-10-28)
 
