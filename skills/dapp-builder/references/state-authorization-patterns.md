@@ -125,6 +125,52 @@ peers copy the recipient's list. If the merge unions `purged` instead, every
 evicted tombstone returns from any peer holding an older copy, and the list is
 unbounded in practice.
 
+### Removing Illegal Material
+
+Any system showing content other people published needs a way to identify and remove illegal
+material, or it risks delisting from Atlas and having its links banned from the Freenet Official
+River room, for most dApps the main ways new users find them. This matters most for images and
+video, where the worst material (child sexual abuse material above all) is found. An app letting
+strangers publish media needs this working before launch.
+
+**Identifying it.** Which approach fits depends on the service, so choose with the developer:
+
+- **Curated publishing:** the author or a small set of trusted keys are the check. Only fits a
+  curated site, not one open to strangers.
+- **Moderators who watch the content** and remove what breaks the rules. River rooms rely on
+  this: the owner, anyone above a member in the invite chain, or a deputy can ban that member.
+- **User reports:** a Report action sending the item's id and a reason to whoever moderates,
+  usually through a report-inbox contract. Suits open services. A report inbox nobody reads is
+  worse than none, because users believe they have told someone.
+
+**Removing it.** Where the moderator's key can write to the contract holding the content, it
+tombstones the item: keep the id (a content hash, so the same bytes cannot return under a new
+id), drop the bytes, and drop the item on any later merge. If the item is simply deleted, the
+next merge with a peer holding older state brings it back. Design this in from v1: adding it
+after launch means a contract upgrade.
+
+The two tombstone rules cover different cases. "Bound the tombstone list" under "Tombstones"
+applies to a single-writer, last-writer-wins envelope, where peers copy the writer's list and
+eviction cannot resurrect anything. Removal tombstones in a merge-unioned list are the other
+case: never bound them by evicting old entries, because an evicted tombstone lets the item
+return from a peer holding older state.
+
+Where the moderator cannot write there (content in user-owned contracts, an open index, or a
+separate asset contract), publish an author-signed denylist contract the UI reads, and filter
+before rendering.
+
+Be accurate with users: removal drops the item from current state and from every UI honouring
+it, but does not erase copies peers already hold. Say "removed", not "deleted from the network".
+
+**Consider gating reports with ghost keys.** Junk reports bury real ones, and mass false reports
+are a cheap way to take down legitimate content. A ghost-key signature on each report makes
+volume cost money that better hardware does not reduce, keeps the reporter anonymous, and lets
+the moderator weigh reports by donation amount and key age and ignore a key that has filed
+reports in bad faith. Verify it in `update_state`, so unsigned reports never enter state. This
+is a suggestion: reporting illegal material should not cost money, so offer slow proof-of-work
+as the free fallback (`sybil-resistance.md` → "Cryptographic CAPTCHA") and relay the caveats
+there.
+
 ### Cross-Context Binding
 
 Include the contract identity (or recipient/room) in bytes covered by every signature. Without this, a signed payload valid for inbox-A can be replayed against inbox-B if both share enough state structure.
@@ -332,6 +378,24 @@ Host fetches the requested contracts (locally first, then network) and re-invoke
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
 - **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and the limit is not yours to enforce anyway — the **host** rejects the request outright when a contract asks for more than ten, so the operation fails rather than your `validate_state` returning `Invalid`. Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
+- A related fetch that times out can wedge an UPDATE merge (freenet-core#4077).
+- Clients send `UpdateData::RelatedStateAndDelta`. Bare `RelatedState` and `RelatedDelta` are
+  rejected on `ContractRequest::Update`; they are reserved for the runtime, which surfaces
+  `RelatedState` to your WASM itself.
+- `#[composable]` has no inter-contract awareness, so cross-contract dependencies are
+  hand-rolled.
+
+### Checking a Contract That Reads Related State
+
+`fdev verify-merge --state` runs with no related state, so a contract that requests it comes
+back 100% inconclusive and exits 0, which reads as a clean bill when skimmed. Use `--bundle`
+on a capture holding related state, read any `bundle note:` line on stderr (capture records
+there when it refused related state), count the explicit verdicts, and treat inconclusive as
+not a pass. Exit code 4 means violations were found.
+
+The verifier never fetches related state; it replays what the bundle carries, and capture keeps
+only the most recently observed state per related contract. A defect that needs an older
+related state gets no verdict, and a green run does not exercise production's depth=1 fetch.
 
 ### Requesting Related State From `update_state`
 
