@@ -21,7 +21,7 @@ pub struct InboxMessage {
     pub timestamp: u64,
     pub ciphertext: Vec<u8>,
     pub signature: Signature,  // sender signs canonical bytes of the message
-    pub room_owner: MemberId,  // stable anchor, survives a re-key
+    pub room_owner: MemberId,  // names the room of the membership claim
 }
 ```
 
@@ -169,21 +169,26 @@ are a cheap way to take down legitimate content. A ghost-key signature on each r
 volume cost money that better hardware does not reduce, keeps the reporter anonymous, and lets
 the moderator weigh reports by donation amount and key age and ignore a key that has filed
 reports in bad faith. Keep the signature with the report and verify it in `validate_state`,
-because a PUT skips `update_state`, and filter in `update_state` so a bad report is skipped, not
-refused (`sybil-resistance.md` → "Integration sketch"). This is a suggestion: reporting illegal
+because a PUT to a peer not yet holding the contract runs validation only, and filter in
+`update_state` so a bad report is skipped, not refused (`sybil-resistance.md` → "Integration
+sketch"). This is a suggestion: reporting illegal
 material should not cost money, so offer slow proof-of-work as the free fallback
 (`sybil-resistance.md` → "Cryptographic CAPTCHA") and relay the caveats there.
 
 ### Cross-Context Binding
 
-Bind a stable anchor in the bytes covered by every signature: an owner key, a recipient key, or an app-chosen id in the parameters. Without this, a signed payload valid for inbox-A can be replayed against inbox-B if both share enough state structure.
+Bind an anchor in the bytes covered by every signature. Without one, a signed payload valid for inbox-A can be replayed against inbox-B if both share enough state structure.
 
-Never bind a `ContractInstanceId`. It moves on every re-key, so every record would fail verification under the successor. River binds `room_owner: MemberId`.
+The anchor must name this instance across re-keys, and the verifier takes it from parameters, never from the record. If the record also carries it as a field, the verifier compares that field against the parameters.
+
+- A signer's own key never counts: Ed25519 already binds it.
+- An owner key counts only if the parameters are that key alone. An app-chosen id in the parameters is the general form.
+- Never bind a `ContractInstanceId`. It moves on every re-key, so every record would fail verification under the successor.
 
 ```rust
 pub fn build_signed_payload_bytes(
     sender: MemberId,
-    recipient_vk: &VerifyingKey,  // <-- binds to this inbox
+    recipient_vk: &VerifyingKey,  // <-- anchor: from parameters, binds to this inbox
     room_owner: MemberId,         // <-- binds to membership claim
     timestamp: u64,
     ciphertext: &[u8],
@@ -277,7 +282,7 @@ records. Always `len_le_u32 || bytes`.
 The signed bytes should commit to:
 
 - **Sender identity** (cryptographically redundant with using sender's VK to verify, but explicit binding removes ambiguity and matches River's other signed structs).
-- **Recipient or inbox identity**, as a stable anchor and never a `ContractInstanceId` (prevents cross-instance replay).
+- **Instance anchor** from the parameters, never a `ContractInstanceId` (prevents cross-instance replay; see "Cross-Context Binding").
 - **Logical scope** (e.g., `room_owner`, which prevents membership-claim swap).
 - **Timestamp** (replay window for new admissions).
 - **Content** (the actual payload).
@@ -379,6 +384,8 @@ fn validate_state(
 ```
 
 Host fetches the requested contracts (locally first, then network) and re-invokes `validate_state` with `related` populated.
+
+The contract id in `find_missing_related` is one this WASM derives, from the entry's `room_owner` and the room contract's code hash built into it. That id moves when the room contract re-keys, and entries that name the old one stop resolving, so where that matters carry a signed attestation in the entry instead (see "Never Gate an Item's Validity on a Value That Can Decrease").
 
 ### Limits
 

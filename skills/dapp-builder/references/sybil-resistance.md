@@ -62,17 +62,17 @@ rules that matter:
   tab, so a cached "no key" answer goes stale while the user buys one.
 - `GetDefaultKey` returning `None` means you hold no `Sign` grant, not that the user
   has no key.
-- Bind the challenge to a stable anchor of your contract, never a
-  `ContractInstanceId`, as described under cross-context binding in
-  `state-authorization-patterns.md`.
+- Bind the challenge to an anchor taken from your parameters, which names this
+  instance across re-keys, and never to a `ContractInstanceId`. See "Cross-Context
+  Binding" in `state-authorization-patterns.md`.
 - Send a buyer to `freenet.org/ghostkey/create/?return_to=<contract instance id>` so
   the vault can offer a way back.
-- Keep the proof with the record and verify it in `validate_state`. A PUT runs
-  validation only, so a proof checked only in `update_state` is skipped. Filter in
-  `update_state` as well, so a bad record is skipped rather than refusing the update.
-  If certificate cost matters, cap the record count. A cheap one-signature entry is
-  allowed only when an authority key in the parameters signs it, as River's inviter
-  chain does.
+- Keep the proof with the record and verify it in `validate_state`. A PUT to a peer
+  not yet holding the contract runs validation only, so a proof checked only in
+  `update_state` is skipped. Filter in `update_state` as well, so a bad record is
+  skipped rather than refusing the update. If certificate cost matters, cap the record
+  count. A cheap one-signature entry is allowed only when an authority key in the
+  parameters signs it, as River's inviter chain does.
 
 ### Which to use
 
