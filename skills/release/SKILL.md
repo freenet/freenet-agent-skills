@@ -323,7 +323,7 @@ cd <your river checkout>
 cargo run -p riverctl -- member list "$ROOM_VK"
 ```
 
-A bincode deserialization error means **STOP**: see "Rollback", file an issue, and rebuild River against the new stdlib. In v0.2.11, enabling WebSocket streaming by default broke riverctl, which was pinned to stdlib 0.1.40.
+A bincode deserialization error means **STOP: a published release cannot be rolled back, so ship a patch (see "Rollback")**. File an issue, and rebuild River against the new stdlib. In v0.2.11, enabling WebSocket streaming by default broke riverctl, which was pinned to stdlib 0.1.40.
 
 ## Step 6: Post-cut telemetry monitoring through the 0-4h stagger
 

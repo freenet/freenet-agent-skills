@@ -146,7 +146,7 @@ Do this for **Full** reviews, and for **Light** reviews whose change has non-tri
 ## Step 5: Synthesize — Reconcile and Verify
 
 When all spawned subagents and the external model pass (or its Claude-lens substitute) have returned, **do not just
-concatenate their reports.** Synthesize:
+concatenate their reports.** Synthesize them with the Step 4 findings:
 
 1. **Deduplicate** — the same finding will surface from multiple reviewers; merge it
    into one entry.
@@ -191,7 +191,7 @@ Produce a consolidated review report:
 
 ### Lens findings
 
-One section per lens that actually ran (code-first, testing, skeptical, big-picture, external model), each containing only findings you verified, with `file:line`, severity and why. Omit lenses that did not run; say so in "Reviewers run".
+One section per lens that actually ran (code-first, testing, skeptical, big-picture, external model), each containing only findings you verified, with `file:line`, severity and why. The testing lens states whether a regression test fails without the fix. Omit lenses that did not run; say so in "Reviewers run".
 
 ---
 

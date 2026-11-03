@@ -82,7 +82,7 @@ Make tests as general as the bug class allows. If a pattern caused one bug, sear
 
 Before reviews, run the `freenet:code-simplifier` agent on the finished PR and commit what it changes, so reviewers see the cleanest version.
 
-Once the PR is complete and CI is green, run `/freenet:pr-review <PR>`. It owns the reviewer set, the external-model pass and the fallback when Codex is unavailable (substitute Claude lenses, record it, never wait).
+Wait for CI with `gh pr checks <PR> --watch`. Once the PR is complete and CI is green, run `/freenet:pr-review <PR>`. It owns the reviewer set, the external-model pass and the fallback when Codex is unavailable (substitute Claude lenses, record it, never wait).
 
 ### Handling Review Feedback
 
@@ -147,3 +147,5 @@ freenet-core keeps path-scoped rules in `.claude/rules/`. Before pushing code th
 - [ ] Relevant `.claude/rules/` sections read
 - [ ] `/freenet:pr-review` run on the current HEAD; every finding fixed or answered
 - [ ] Human review comments answered
+
+After the PR merges, remove its worktree and branch: `git worktree remove ../fix-<issue>`, then `git branch -d fix-<issue>`.
