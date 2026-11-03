@@ -213,7 +213,7 @@ get a clear error instead.
 Treat 50 MiB as a wall, not a target. The whole state transfers before the page
 renders, so a fat bundle is felt directly as load latency by every visitor. Serve
 large media from their own contracts rather than packing it into the site
-archive.
+archive; see "Split a large or frequently updated site" below.
 
 Ignore the larger figure written into the container contracts themselves —
 both freenet-core's bundled website contract and River's declare a
@@ -221,6 +221,80 @@ both freenet-core's bundled website contract and River's declare a
 stops you first. freenet-core#4653 tracks these three inconsistent ceilings (50
 MiB store, ~64 MiB transport, 100 MiB contract); the only one to design against
 is 50 MiB.
+
+## Split a large or frequently updated site
+
+**Every publish costs the whole site.** The container has no partial update:
+`get_state_delta` returns the entire state whenever the version is newer. A
+one-line fix in a 30 MB site therefore sends 30 MB to every peer hosting it,
+including peers where nobody has opened it, each time you publish. Size times
+publish rate times hosts is the bandwidth your site costs the network, and the
+peers paying for it are other people's machines.
+
+So keep the site small and keep what changes apart from what doesn't.
+
+1. **Find what is big and stable.** List the build output by size. The usual
+   suspects are WASM runtimes, ML models, fonts and media. If most of the bytes
+   do not change between releases, they do not belong in the contract you update
+   most often.
+2. **Move them into a second site with its own key.** It is an ordinary web
+   container, and you update it only when those files change. `publish` requires
+   an `index.html` in the directory, so add a stub one to an assets-only folder:
+
+   ```bash
+   fdev website init myapp-assets     # prints the contract key
+   fdev website publish ./assets-dist --key myapp-assets
+   fdev website update ./assets-dist --key myapp-assets   # later versions
+   ```
+
+   The 50 MiB limit applies to each site separately, and to the compressed
+   archive, not the raw files. WASM usually compresses well, so a 46 MB file may
+   well fit. If the assets do not fit, use more than one assets site.
+
+3. **Load them by path from the main site.** The contract key stays the same
+   across versions (see "What *does* move the URL" for the exceptions), so the
+   main site can hold it as a constant:
+
+   ```js
+   const ASSETS = "/v1/contract/web/<assets-contract-key>";
+   const bytes = await (await fetch(`${ASSETS}/moderator.tflite`)).arrayBuffer();
+   const wasm = await (await fetch(`${ASSETS}/engine.wasm`)).arrayBuffer();
+   const module = await WebAssembly.compile(wasm);
+   ```
+
+   Use a path starting with `/`, not a full `http://127.0.0.1:7509/...` URL, so
+   the site also works on hosted nodes and other ports. **Fetch named files only:**
+   the sandbox can read another contract's files, but a `fetch` of the bare
+   contract URL fails with a CORS error, because that URL is its outer shell page.
+   Fetch binary files such as WASM and models rather than `.js`, which the node
+   rewrites as text when it serves it, so the bytes are not identical.
+
+   Record the assets key when you first publish, and pin the container WASM for
+   this site too (see "What *does* move the URL"). A re-key would otherwise leave
+   the main site asking for a contract that no longer gets updates.
+
+4. **Plan for the assets arriving late or not at all.** They are a separate
+   download, so load them when first needed, show progress, and keep the rest of
+   the app usable while they load. This also gives you a faster first page.
+   **Always retry:** on a node that does not hold the assets contract yet, the
+   first request can fail with a 404 or 503 while the contract is fetched, and
+   the node may keep refusing for a short while afterwards.
+5. **Put content hashes in the asset filenames** if you ever replace a file, so
+   the main site asks for exactly the version it was built against. Publish the
+   assets site first and the main site second, and keep the old filenames in the
+   new assets version until no published main site uses them. The two contracts
+   spread independently, so a peer can briefly see the new main site before the
+   new assets, which is another reason for the retry above.
+6. **Publish in batches.** Group changes into a release instead of publishing
+   every commit. A development build can run on a local node, and that costs the
+   network nothing.
+
+For content users create, such as images in posts, use a contract per item keyed
+by the hash of its bytes, read over the WebSocket API. It never needs updating,
+so it never needs resending.
+
+This is not the redirect contract described below: each site keeps its own stable
+URL, and the second one only holds files.
 
 ## Do not build a redirect contract
 
