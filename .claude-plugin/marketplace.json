@@ -6,12 +6,12 @@
   },
   "metadata": {
     "description": "AI coding agent skills for Freenet development",
-    "version": "1.39.11"
+    "version": "1.40.0"
   },
   "plugins": [
     {
       "name": "freenet",
-      "description": "Freenet development skills - dApp builder, PR creation guidelines, and systematic debugging",
+      "description": "Freenet development skills - dApp builder, local development, PR creation and review, releases, debugging and Linux test running",
       "source": "./",
       "strict": false,
       "skills": [

@@ -874,8 +874,8 @@ optional after a re-key, and nothing in CI will notice if you skip it.
 
 ## Do not let a stray rebuild shift the key
 
-WASM builds are not byte-reproducible, so treat a committed WASM as a frozen
-artifact. Never `git add -A`, `-u` or `.` in a repo that commits WASM; a stray
+A WASM rebuild is byte-identical only under the full setup in `build-system.md`
+("Byte-reproducibility"), so treat a committed WASM as a frozen artifact. Never `git add -A`, `-u` or `.` in a repo that commits WASM; a stray
 rebuilt binary shifts the key and orphans user data. Add files by name. Key
 derivation is BLAKE3 (River lost rooms to a SHA256 migration entry).
 

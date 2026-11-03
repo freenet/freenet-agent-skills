@@ -148,10 +148,10 @@ Only two things, neither of which is a UI release:
 
    If you pin, two practicalities the CLI does not help with:
 
-   - **Do not rebuild the container from source to get the file.** WASM builds
-     are not byte-reproducible, so a rebuild yields different bytes, a different
-     key, and a silent publish to a brand-new URL while you believe you pinned
-     the old one. The WASM is `include_bytes!`-embedded in `fdev` with no export
+   - **Do not rebuild the container from source to get the file.** A WASM
+     rebuild is byte-identical only under a fully reproducible setup, so it
+     usually yields different bytes, a different key, and a silent publish to a
+     brand-new URL while you believe you pinned the old one. The WASM is `include_bytes!`-embedded in `fdev` with no export
      subcommand, so the only correct source is
      `crates/fdev/resources/website_contract.wasm` from the freenet-core repo **at
      the tag matching your `fdev --version`**. Copy it out on day one; if you
