@@ -84,6 +84,47 @@ Pin it with a test: for a populated state, assert that
 `get_state_delta(state, summarize_state(state))` is negligible (under 256 bytes, or
 `== 0` if you collapse) and that the summary is well under the state's size.
 
+### Keep summaries small
+
+Summaries are a large share of network traffic. A heartbeat carries only a digest of each
+summary, but the full summary goes to interested peers on every state change and whenever
+digests disagree, and it sets the floor for how cheaply a peer can be brought up to date.
+
+1. **Every summary field must be read by `delta()`.** Grep each field against the `delta()`
+   bodies. A field nothing reads is dead weight.
+2. **A value only compared for equality must be a fixed-width digest, never the thing it
+   fingerprints.** Replacing raw signatures with a 16-byte digest took River's `member_info`
+   from 135 to 28 bytes per entry.
+3. **Size a digest by who controls the colliding inputs.** If a party can grind both sides, 64
+   bits is a 2^32 birthday search, so use 128. If the attacker controls one side, 64 may do.
+   Put the threat model in the doc comment. A collision is a record that silently never
+   propagates.
+4. **Assert the encoding; never derive it.** The same 64 bytes cost 66 CBOR bytes as a byte
+   string and 119 as a derived tuple, because ciborium maps `serialize_tuple` to an array where
+   every byte >= 24 costs two. Hand-write `Serialize` with `serialize_bytes` for fixed-size
+   arrays, and pin it with a golden vector: one fixed input, one expected digest, one expected
+   length.
+5. **Measure size with realistic keys.** A `FastHash(i)` for small `i` encodes in 1-3 CBOR
+   bytes and a real key in 9, so a test built from `0..N` understates per-entry cost by about
+   30%.
+6. **Keep a summary O(1) or sub-linear in what it describes,** or state the element cap that
+   bounds it and check `cap × per-entry` against your budget.
+7. **A lossy summary is legal when applying an already-held element is a no-op.** K fixed
+   buckets, each an 8-byte digest of its contents, give a constant-size summary (River measured
+   145 bytes at K=16 against 3,894 for the flat form at 139 members), and `get_state_delta` may
+   then return a superset of the true delta. Verify idempotence first. One changed element
+   resends its whole bucket, so measure bytes on your own traffic before committing.
+8. **A capped or pruning collection needs a retention horizon in the summary.** Without one,
+   `delta()` is a pure set difference: the receiver prunes what it received, neither summary
+   changes, and the pair re-sends forever. Publish the oldest key held, only at capacity, so it
+   strictly increases each exchange.
+9. **A summary must not reveal what a recipient is not entitled to.** It reaches more peers,
+   more often, than state does.
+10. **A summary is a wire-format commitment.** Its hash, width, byte order and serialization
+    are frozen at publish. Changing any of them re-keys the contract and strands every existing
+    copy, and a stranded generation keeps costing anti-entropy bandwidth (freenet-core#5158).
+    Keep a registry of past generations and batch summary changes.
+
 ## Merge Law Requirements
 
 `update_state` is the merge: core applies an incoming full state as
