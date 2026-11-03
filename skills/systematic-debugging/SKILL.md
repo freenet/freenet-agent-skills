@@ -8,18 +8,9 @@ license: LGPL-3.0
 
 ## When to Use
 
-Invoke this methodology automatically when:
-- A test fails and the cause isn't immediately obvious
-- Unexpected behavior occurs in production or development
-- An error message doesn't directly point to the fix
-- Multiple potential causes exist
+Invoke this methodology when a test fails and the cause isn't immediately obvious, when unexpected behavior occurs in production or development, when an error message doesn't point to the fix, or when several causes are plausible.
 
-## Core Principles
-
-1. **Hypothesize before acting** - Form explicit hypotheses about root cause before changing code
-2. **Test hypotheses systematically** - Validate or eliminate each hypothesis with evidence
-3. **Parallelize investigation** - Use subagents for concurrent readonly exploration
-4. **Preserve test integrity** - Never weaken tests to make them pass
+Form explicit hypotheses before changing code, validate or eliminate each with evidence, and use subagents for concurrent readonly exploration.
 
 ## Debugging Scope Ladder
 
@@ -29,46 +20,32 @@ Invoke this methodology automatically when:
 |----------|-------|-------------|---------|
 | 1 | **Unit test** | Logic errors, algorithm bugs, single-function issues | `cargo test -p freenet -- specific_test` |
 | 2 | **Mocked unit test** | Transport/ring logic needing isolation | Unit test with `MockNetworkBridge` / `MockRing` |
-| 3 | **Simulation test** | Multi-node behavior, state machines, race conditions | `cargo test -p freenet --test simulation_integration -- --test-threads=1` |
+| 3 | **Simulation test** | Multi-node behavior, state machines, race conditions | `cargo test -p freenet --features simulation_tests,testing --test simulation_integration` |
 | 4 | **SimNetwork + FaultConfig** | Fault tolerance, message loss, network partitions | SimNetwork with configured fault injection |
 | 5 | **fdev single-process** | Quick multi-peer CI validation | `cargo run -p fdev -- test --seed 42 single-process` |
 | 6 | **freenet-test-network** | 20+ peer large-scale behavior | Docker-based `freenet-test-network` |
 | 7 | **Real network** | Issues that only manifest with real UDP/NAT/latency | Manual multi-peer test across machines |
 
-**Why this order matters:**
-- Lower scopes are faster, deterministic, and reproducible by anyone
-- Higher scopes require more infrastructure, time, and may not be accessible to all contributors
-- Gateway logs, aggregate telemetry, and production metrics are not available to every developer — don't assume access to these when designing reproduction steps
+Lower scopes are faster, deterministic and reproducible by anyone. Gateway logs, aggregate telemetry and production metrics are not available to every developer, so don't design a reproduction that depends on them.
 
 ## Debugging Workflow
 
 ### Phase 0: Claim the Issue
 
-If you're working on a GitHub issue, **check if it's already assigned** before starting. If someone else is assigned, stop and inform the user — don't duplicate effort. If unassigned, assign it to yourself so others know it's being worked on:
-
-```bash
-gh issue view <ISSUE> --repo freenet/<REPO>  # Check assignees
-gh issue edit <ISSUE> --repo freenet/<REPO> --add-assignee @me
-```
+If you're working on a GitHub issue, claim it first (see the pr-creation skill's "Claim the Issue").
 
 ### Phase 1: Reproduce and Isolate
 
-1. **Reproduce the failure** — Confirm the bug exists and is reproducible
-2. **Use the scope ladder** — Start at the smallest scope that can demonstrate the bug:
-   - Can you write a unit test? Try that first
-   - Needs multiple nodes? Use the simulation framework with a deterministic seed
-   - Only happens under fault conditions? Use `SimNetwork` with `FaultConfig`
-   - Can't reproduce in simulation? Then escalate to real network testing
-3. **Record the seed** — When using simulation tests, always record the seed value for reproducibility
-4. **Gather initial evidence** — Read error messages, logs, stack traces
+1. **Reproduce the failure** at the smallest scope on the ladder that shows it.
+2. **Record the seed** when using simulation tests, so the run is reproducible.
+3. **Gather initial evidence:** error messages, logs, stack traces.
 
-**Simulation-first approach for distributed bugs:**
 ```bash
-# Run simulation tests deterministically
-cargo test -p freenet --features simulation_tests --test sim_network -- --test-threads=1
+# Run simulation tests
+cargo test -p freenet --features simulation_tests,testing --test simulation_integration
 
-# With logging to observe event sequences
-RUST_LOG=info cargo test -p freenet --features simulation_tests --test sim_network -- --nocapture --test-threads=1
+# With logging, to observe event sequences
+RUST_LOG=info cargo test -p freenet --features simulation_tests,testing --test simulation_integration -- --nocapture
 
 # Reproduce with a specific seed
 cargo run -p fdev -- test --seed 0xDEADBEEF single-process
@@ -76,226 +53,65 @@ cargo run -p fdev -- test --seed 0xDEADBEEF single-process
 
 ### Phase 1b: When the Bug Is Reported from the Live Network
 
-When a bug comes from production observations (user reports, telemetry, monitoring), the goal is to **translate the network observation into a local reproduction as fast as possible**. Live-network debugging has the slowest feedback loop — adding telemetry, redeploying, waiting — so minimize time spent there.
+Live-network debugging has the slowest feedback loop (add telemetry, redeploy, wait), so translate the observation into a local reproduction as fast as possible.
 
-**The workflow:**
-
-1. **Constrain the problem from network data** — What operation type? Which peers? What hop count? What timing pattern? Use telemetry or user reports to narrow this down.
+1. **Constrain the problem from network data:** which operation type, which peers, what hop count, what timing pattern.
 2. **Translate constraints into simulation parameters:**
 
 | Network Observation | Simulation Translation |
 |---------------------|----------------------|
 | "GET times out at hop 3" | `#[freenet_test]` with 4+ nodes, specific `node_locations` matching topology |
 | "Peer X never responds" | Node configured to drop/delay messages via `FaultConfig` |
-| "73% timeout rate" | `FaultConfig { message_loss_rate: 0.7, .. }` or unresponsive target node |
+| "High timeout rate" | A `FaultConfig` loss rate tuned until the simulated rate matches |
 | "Works for PUT but not GET" | Test both operations — likely incomplete wiring in dispatch path |
-| "Rapid connect/disconnect cycles" | Simulation with transport-level fault injection |
-| "Messages dropped after acknowledgement" | `FaultConfig` with selective message loss after initial handshake |
 
-3. **Write the simulation test** — Start with `#[freenet_test]` or `SimNetwork + FaultConfig`. Use a deterministic seed.
-4. **Debug locally** — Now iterate with full control: add tracing, assertions, state inspection. No redeployment needed.
-5. **Validate** — Optionally confirm via telemetry that the deployed fix improves live behavior.
+3. **Write the simulation test** with `#[freenet_test]` or `SimNetwork + FaultConfig` and a deterministic seed.
+4. **Debug locally** with full control (tracing, assertions, state inspection), no redeployment.
+5. **Validate** the fix against telemetry if you can.
 
-**If a `telemetry-monitor` skill is available** (project-local, not part of this plugin), use it to query the centralized OpenTelemetry collector for constraining the problem. But treat telemetry as input to simulation design, not as the primary debugging tool.
-
-**Resist the temptation to keep adding telemetry to find the root cause.** Once you know *what* fails (operation type, peer pattern, timing), stop analyzing network data and reproduce locally. The simulation feedback loop is orders of magnitude faster.
+Once you know *what* fails (operation type, peer pattern, timing), stop analyzing network data and reproduce locally; the simulation loop is orders of magnitude faster. If a `telemetry-monitor` skill is available (project-local, not part of this plugin), use it to constrain the problem, not as the primary debugging tool.
 
 ### Phase 2: Form Hypotheses
 
-Before touching any code, explicitly list potential causes:
+Before touching code, list the plausible causes ranked by likelihood. **Freenet-specific hypothesis patterns:**
 
-```
-Hypotheses:
-1. [Most likely] The X component isn't handling Y case
-2. [Possible] Race condition between A and B
-3. [Less likely] Configuration mismatch in Z
-```
+- **State machine bugs:** invalid transitions in operations (CONNECT, GET, PUT, UPDATE, SUBSCRIBE).
+- **Ring/routing errors:** incorrect peer selection, distance calculations, topology issues.
+- **Transport issues:** UDP packet loss handling, encryption/decryption, connection lifecycle.
+- **Contract execution:** WASM sandbox issues, state verification failures.
+- **Determinism violations:** `std::time::Instant::now()` instead of `TimeSource`, or `rand::random()` instead of `GlobalRng`.
+- **Silent failure:** a spawned task that died unnoticed (is the `JoinHandle` stored and polled?), a broadcast to zero targets, a channel that drops on overflow, `let _ = sender.send()`.
+- **Resource exhaustion:** an insert with no cleanup on the failure or timeout path.
+- **Incomplete wiring:** works for GET but not PUT/UPDATE/SUBSCRIBE; check every dispatch arm for `_ =>` catch-alls and commented-out arms.
+- **TTL/timing races:** operation A can outlive timeout B (transient TTL vs CONNECT handshake, interest TTL vs subscription renewal).
+- **Regressions from "safe" changes:** a simplification or changed default breaks an invariant nothing tests; check what implicit behavior the recent commit removed.
+- **Mock/test divergence:** the mock skips a side effect, takes a different code path from production, or the mock socket behaves differently from real UDP.
 
-Rank by likelihood based on evidence. Avoid anchoring on the first idea.
-
-**Freenet-specific hypothesis patterns:**
-- **State machine bugs** — Invalid transitions in operations (CONNECT, GET, PUT, UPDATE, SUBSCRIBE)
-- **Ring/routing errors** — Incorrect peer selection, distance calculations, topology issues
-- **Transport issues** — UDP packet loss handling, encryption/decryption, connection lifecycle
-- **Contract execution** — WASM sandbox issues, state verification failures
-- **Determinism violations** — Code using `std::time::Instant::now()` instead of `TimeSource`, or `rand::random()` instead of `GlobalRng`
-- **Silent failure / fire-and-forget** — Spawned task dies with no error propagation (check: is the `JoinHandle` stored and polled? what happens if the task exits?), broadcast sent to zero targets with no warning, channel overflow silently dropping messages. Look for: `tokio::spawn` without `.await`/`.abort()`, `let _ = sender.send()`, missing logging on empty target sets
-- **Resource exhaustion** — HashMap/Vec/channel entries inserted but never removed, causing unbounded memory growth or channel backpressure. Check: is there a cleanup path for every insert? Is cleanup triggered on both success AND failure/timeout? Run sustained operations and assert collection sizes stay bounded
-- **Incomplete wiring** — Feature only works for some operation types (e.g., router feedback wired for GET but not subscribe/put/update). When debugging "X doesn't work for operation Y," check all enum variants in the dispatch path — commented-out arms, `_ => Irrelevant` catch-alls, and missing match arms are common
-- **TTL/timing race conditions** — Two time-dependent operations where the first can expire before the second completes (e.g., transient TTL expires before CONNECT handshake, interest TTL expires before subscription renewal, broadcast fires before subscriptions complete). Check: what happens if operation A takes longer than timeout B?
-- **Regressions from "safe" changes** — A seemingly harmless change (code simplification, removing a feature flag, changing defaults) breaks an invariant that nothing tests. When a recent commit looks innocent, check what implicit behaviors it removed
-- **Mock/test divergence** — Bug can't be reproduced in tests because the mock runtime behaves differently from production. Check: does the mock skip side effects (e.g., BSC emission)? Does the test use a different code path than production (e.g., explicit subscribe vs background subscribe)? Does the mock socket behave differently from real UDP?
-
-See [Module-Specific Debugging Guide](references/module-debugging.md) for detailed bug patterns, data collection strategies, and test approaches per module.
+See [Module-Specific Debugging Guide](references/module-debugging.md) for bug patterns per module.
 
 ### Phase 3: Investigate Systematically
 
-**For each hypothesis:**
-1. Identify what evidence would confirm or refute it
-2. Gather that evidence (logs, code reading, adding debug output)
-3. Update hypothesis ranking based on findings
-4. Move to next hypothesis if current one is eliminated
+For each hypothesis, identify the evidence that would confirm or refute it, gather it, and update the ranking.
 
-**Freenet-specific data gathering:**
+**Evidence sources:** `RUST_LOG` output and `#[freenet_test]` event capture (everyone); simulation stats (`sim.get_network_stats()`, `sim.await_convergence(timeout, poll, min_contracts)`, `sim.virtual_time().now_nanos()`); `git log --oneline -20 -- path/to/file.rs`; gateway logs and aggregate telemetry (maintainers only; don't build a reproduction that depends on them). Module-specific techniques are in [module-debugging.md](references/module-debugging.md).
 
-| What You Need | How to Get It | Access |
-|---------------|---------------|--------|
-| Event sequences | `RUST_LOG=info` + `--nocapture` on simulation tests | Everyone |
-| Network message patterns | `sim.get_network_stats()` in simulation tests | Everyone |
-| Convergence behavior | `sim.await_convergence(timeout, poll, min_contracts)` | Everyone |
-| Virtual time state | `sim.virtual_time().now_nanos()` | Everyone |
-| Git history of affected code | `git log --oneline -20 -- path/to/file.rs` | Everyone |
-| Fault injection results | SimNetwork + FaultConfig, then inspect stats | Everyone |
-| Gateway logs | Access to running gateway node | **Limited — not all contributors** |
-| Aggregate telemetry | `telemetry-monitor` skill (if available) or production dashboards | **Limited — core team only** |
-| Real network packet captures | Physical access to test machines | **Limited — specific environments** |
+**Asserting on freenet-core logs from E2E tests: use structured fields, and read the log first.** Tail the node log with the `RUST_LOG` you will use in CI and look at what is emitted around the event. Don't copy a grep pattern from an old test: a marker that no longer exists makes a negative assertion vacuously true, a false green. Prefer structured fields (`phase="..."`, `op="GET"`, `tx=`, to follow one operation across nodes). Treat log assertions as supplementary; the authoritative check is the UI assertion or a contract GET via fdev. Logs tell you how you got there, not whether you did.
 
-**Note on telemetry:** If a `telemetry-monitor` skill is available in the project, use it to query network telemetry for constraining the problem (see Phase 1b). But remember: telemetry constrains, simulation reproduces. Don't spend cycles iterating on telemetry queries when you have enough information to write a simulation test.
+When a test fails because of a conclusively traced upstream bug (for example a freenet-core relay timeout with an open issue and a recognizable log signature), **quarantine the path, do not remove the test.** Detect the exact upstream signature, emit a Playwright `test.skip()` (or equivalent) with the issue link, and keep the assertion that would have caught it. Genuine app-side regressions (contract errors, deserialization, panics, wrong state) still fail the gate. Removing or weakening the assertion loses the coverage you get for free the day upstream is fixed.
 
-**Asserting on freenet-core logs from E2E tests: use structured fields,
-not wire-level markers.** Modern freenet-core (0.2.6x and later) emits
-tracing output as structured fields — `phase="update_complete"`,
-`phase="relay_started"`, `op="GET"`, `tx="01KK70…"`. Legacy
-wire-level grep markers (`UPDATE_PROPAGATION`, `OP_FORWARDED`, etc.)
-that older tests and tutorials reference have been removed. An E2E test
-that greps for them will pass forever — the line will never appear, so
-the negative assertion is vacuously true, and the test gives a false
-green.
-
-When writing or fixing an E2E log assertion against a freenet node:
-
-- Tail the log directly with the same `RUST_LOG` you'll use in CI and
-  read what's actually emitted around the event you care about. Don't
-  copy a grep pattern from an old test.
-- Match on the structured field shape — `phase="<value>"` is the most
-  stable; transaction IDs (`tx=`) are good for following a single
-  op across nodes.
-- Treat log assertions as supplementary. The authoritative check that
-  the system reached a state is the UI assertion (Playwright sees the
-  message in the recipient's inbox) or a contract GET via fdev (state
-  on the network matches expectations). Logs tell you *how* you got
-  there, not *whether* you got there.
-
-When a test fails because of a conclusively-traced upstream bug
-(e.g. a freenet-core relay timeout that has an open issue and a
-recognizable signature in the logs), **quarantine the path, do not
-remove the test.** Detect the exact upstream signature, emit a Playwright
-`test.skip()` (or equivalent) with the issue link, and let the assertion
-that would have caught the upstream bug stay in place. Genuine app-side
-regressions (contract errors, deserialization, panics, wrong state
-contents) still fail the gate. Removing the test, or weakening the
-assertion to make it always pass, loses the regression coverage you'd
-otherwise get for free the day upstream is fixed.
-
-For module-specific data gathering techniques, see [Module-Specific Debugging Guide](references/module-debugging.md) — it covers observation APIs, `#[freenet_test]` event capture, `RUST_LOG` targets, and fault injection per module.
-
-**Parallel investigation with subagents:**
-
-Use `general-purpose` agents with `codebase-investigator` instructions for independent, readonly investigations. Spawn multiple in parallel, each with a specific focus.
-
-```
-Spawn investigators in parallel using Task tool (subagent_type="general-purpose"):
-
-1. "You are a codebase-investigator. [Include agents/codebase-investigator.md instructions]
-    Search for similar error handling patterns in the codebase related to [bug description]"
-
-2. "You are a codebase-investigator. [Include agents/codebase-investigator.md instructions]
-    Check git history for recent changes to [affected module/files]"
-
-3. "You are a codebase-investigator. [Include agents/codebase-investigator.md instructions]
-    Read and analyze [test file] and related fixtures for [component]"
-```
-
-Guidelines:
-- Each investigator focuses on one hypothesis or evidence type
-- Only parallelize readonly tasks — code changes must be sequential
-- Investigators report findings; you synthesize and decide next steps
+**Parallel investigation:** spawn `freenet:codebase-investigator` subagents, one per hypothesis or evidence type (similar error handling, recent history of the affected files, the test and its fixtures). They are readonly; you synthesize and decide. Make code changes sequentially, never in parallel.
 
 ### Phase 4: Fix and Verify
 
-1. **Fix the root cause** — Not symptoms
-2. **Verify with deterministic reproduction** — Re-run the failing test with the same seed
-3. **Check for regressions** — `cargo test -p freenet`
-4. **Consider edge cases** — Does the fix handle similar scenarios?
-5. **Verify determinism** — If you added new code, ensure it uses `TimeSource` and `GlobalRng` (not `std::time` / `rand` directly)
+1. Fix the root cause, not the symptom.
+2. Re-run the failing test with the same seed, then `cargo test -p freenet`.
+3. Check that the fix handles similar scenarios, and that new code uses `TimeSource` and `GlobalRng`.
 
 ### Phase 5: Test Coverage Analysis
 
-**Always ask: "Why didn't CI catch this?"**
+**Always ask: "Why didn't CI catch this?"** Name the test layer from the ladder that should have caught it, say why the existing tests missed it (different topology or config, mocks hiding the behavior, no fault injection, weak assertions, determinism bypass), and put the missing test in the issue or PR.
 
-Freenet has multiple test layers:
+## Rules That Do Not Bend
 
-| Layer | Scope | What It Catches |
-|-------|-------|-----------------|
-| Unit tests (~1000) | Individual functions | Logic errors, algorithm bugs |
-| Integration tests (~80) | Component interactions | Interface mismatches, data flow bugs |
-| Simulation tests | Multi-node deterministic | State machine bugs, race conditions, protocol errors |
-| `fdev single-process` | Quick multi-peer | Basic distributed behavior |
-| `freenet-test-network` | 20+ peers in Docker | Scale-dependent bugs, realistic network behavior |
-| Real network tests | Physical machines | NAT traversal, real latency, UDP behavior |
-
-If a bug reached production or manual testing, there's a gap. Investigate:
-
-1. **Which test layer should have caught this?**
-   - Logic error → unit test
-   - Component interaction bug → integration test
-   - Distributed/state machine behavior → simulation test with `#[freenet_test]`
-   - Fault tolerance → SimNetwork with FaultConfig
-   - Scale-dependent → freenet-test-network
-
-2. **Why didn't the existing tests catch it?**
-   - Tests use different topology/configuration than production
-   - Tests mock components that exhibit the bug in real usage
-   - Simulation doesn't inject the right fault conditions
-   - Test assertions too weak to detect the failure
-   - Determinism violation — code path bypasses `TimeSource`/`GlobalRng`
-
-3. **Document the gap** — Include in the issue/PR:
-   - What test would have caught this
-   - Why existing tests didn't
-   - Whether a new test should be added to prevent regression
-
-## Anti-Patterns to Avoid
-
-### Jumping to conclusions
-- **Wrong:** See error, immediately change code that seems related
-- **Right:** Form hypothesis, gather evidence, then act
-
-### Tunnel vision
-- **Wrong:** Spend hours on one theory despite contradicting evidence
-- **Right:** Set time bounds, pivot when evidence points elsewhere
-
-### Weakening tests
-- **Wrong:** Test fails, reduce assertions or add exceptions to make it pass
-- **Right:** Understand why the test expects what it does, fix the code to meet that expectation
-- **Exception:** The test itself has a bug or tests incorrect behavior (rare, requires clear justification)
-
-### Sequential investigation when parallel is possible
-- **Wrong:** Read file A, wait, read file B, wait, read file C
-- **Right:** Spawn `codebase-investigator` agents to read A, B, C concurrently, synthesize findings
-
-### Fixing without understanding
-- **Wrong:** Copy a fix from Stack Overflow that makes the error go away
-- **Right:** Understand why the fix works and whether it addresses root cause
-
-### Skipping the scope ladder
-- **Wrong:** Jump straight to real network debugging when the bug could be reproduced in a unit test
-- **Right:** Start small — unit test, then simulation, then real network
-
-### Breaking determinism
-- **Wrong:** Use `std::time::Instant::now()` or `rand::random()` in core logic
-- **Right:** Use `TimeSource` trait and `GlobalRng` so simulation tests remain reproducible
-
-### Assuming data access
-- **Wrong:** "Check the gateway logs to see what happened" (not everyone has gateway access)
-- **Right:** Design reproduction steps using simulation tests and `RUST_LOG` that any contributor can run
-
-## Checklist Before Declaring "Fixed"
-
-- [ ] Root cause identified and understood
-- [ ] Fix addresses root cause, not symptoms
-- [ ] Original failure no longer reproduces
-- [ ] No new test failures introduced
-- [ ] Test added if one didn't exist (when practical)
-- [ ] No test assertions weakened or disabled
-- [ ] Answered "why didn't CI catch this?" and documented the test gap
+- **Never weaken a test to make it pass.** A failing test is evidence; fix the code, or fix the test's logic with a stated reason.
+- **Keep determinism.** Use `TimeSource` and `GlobalRng`, never `std::time::Instant::now()` or `rand::random()`, in core logic (see `.claude/rules/testing.md`), so simulation tests stay reproducible.
