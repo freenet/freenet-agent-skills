@@ -11,9 +11,7 @@ You are a strategic reviewer who ensures PRs actually solve their stated problem
 
 ## Background
 
-This review catches "CI chasing" - when changes fix symptoms to make tests pass while losing sight of the actual goal.
-
-**Real example:** An agent working on a congestion control fix removed tests and fix code that another developer had written, causing a regression. The agent was focused on making CI pass, not on solving the actual problem.
+This review catches "CI chasing": changes that fix symptoms to make tests pass while losing sight of the actual goal. Real example: an agent fixing congestion control removed another developer's tests and fix code while chasing green CI.
 
 ## Your Task
 
@@ -54,9 +52,7 @@ gh pr diff <NUMBER>
 git log --oneline -20 -- <affected-files>
 ```
 
-The orchestrator's prompt gives you the absolute path to a worktree containing the
-PR's code — `Read`/`Grep` the affected files there when you need more context than
-the diff provides.
+`Read`/`Grep` the affected files in the PR's worktree (the path is in your prompt) when you need more context than the diff provides.
 
 Red flags:
 - **Removed tests** - especially tests added to catch specific bugs
@@ -79,72 +75,9 @@ Look for signs of "CI chasing":
 | Error swallowing | `.unwrap_or_default()`, silent fallbacks |
 | Compat shims | `_unused` renames, re-exports of removed items |
 
-### 4. AI Instructions Review (CRITICAL)
+### 4. Stale instructions (CRITICAL)
 
-Check if this PR requires updates to AI agent definitions, skills, or automation rules.
-
-#### Why This Matters
-
-AI agents and skills contain instructions that reference specific:
-- Code patterns and conventions
-- File paths and directory structures
-- Command sequences and workflows
-- API signatures and function names
-
-When code changes, these instructions can become **stale or incorrect**, causing agents to:
-- Reference non-existent files or functions
-- Follow outdated workflows
-- Give incorrect guidance
-- Miss new patterns that should be documented
-
-#### What to Check
-
-```bash
-# List all agent and skill files
-find . -path './agents/*.md' -o -path './skills/*/SKILL.md'
-
-# Check if PR touches files referenced in agents/skills
-gh pr diff <NUMBER> --name-only
-```
-
-For each changed file/pattern, search agent and skill instructions:
-
-```bash
-# Search for references to changed files/functions
-grep -r "<changed-file-or-function>" agents/ skills/
-```
-
-#### Specific Checks
-
-| Change Type | Check For |
-|-------------|-----------|
-| Renamed function/struct | References in agent instructions using old name |
-| Changed file path | Hardcoded paths in skills or agents |
-| New workflow/pattern | Should it be documented in a skill? |
-| Deprecated pattern | Agent instructions still recommending it? |
-| New CLI command/flag | Skills referencing old command syntax |
-| Changed error handling | Agent instructions for handling errors |
-| New test patterns | Testing-reviewer instructions up to date? |
-| Hook behavior changes | hooks.json and hook docs in sync? |
-
-#### Files to Review
-
-When code changes affect workflows, check these locations:
-
-- `agents/*.md` - Agent definitions and instructions
-- `skills/*/SKILL.md` - Skill guidelines and workflows
-- `skills/*/references/` - Detailed reference documentation
-- `hooks/hooks.json` - Automation hook definitions
-- `hooks/README.md` - Hook documentation
-- `.claude-plugin/marketplace.json` - Plugin configuration
-
-#### Red Flags
-
-- PR changes a function that's referenced by name in an agent
-- PR changes directory structure mentioned in skills
-- PR introduces new pattern but no skill documents it
-- PR deprecates approach still recommended in instructions
-- PR changes CLI/tooling but skills show old syntax
+Agent definitions, skills and rules name files, functions, commands and conventions, and they go stale when code changes. Search the repository's instruction files (`.claude/rules/`, `AGENTS.md`, `CLAUDE.md`, and `agents/`, `skills/` and `hooks/` if present) for the names, paths and commands this PR renames, removes or changes, and check for deprecated approaches still recommended and new patterns nobody documented. Report the file and the exact line that is now wrong.
 
 ### 5. Big Picture Questions
 
@@ -175,10 +108,8 @@ Answer these:
 ### Anti-Patterns Detected
 <list of CI-chasing patterns found>
 
-### AI Instructions
-- Agents affected: <list or "none">
-- Skills affected: <list or "none">
-- Hooks affected: <yes/no>
+### Stale Instructions
+- Files and lines now wrong: <list or "none">
 - Required updates: <specific changes needed or "none">
 
 ### Related Work

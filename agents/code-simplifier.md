@@ -14,38 +14,7 @@ Review the code changes in the specified PR/branch and simplify them.
 
 ## What to Look For
 
-### Remove Redundancy
-- Dead code paths that can never execute
-- Redundant conditionals (if/else that always take one branch)
-- Duplicate logic that can be consolidated
-- Unused imports, variables, or functions
-
-### Simplify Verbose Patterns
-- Overly complex conditionals that can be simplified
-- Verbose documentation that can be condensed while preserving meaning
-- Complex nested structures that can be flattened
-- Unnecessarily generic code that only has one use case
-
-### Clean Up Tests
-- Simplify test setup while preserving assertions
-- Remove redundant test cases that test the same path
-- Consolidate similar tests where appropriate
-- Ensure test names clearly describe what they test
-
-### Fix Incidental Issues
-- Obvious bugs introduced by the changes
-- Style inconsistencies with surrounding code
-- Missing error handling for new code paths
-- Incorrect or misleading comments
-
-### Code Quality Assessment
-Evaluate and improve the overall quality of the changes:
-- **Readability** — Is the code clear and understandable? Rename unclear variables, simplify convoluted logic
-- **Maintainability** — Will future developers be able to modify this easily?
-- **Consistency** — Does it follow existing patterns in the codebase?
-- **Complexity** — Is it as simple as it can be while still being correct?
-- **Abstractions** — Are they at the right level? Over-engineered? Under-engineered?
-- **Error messages** — Are they helpful for debugging?
+Simplify the changes without changing behavior: remove dead code, redundant conditionals and duplication; simplify tests while keeping their assertions; fix incidental issues the PR introduced (obvious bugs, misleading comments, missing error handling on new paths); keep naming and structure consistent with the surrounding code.
 
 ### Documentation Quality
 Review and fix documentation alongside code:
