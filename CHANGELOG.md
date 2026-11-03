@@ -7,9 +7,9 @@ All notable changes to this project will be documented in this file.
 **Audit of the whole plugin: remove redundancy, drop what an agent can infer,
 correct advice that no longer matches the code.**
 
-Skill and agent text went from 714 KB to 426 KB. The `SKILL.md` files, which
-load every time a skill fires, went from 172 KB to 80 KB, and
-`dapp-builder/SKILL.md` from 63.6 KB to 10.8 KB. No skill was renamed. Claims
+Everything under `skills/` and `agents/` went from 691 KB to 425 KB. The
+`SKILL.md` files, which load every time a skill fires, went from 172 KB to 81 KB,
+and `dapp-builder/SKILL.md` from 63.6 KB to 11.6 KB. No skill was renamed. Claims
 were checked against freenet-core 057fc222f7 (v0.2.154), freenet-stdlib 0.12.1,
 river 7666a57e79 and freenet-migrate 0.8.0. The audit applied the v1.37.3 rule:
 keep the rule and the shortest reason for it, and point at the source for

@@ -98,8 +98,8 @@ for months, so the contract generation compiled into it silently becomes older
 than the live one. Anything a user installs, vendors, or bundles is in this
 group, and so is any server or bot deployed on its own schedule.
 
-You are NOT pinned, on engineering grounds alone, if you are rebuilt and
-redelivered whenever the thing you address, when you own it, changes. A Freenet web app is the
+You are NOT pinned, on engineering grounds alone, if you own the thing you address
+and are rebuilt and redelivered whenever it changes. A Freenet web app is the
 usual example: it ships inside a web container republished in place, and changing
 the contract forces a UI rebuild and republish, so the UI's idea of "current"
 cannot lag reality. Resolving your own artifact's pointer there is close to
