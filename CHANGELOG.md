@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.0 (2026-11-02)
+
+**Audit of the whole plugin: remove redundancy, drop what an agent can infer,
+correct advice that no longer matches the code.**
+
+Everything under `skills/` and `agents/` went from 691 KB to 425 KB. The
+`SKILL.md` files, which load every time a skill fires, went from 172 KB to 81 KB,
+and `dapp-builder/SKILL.md` from 63.6 KB to 11.6 KB. No skill was renamed. Claims
+were checked against freenet-core 057fc222f7 (v0.2.154), freenet-stdlib 0.12.1,
+river 7666a57e79 and freenet-migrate 0.8.0. The audit applied the v1.37.3 rule:
+keep the rule and the shortest reason for it, and point at the source for
+mechanism.
+
+**Corrections that change what an agent does:**
+
+- Delegates are no longer told to call `rand::random()`. The node discards
+  `cipher` and `nonce`, and `rand` in a delegate fails at instantiation.
+- The stdlib has no `delegate` feature. `build-system.md` now documents what was
+  missing: `#[contract]` and `#[delegate]` emit exports only when your crate
+  declares `freenet-main-contract` or `freenet-main-delegate`.
+- `freenet-migrate` fixes the stdlib line, so one app cannot follow the old
+  "mirror River, 0.11+ for delegates" advice. `build-system.md` holds one
+  compatibility table, and new apps start on the newest of both.
+- The versioned-signature example no longer leaves a new field unsigned on v1
+  records, and signed fields gain length prefixes.
+- `NewestSnapshotWins` is no longer called right for most apps. It stops at the
+  first silent predecessor.
+- The facade loader no longer branches on `__sandbox=1`, which the gateway's
+  iframe URL always carries. The manual webapp cache removal is gone, since
+  freenet-core#3977 is closed.
+- `local-dev` gateway recipes gain `--public-network-port`, without which the
+  node exits. The corrected recipe was run, with a peer joining it.
+- `build-system.md`'s "clean-node" no longer deletes the default node data
+  directory. `fdev execute update` and `fdev test` commands now parse.
+- Delegate sample code uses current stdlib types and passes `cargo check`
+  (native target). About 5 KB of `ui-patterns.md` Rust that did not compile is
+  gone.
+- The summary rules follow the current protocol: heartbeats carry a digest, and
+  full summaries go out on state change.
+- `merge-law-compliance.md` gains a Removal column. Several laws are report-only,
+  and a node flags a merge that does not settle, not every absorption failure.
+- There is no node-level delegate secret migration today, and the skills now say
+  that rather than "never". Do not wait for one. freenet-core#2776 tracks status.
+- ghostkeys does publish a pointer. River has no inbox contract.
+- `release`: a dry run from current main mutates nothing, and "Rollback" now says
+  what rollback can and cannot do. `pr-creation`: the rule-review check is
+  `rule-review/warnings`, with no `/ack`. `pr-review`: Gemini is gone.
+  `systematic-debugging`: simulation commands name a real test target and enable
+  the required features. `module-debugging.md` no longer describes the retired
+  operations mediator.
+- The tombstone, sybil-proof and signing guidance is tightened after review:
+  removal tombstones are never evicted, a proof that only `update_state` checks
+  is skipped by a PUT, and signatures bind a stable anchor rather than a contract
+  instance id, which moves on every re-key.
+
+**Policy change, not a correction:** the anti-flood recommendation changes. It
+was proof-of-work by default with a ghost key to skip the wait. A service that
+spends resources per request now leads with ghost keys, and a slow proof-of-work
+is the fallback for actions that must stay free. Other open write paths keep
+proof-of-work with a ghost key as the way to skip it. Ghost keys fund Freenet, so
+agents must ask the developer and wait for the decision before wiring one in.
+
+**Structure:**
+
+- New references: `delegate-migration.md`, `sybil-resistance.md` and
+  `local-dev/references/node-isolation-and-debugging.md`.
+- The contract upgrade manual moved from `contract-patterns.md` to
+  `upgrade-and-migration.md` ("Contract mechanics").
+- `dapp-builder/SKILL.md` is now the model, 19 rules and a routing table. Its
+  summary, related-contract, illegal-material and author-contact sections moved
+  to the references that fit them.
+- `facade-pattern.md` is cut to the rules, with freenet/mail as the reference
+  implementation.
+
+**Removed:**
+
+- `hooks/`: the Claude Code hook exited 1, which does not block, and freenet-core
+  has its own pre-commit configuration.
+- `index.js`, `package.json` and the npm instructions: the package was never
+  published, so the recommended install command failed.
+
 ## 1.39.11 (2026-11-02)
 
 **`dapp-builder`: make the site-splitting example generic.**

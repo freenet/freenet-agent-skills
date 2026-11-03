@@ -47,8 +47,8 @@ the *same* committed `webapp.parameters`.
 ## Publishing: use `fdev website`
 
 freenet-core ships a generic website contract and a CLI for it. You do **not**
-need to write a container contract, a signing tool, or a build pipeline. Verified
-against `fdev` 0.3.273:
+need to write a container contract, a signing tool, or a build pipeline. The
+commands below match current `fdev`:
 
 ```bash
 # Once, ever. Generates an Ed25519 keypair, saves it under your platform config
@@ -88,29 +88,25 @@ rejected); `validate_state` additionally rejects `0`, so versions are 1-based.
 Gaps are fine — only strict monotonicity is enforced.
 
 `fdev website` derives the version from unix seconds and takes no version
-argument, which is fine for ordinary use. Two failure modes are worth knowing,
-both observed on **River's own bespoke signing pipeline** rather than on `fdev
-website`:
+argument, which is fine for ordinary use. Two failure modes matter for a
+hand-rolled signer, both seen on River's and freenet/mail's own pipelines rather
+than on `fdev website`:
 
-- **Same-granularity ties.** River and freenet-email used `unix_seconds / 60`, so
-  two publishes in one minute produced the same version. The consequence is
-  nastier than a clean rejection: the publisher's own node accepts and serves the
-  new build, while **subscribed peers reject the broadcast and keep serving the
-  old one indefinitely** — so it looks published to you and stale to everyone
-  else. That is freenet-core#4064, still **open**, and the minute-collision is
-  the leading hypothesis rather than a confirmed cause. `fdev`'s move to
-  second-granularity is the lesson learned from it.
-- **A version from the future.** River's on-network version reached a round
-  30000208 while its scheme was generating ~29649402 — either clock skew or a
-  hand-bump, and River's own notes hedge between the two. Either way the site was
-  unpublishable until versions caught up, a gap of roughly 243 days. Recovery was
-  **manual**: seed a committed counter above the stuck value (River seeded
-  30000300). Nobody waits this out.
+- **Same-granularity ties.** A scheme of `unix_seconds / 60` gives two publishes
+  in one minute the same version. The publisher's own node accepts and serves the
+  new build, but subscribed peers reject the broadcast with "must be higher than
+  current version" and keep serving the old one, so it looks published to you and
+  stale to everyone else. `fdev` moved to second granularity because of this
+  (freenet-core#4064).
+- **A version from the future.** If the on-network version ends up far above what
+  your scheme generates (clock skew or a hand-bump), every publish is rejected
+  until your counter catches up. Recovery is manual: seed a committed counter
+  above the stuck value. Nobody waits this out.
 
 **Do not switch schemes casually, and never switch downward.** This is the one
 mistake on this page that permanently bricks a live site:
 
-> `fdev website` versions are unix **seconds** — currently ~1.78e9. A fresh
+> `fdev website` versions are unix **seconds** (about 1.8e9). A fresh
 > counter seeded at `1`, or at a River-style value (~3.0e7), is
 > **far below** the stored version, so `update_state` rejects it and every
 > subsequent publish, forever. There is no recovery: you cannot lower the stored
@@ -152,10 +148,10 @@ Only two things, neither of which is a UI release:
 
    If you pin, two practicalities the CLI does not help with:
 
-   - **Do not rebuild the container from source to get the file.** WASM builds
-     are not byte-reproducible, so a rebuild yields different bytes, a different
-     key, and a silent publish to a brand-new URL while you believe you pinned
-     the old one. The WASM is `include_bytes!`-embedded in `fdev` with no export
+   - **Do not rebuild the container from source to get the file.** A WASM
+     rebuild is byte-identical only under a fully reproducible setup, so it
+     usually yields different bytes, a different key, and a silent publish to a
+     brand-new URL while you believe you pinned the old one. The WASM is `include_bytes!`-embedded in `fdev` with no export
      subcommand, so the only correct source is
      `crates/fdev/resources/website_contract.wasm` from the freenet-core repo **at
      the tag matching your `fdev --version`**. Copy it out on day one; if you
@@ -204,23 +200,13 @@ scheme that can't produce a strictly greater number on the second publish. See
 
 ## Size budget
 
-The node enforces a hard `MAX_STATE_SIZE` of **50 MiB** on total state. Above
-roughly 64 MiB serialized you hit a second, far more cryptic failure — a
-WebSocket chunk-count cap reporting `total_chunks N exceeds maximum 256`
-(freenet-core#4653). `fdev website publish` pre-flights the 50 MiB limit so you
-get a clear error instead.
-
-Treat 50 MiB as a wall, not a target. The whole state transfers before the page
-renders, so a fat bundle is felt directly as load latency by every visitor. Serve
-large media from their own contracts rather than packing it into the site
-archive; see "Split a large or frequently updated site" below.
-
-Ignore the larger figure written into the container contracts themselves —
-both freenet-core's bundled website contract and River's declare a
-`MAX_WEB_SIZE` of 100 MiB, which can never bind because the node's 50 MiB cap
-stops you first. freenet-core#4653 tracks these three inconsistent ceilings (50
-MiB store, ~64 MiB transport, 100 MiB contract); the only one to design against
-is 50 MiB.
+The node enforces a hard `MAX_STATE_SIZE` of **50 MiB** on total state;
+`fdev website publish` pre-flights it. Design against 50 MiB and ignore the
+larger `MAX_WEB_SIZE` (100 MiB) in the container contract, which can never bind.
+Treat 50 MiB as a wall, not a target: the whole state transfers before the page
+renders, so a fat bundle is felt as load latency by every visitor. Serve large
+media from their own contracts; see "Split a large or frequently updated site"
+below.
 
 ## Split a large or frequently updated site
 
@@ -298,18 +284,12 @@ URL, and the second one only holds files.
 
 ## Do not build a redirect contract
 
-If your reason for a pointer/redirect/facade contract is *"my URL changes every
-release"* — it doesn't, and the indirection buys you nothing while costing a
-whole extra contract, an extra signing key, a loader page, an iframe navigation
-dance, and a gateway cache-busting step on every release.
-
-There is one narrow case where an indirection is genuinely the answer: you need
-to move an existing audience to a **different contract** — a container WASM
-migration you cannot do with `--contract-wasm`, or a publisher-key rotation. That
-is a rare, deliberate event, not release mechanics. See `facade-pattern.md`.
-Pinning your container WASM (above) removes the first of those two causes, at
-the cost of freezing the container implementation — weigh it there rather than
-reaching for it reflexively.
+A pointer, redirect or facade contract for "my URL changes every release" buys
+nothing and costs a second contract, a second signing key, a loader page and a
+navigation hop. The one narrow case for indirection is moving an existing
+audience to a **different contract**: a container-WASM migration you cannot
+avoid with `--contract-wasm`, or a publisher-key rotation. That is a rare,
+deliberate event; see `facade-pattern.md`.
 
 ## This does not make your *data* contracts stable
 

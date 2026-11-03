@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Executes a risk-tiered, multi-perspective PR review — triages the change, runs specialist subagents in parallel (code-first, testing, skeptical, big-picture) plus an external model pass scaled to risk, then posts a consolidated review to the PR.
+description: Executes a risk-tiered, multi-perspective PR review — triages the change, runs specialist subagents in parallel (code-first, testing, skeptical, big-picture) plus an external model pass, then posts a consolidated review to the PR.
 license: LGPL-3.0
 ---
 
@@ -59,8 +59,7 @@ gh api repos/{owner}/{repo}/pulls/"$PR"/comments   # inline review comments
 ```
 
 The `gh api .../comments` call above is the reliable way to get inline comments —
-they are easy to miss. (If your environment provides a `gh-pr-interactions` skill, it
-documents the comment API in more depth.)
+they are easy to miss.
 
 **Large diffs:** if the diff exceeds ~2000 changed lines or ~40 files, instruct each
 subagent to review by file batches rather than loading the whole diff into context.
@@ -124,74 +123,30 @@ carries its own review methodology; you do not need to supply it.
 
 ## Step 3: External Model Review (runs concurrently with Step 2)
 
-Run this for **both Light and Full** tiers — the external model is the highest-value
-single pass, because its blind spots do not correlate with Claude-authored code.
-Spawn it concurrently with Step 2's subagents. Run a non-Claude model from the review
-worktree, diffing against the PR's base branch (`$BASE`, fetched fresh in Step 1) —
-never a possibly-stale local `main`:
+Run this for both Light and Full tiers. The external model's blind spots do not correlate with Claude-authored code, so it is the highest-value single pass. From the review worktree, diff against the PR's base branch (fetched fresh in Step 1), never a possibly stale local `main`:
 
 ```bash
 codex review --base "origin/$BASE"
 ```
 
-(If your environment provides a `codex-review` skill, it wraps this command.) For a
-Full review of a high-risk PR, add a third independent model when one is available —
-e.g. a `gemini-cli-review` skill or the `gemini` CLI.
+(If your environment provides a `codex-review` skill, it wraps this command.)
 
-### When external models are unavailable — fall back, never skip
+### When the external model is unavailable
 
-External reviewers go down (quota exhaustion, capacity limits, API outages). If
-`codex` fails, try `gemini`; if **both** are genuinely unavailable, do **not** skip the
-independent pass and do **not** fail the review. A `codex review` that returns no
-findings summary, errors out, or reports exhausted budget counts as unavailable — retry
-once, then treat it as down.
+If `codex` errors, returns no findings summary, or reports exhausted quota or capacity, retry once, then substitute a Claude-lens pass and carry on. Never wait for it to come back; the substituted review counts as complete, including before merge or deploy.
 
-**Never wait for an unavailable external model.** Substitute the Claude-lens pass below and carry on, whatever the reset time. Nothing waits for Codex or Gemini to come back, and a substituted review counts as complete wherever a finished review is required, including before merge or deploy.
+The substitute is at least three independent, blind reviewers with distinct adversarial lenses (four or five for a high-risk Full review): skeptical bug-hunt, code-first, and the failure mode specific to this change (wire change: compatibility and serialization; auth: authorization bypass; migration: data loss and rollback). Use the reviewer subagents plus extra lens prompts. If you cannot spawn subagents, run the lenses serially in your own context, one distinct pass each, then synthesize as in Step 5.
 
-Substitute a **diverse-Claude-lens** pass (per `~/.claude/rules/multi-model-review.md`).
-A single extra Claude reviewer is not enough — it shares the author model's blind spots,
-which is the whole reason the external pass exists. Instead spawn **at least three**
-independent reviewers, each with a DISTINCT adversarial lens and each blind to the
-others, scaling to 4–5 for a Full-tier high-risk change:
-
-- *skeptical bug-hunt* — assume bugs exist; hunt races, edge cases, failure modes.
-- *code-first* — read the code before the PR description; flag intent/impl mismatches.
-- *the failure mode specific to THIS change* — e.g. for a wire/protocol change:
-  compat + serialization; for auth: authz bypass; for a migration: data-loss / rollback.
-
-These can be the existing reviewer subagents plus extra adversarial lenses, or
-`general-purpose` subagents with explicit lens prompts. Each reads the actual
-checked-out code and is told NOT to rubber-stamp. Synthesize them the same way as
-Step 5.
-
-**If you cannot spawn subagents** (you are yourself a background or dispatched agent without the Agent/Task tool), do not skip and do not fail the review: run the lenses **serially within your own context** instead — one distinct adversarial pass after another (not a single combined read), then synthesize. Serial-within-self is the required fallback whenever spawning subagents is unavailable.
-
-**Record the substitution in the posted review:** which external models you tried, the
-exact failure (quota / capacity / outage), that you used the Claude-lens fallback, and
-which lenses ran — so a reader can see that independent review happened and why it took
-this form. If an external model happens to become available before merge you may run
-it as one more lens, but do not hold the merge or the review waiting for that.
+Record in the posted review which external model you tried, the exact failure, and which lenses ran.
 
 ## Step 4: Freenet Bug-Pattern Check
 
-Do this for **Full** reviews, and for **Light** reviews whose change has non-trivial
-logic.
-
-When reviewing **freenet-core**, the canonical and continuously-updated bug-pattern
-list lives at `.claude/rules/bug-prevention-patterns.md` in that repo. Read it and
-check the PR against every pattern listed there — it supersedes any snapshot in this
-skill or in the subagent definitions.
-
-Recurring patterns (non-exhaustive — the in-repo file is authoritative): `biased;`
-select starvation, fire-and-forget spawns, incomplete state cleanup on failure,
-backoff without jitter, `.send().await` on bounded channels inside event/recv loops,
-protocol-enum / wire-format breaks for older consumers, paired `Option` fields that
-must co-occur, and manually-mirrored telemetry counters that rot after op migrations.
+Do this for **Full** reviews, and for **Light** reviews whose change has non-trivial logic. For freenet-core, read the sections of `.claude/rules/` that match the paths the PR touches (`code-style.md`, `ring.md`, `transport.md`, `channel-safety.md`, `deployment.md`, `bug-prevention-patterns.md`) and check the PR against them. Those files, not this skill, are the pattern list.
 
 ## Step 5: Synthesize — Reconcile and Verify
 
 When all spawned subagents and the external model pass (or its Claude-lens substitute) have returned, **do not just
-concatenate their reports.** Synthesize:
+concatenate their reports.** Synthesize them with the Step 4 findings:
 
 1. **Deduplicate** — the same finding will surface from multiple reviewers; merge it
    into one entry.
@@ -234,43 +189,9 @@ Produce a consolidated review report:
 
 ---
 
-### Code-First Analysis
-**Independent Understanding:** <what the code appears to do>
-**Stated Intent:** <from PR description>
-**Alignment:** <matches/partially matches/misaligned>
-**Gaps:** <any discrepancies>
+### Lens findings
 
----
-
-### Testing Assessment
-**Coverage Level:** <adequate/insufficient/excessive>
-
-| Test Type | Status | Notes |
-|-----------|--------|-------|
-| Unit | ✅/❌/⚠️ | <details> |
-| Integration | ✅/❌/⚠️ | <details> |
-| Simulation | ✅/❌/N/A | <details> |
-| E2E | ✅/❌/N/A | <details> |
-
-**Regression Test:** <present and valid / missing / insufficient>
-**Missing Tests:** <list specific gaps>
-
----
-
-### Skeptical Findings
-**Risk Level:** <low/medium/high>
-
-| Concern | Severity | Location | Details |
-|---------|----------|----------|---------|
-| <issue> | <high/med/low> | <file:line — verified> | <explanation> |
-
----
-
-### Big Picture Assessment
-**Goal Alignment:** <yes/partial/no>
-**Anti-Patterns Detected:** <list or "none">
-**Removed Code Concerns:** <list or "none">
-**Scope Assessment:** <focused/some creep/significant creep>
+One section per lens that actually ran (code-first, testing, skeptical, big-picture, external model), each containing only findings you verified, with `file:line`, severity and why. The testing lens states whether a regression test fails without the fix. Omit lenses that did not run; say so in "Reviewers run".
 
 ---
 
@@ -315,7 +236,7 @@ Re-run the full review (all of Steps 1–6) if **any** of the following is true 
 - **Three or more "Should Fix" findings** were addressed in aggregate — many small changes compound into substantial new surface area.
 - **Any finding in a high-risk area** was addressed: security, cryptography, state authorization, contract/delegate migration, concurrency, persistence, wire format, deployment.
 - **The diff changed by more than ~30 lines** in response to review, regardless of severity classification.
-- **Conflict resolution during rebase, `git commit --amend`, or any force-push** altered the diff vs. main — this counts as new code even if no review finding prompted it. (See `~/.claude/rules/multi-model-review.md`.)
+- **Conflict resolution during rebase, `git commit --amend`, or any force-push** altered the diff vs. main — this counts as new code even if no review finding prompted it.
 
 When in doubt, re-review. The cost of a second pass is small; the cost of merging unreviewed code is large.
 
@@ -332,36 +253,4 @@ In that case, do a focused diff-of-the-diff check (just the new commits since th
 
 ### How to re-review
 
-1. Confirm CI is green on the **current HEAD SHA**, not the SHA you reviewed last time:
-   ```bash
-   gh pr view <NUMBER> --json statusCheckRollup,headRefOid
-   ```
-2. Re-run all of Steps 1–6 against the new HEAD — re-create the review worktree,
-   re-triage, re-spawn the tier's reviewers, and re-run the external model pass (Step 3's
-   fallback applies; never wait for it). Read
-   the *full* diff again, not just the fix commits — context shifts when code moves.
-   Re-triage against the **whole PR diff vs. base**, not just the fix commits: the
-   tier may rise but never falls below the original review's tier (a PR that needed a
-   Full review does not become Skip because the last fix was one line).
-3. Produce a fresh review report. In the **Verdict** section, explicitly note this is a re-review and reference the prior review's findings: "Re-review after fixes for findings #1, #3, #5 from prior pass — all resolved; one new concern at X."
-4. If the new review surfaces its own significant findings, repeat the cycle. There is no cap on rounds; merge only when a review pass on the current HEAD comes back clean (or with only trivial findings the user accepts).
-
-### What the re-review verdict states mean
-
-The Verdict states (defined in Output Format) are:
-
-- **Ready to Merge** — review pass on current HEAD is clean or only trivial findings remain.
-- **Needs Changes — Re-review Required After Fix** — significant findings exist; author must address them AND a fresh review must run on the updated HEAD before merge.
-- **Needs Changes — Light Re-Check Sufficient** — only trivial mechanical findings; a diff-of-the-diff pass on the fix commits is enough.
-- **Needs Discussion** — design-level disagreement that fixes alone won't resolve.
-
-Never use "Ready to Merge" on the basis of a review whose HEAD SHA differs from the current PR HEAD.
-
-## Quality Standards
-
-- Be thorough but constructive
-- Cite specific files and line numbers — and verify each citation before reporting it
-- Explain WHY something is a problem, not just WHAT
-- Suggest fixes, not just criticisms
-- Acknowledge what's done well
-- Don't nitpick style if it matches codebase conventions
+Confirm CI is green on the current HEAD SHA (`gh pr view <NUMBER> --json statusCheckRollup,headRefOid`), then re-run Steps 1-6 on the new HEAD, reading the full diff, not only the fix commits. Re-triage against the whole PR diff; the tier may rise but never falls below the original. In the Verdict, say this is a re-review and list the prior findings it resolves. Repeat until a pass on the current HEAD is clean; there is no cap on rounds. Never give "Ready to Merge" on a review whose HEAD SHA differs from the PR's current HEAD.

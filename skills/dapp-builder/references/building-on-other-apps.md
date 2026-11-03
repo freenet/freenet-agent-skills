@@ -6,50 +6,18 @@ project's contracts. Everything in `upgrade-and-migration.md` is written from
 the *author's* side. The two problems are different, and solving the author's
 one does not solve yours.
 
-> **Adoption is thin, so check before you build on it.** The mechanism works and
-> is live, but most apps still publish nothing.
+> **Check before you build on it.** Apps that publish pointer records list them,
+> with the author verifying key, in their own `FREENET.md`. River, Delta, Atlas and
+> ghostkeys do today. Take the key from that file, not from a copy elsewhere, for
+> the reason under "`author_vk` is the entire trust anchor". Author keys are not all
+> encoded the same way (`river:v1:vk:`-prefixed base58 or bare hex). All decode to
+> the same 32 raw bytes, and those are what the resolver wants.
 >
-> | app | `app_id` | pointer key |
-> |---|---|---|
-> | River | `river.room-contract` | `Ai4VLoC2jGdhpcB2UU8VPo3efUoxjm1Ju9VKXqRC63Az` |
-> | River | `river.chat-delegate` | `6qF2H5JRPBxbKC45UtPnzdDzyfsejYFW1UwDLGDU66mu` |
-> | Atlas | `atlas.index-contract` | `BwsKx5iDhjBJGDNAPtZbbC9f6twDAUrnb2Yh1D6Wng2K` |
-> | Delta | `delta.site-contract` | `6a8ZBaFft9wVFd1mAWVRRZepXXrnQNzRCD5tqM71hBm5` |
-> | Delta | `delta.site-delegate` | `ES2hnErmSh9Aip4862ZDKQCNvMeryfhj6b7FfpP5qmyZ` |
->
-> That is the complete list as of 2026-08-18, and all five resolve on the live
-> network today. Each app's author verifying key is published in **that app's
-> own `FREENET.md`** — River's, Atlas's, Delta's — and you should **take it from
-> there, not from this table**, for the reason given under "the author key is
-> the whole trust anchor" below. This file deliberately lists only the pointer
-> *addresses*, which are public routing information; the author key is the thing
-> an attacker would want you to read from the wrong place.
->
-> **The author keys are not all encoded the same way**, which will bite you if
-> you write one parser and assume. River's and Delta's are `river:v1:vk:`-prefixed
-> base58 (Delta reuses River's `web-container-tool` encoding; the prefix says
-> nothing about ownership). Atlas's is bare hex. Both encodings decode to the
-> same 32 raw bytes, and it is those 32 bytes the resolver wants.
->
-> Everything else, including ghostkeys, has no record — so for those your
-> resolve returns `NeverPublished` (a real "not found"), the one outcome that
-> *permits* a baked-in key. For these apps the **bundle fetch** at the end of this
-> file is still the better answer, and is what ghostkeys itself does; the
-> permission matters because it is what makes a fallback legitimate at all.
-> **`Unavailable` is not that case**: it means your transport could not tell, and
-> it never licenses the *baked-in* fallback, on an unpublished app or any other.
-> Retry instead. (An earlier version of this
-> paragraph named the two outcomes together, which contradicted both the outcome
-> table below and `may_use_baked_in_fallback`; treating "could not reach it" as
-> "it does not exist" is a free downgrade for anyone who can drop your GET.)
-> Worth noticing that ghostkeys — the app whose re-keys caused the breakage
-> this file exists to prevent — is still in that group, so the reader most likely
-> to reach for a pointer is the one it cannot yet help.
->
-> So: resolve first, and keep the bundle-fetch fallback at the end of this file
-> for the apps that have not published. Both beat a constant compiled into your
-> build, and the fallback stops being needed one app at a time rather than all
-> at once.
+> An app with no record resolves to `NeverPublished`, the one outcome that permits a
+> baked-in key. The bundle fetch under "If the app you depend on has not published
+> a pointer" is still better. `Unavailable` is not that case: your transport could
+> not tell, so retry. Treating "could not reach it" as "it does not exist" is a free
+> downgrade for anyone who can drop your GET.
 
 ## The failure, stated once
 
@@ -61,9 +29,10 @@ with no behaviour change at all. When the app you integrate with re-keys:
 - **Your** reference does not. It is a constant you compiled in. After the
   re-key it addresses an empty namespace.
 
-The failure is silent and it lies to you. Every read comes back looking exactly
-like "this user has nothing stored" — not like an error — because at the
-protocol level those two are indistinguishable. Your error handling cannot help.
+The failure misleads. For a delegate, a node without the old key answers
+`DelegateError::Missing`, and a node that still has it runs the old WASM against
+its old namespace, so anything written since the re-key looks absent with no
+error. For a contract, you read a stale or empty generation.
 
 This is not hypothetical. The ghostkeys delegate re-keyed twice in one day for
 release-hygiene reasons with no behaviour change; every integration broke, and
@@ -75,9 +44,24 @@ they already owned ([freenet/ghostkeys#21](https://github.com/freenet/ghostkeys/
 `upgrade-and-migration.md` searches *backward* from a current key, to recover
 state the author's own users left behind. As an integrator you have the opposite
 problem: you are pinned to a key that is now the *old* one, and there is nothing
-backward about the thing you need to find. Pinning a version of the author's
-crate does not help either — it pins you to *their* view of the key as of their
-release, which is precisely the thing that went stale.
+backward about the thing you need to find. A backward search can even find an
+ancient copy and write it forward onto a retired address. Pinning a version of the
+author's crate does not help either: it pins you to *their* view of the key as of
+their release, which is precisely the thing that went stale. Nor does a build-time
+assertion that a bundled hash is current: it protects the binary when built, not when
+run.
+
+## Check an existing app first
+
+```bash
+# Any hit on another project's key means the app breaks on their next re-key.
+grep -rniE "delegate_key|DELEGATE_KEY|delegate_code_hash|ghostkeys.*delegate" \
+    --include=*.ts --include=*.js --include=*.rs --include=*.json \
+    --include=*.toml . | grep -v node_modules
+```
+
+A hit in a build config, a generated constants file, or a `vite.config` /
+`build.rs` define is the pattern that breaks. Replace it with a runtime lookup.
 
 ## The mechanism: an author-signed pointer
 
@@ -87,18 +71,13 @@ A shared, frozen pointer WASM is addressed at a derivable address per
 contract or delegate. You resolve it at runtime and derive the key you actually
 wanted.
 
-Because the pointer WASM is frozen and its address is derived from the author's
-key plus a name, you need no prior reference to the thing you are addressing —
-which is what makes this work for a third party. The in-state `OptionalUpgrade`
-pointer in `contract-patterns.md` is a different thing: it is per-instance and
-only findable by a client that already holds a reference to *that* contract. The
-`FacadePointer` in `facade-pattern.md` is a third thing again: it moves an
-audience to a different contract, for the author's own users. And
-`freenet_migrate::SuccessorPointer` is a fourth: an older, unrelated primitive
-in the same crate, signing under `freenet-migrate/successor-v1` where the
-pointer contract signs under `freenet-pointer/state-v1`, with a different
-message layout. A signature under one domain never verifies under the other, so
-they are not interchangeable and importing the wrong one compiles.
+Because the pointer WASM is frozen and its address derives from the author's key plus
+a name, a third party needs no prior reference. Three other things share the word and
+are not this. `OptionalUpgrade` is per-instance. `FacadePointer` (`facade-pattern.md`)
+moves an author's own audience. `freenet_migrate::SuccessorPointer` is an older
+primitive signing under a different domain: importing it compiles and never verifies.
+New integrations should not use it.
+
 
 Mechanics, wire format, and the operational requirements are in the contract's
 own README — do not restate them here, or the two copies drift:
@@ -119,14 +98,12 @@ for months, so the contract generation compiled into it silently becomes older
 than the live one. Anything a user installs, vendors, or bundles is in this
 group, and so is any server or bot deployed on its own schedule.
 
-You are NOT pinned, on engineering grounds alone, if you are rebuilt and
-redelivered whenever the thing you address changes. A Freenet web app is the
+You are NOT pinned, on engineering grounds alone, if you own the thing you address
+and are rebuilt and redelivered whenever it changes. A Freenet web app is the
 usual example: it ships inside a web container republished in place, and changing
 the contract forces a UI rebuild and republish, so the UI's idea of "current"
 cannot lag reality. Resolving your own artifact's pointer there is close to
 circular, since the answer is already compiled into you.
-
-Two things make this test sharper than it first looks.
 
 **Vendoring a copy is the same trap with an extra step.** Committing another
 project's WASM into your repo pins you exactly as hardcoding its key would, and
@@ -134,33 +111,15 @@ it looks like a build artifact rather than a stale reference. One app in this
 ecosystem vendored a delegate that was six generations and three months stale,
 and registered it on every startup.
 
-**A backward-searching recovery cannot rescue a stale anchor.** If your migration
-walks *older* generations from where you think "current" is, and your idea of
-current is itself out of date, the live state is FORWARD of everywhere you will
-look. You will not merely miss it; you may find an ancient copy and write it
-forward onto a retired address. A build-time assertion that your bundled hash is
-current cannot help here, because it protects the binary when it is built, not
-when it is run.
+### Exception: River's UI
 
-### The deliberate exception: River's UI
+River's UI resolves its pointer anyway, on purpose: it is the reference app, and it can
+ship a contract upgrade without republishing the UI. If you copy that, copy its
+constraint. Resolving forward means an old copy of your app can meet a newer artifact,
+and an old client that parses new state, drops what it does not understand and writes
+back destroys those fields while reporting success. **Refuse to write to a generation
+you do not recognise, and stay read-only until reloaded.**
 
-River's UI resolves its pointer even though the test above says it does not need
-to. That is a considered decision by the project lead, not a counterexample, and
-the reason is that River's UI is the reference people read when learning to build
-Freenet apps: it should demonstrate the mechanism it recommends. It also buys a
-real capability, shipping a contract upgrade without republishing the UI.
-
-If you copy that choice, copy its constraint too. Resolving forward means an old
-copy of your app can meet a NEWER artifact, which inverts the compatibility
-direction: ordinarily new code reads old state, and here old code must cope with
-new state. The dangerous half is not reading but WRITING, because an old client
-that parses new state, silently drops what it does not understand, merges and
-writes back has destroyed those fields while reporting success.
-
-The bound worth adopting is the one in the outcome table below: **refuse to write
-to a generation you do not recognise, and stay read-only until reloaded.** That
-removes the round-trip destruction without requiring you to promise forward
-compatibility forever.
 
 ## Resolving one
 
@@ -194,26 +153,16 @@ subscriptions are dropped silently across reconnects.
 `resolve_app_pointer` drives a `PointerIo` you implement, and two properties of
 that implementation are load-bearing.
 
-**Its result type is three-way on purpose.** `PointerFetch` is `State` /
-`Absent` / `Unreachable`, and `Absent` means *you asked and were told no* —
-never a timeout, a send failure, or a malformed reply, all of which are
-`Unreachable`. Wire it as a two-way `Option` and you collapse those two, which
-means you can never reach `NeverPublished` and have silently deleted the only
-outcome that unlocks your fallback. This is the same mistake as `ProbeAnswer`'s
-on the backward side (freenet-migrate#19), in the same crate, for the same
-reason. An empty response body must never reach `Absent` either: those bytes came from a
-peer, and the contract rejects empty state as invalid. The crate enforces this
-itself — an empty `State(vec![])` is turned into `PointerOutcome::Unavailable`
-rather than `NeverPublished` — so the rule to keep is that only a real
-"not found" may ever be reported as `Absent`.
+**Its result type is three-way on purpose.** `PointerFetch` is `State` / `Absent` /
+`Unreachable`. `Absent` means you asked and were told no. A timeout, a send failure or
+a malformed reply is `Unreachable`. Collapse them into an `Option` and you can never
+reach `NeverPublished`. Only a real "not found" may be reported as `Absent`.
 
 **The GET must not request the contract code.** The 100-byte record is the whole
-answer; the pointer's own WASM is around 130 KB, and fetching it on every
-resolve is pure waste. This is the one reason `PointerIo` exists as its own
-trait rather than reusing `ProbeIo`, whose GET *does* request the code because a
-backward probe needs it. `ConservativeProbeIo` adapts a `ProbeIo` you already
-have and is fine for reusing plumbing, but it inherits that cost — implement
-`PointerIo` directly for anything that resolves often.
+answer and the pointer WASM is about 130 KB. `ConservativeProbeIo` adapts an existing
+`ProbeIo` but inherits that cost, so implement `PointerIo` directly for anything that
+resolves often.
+
 
 ### Four things people get wrong
 
@@ -264,26 +213,12 @@ version, your floor stays at the pre-withdrawal value and any peer can serve a
 real, validly signed pre-withdrawal record that resurrects code the author
 explicitly withdrew.
 
-**How durable does the floor need to be? At least as durable as whatever it
-guards, and stored next to it.** "Persist it" is not a strong enough
-instruction, because it invites `localStorage`, which an attacker can clear and
-a user can clear by accident. Use this test instead: a floor that outlives the
-thing it protects is merely wasteful, while a floor that dies before it is a
-hole, because clearing the floor is exactly as good to an attacker as defeating
-it. So a resolver holding nothing but a cached address can keep its floor
-wherever that address lives, and a consumer using the record to gate access to
-secrets must keep the floor in the same store as those secrets. Co-location is
-the point: the two must be lost together or not at all, or "clear the floor,
-then replay an old record" becomes a working attack.
-
-The corollary is reassuring, and worth stating so nobody builds a defence
-against it: a freshly installed OLD version cannot be exploited this way. That
-instance starts with an empty floor AND an empty store, so there is nothing to
-steal. The floor and the data it guards are born together; the danger is only
-in separating them afterwards.
-
-(Rule contributed by the delegate-succession work, where the record gates a
-transfer of secrets rather than naming an address.)
+**Keep the floor at least as durable as what it guards, and next to it.** Not
+`localStorage`, which an attacker or a user can clear. A floor that dies before the
+thing it protects is a hole, because clearing it is as good as defeating it. A
+resolver holding only a cached address can keep the floor with that address. A
+consumer using the record to gate access to secrets must keep the floor in the same
+store as those secrets, so the two are lost together or not at all.
 
 **4. Handle every arm.** `PointerOutcome` has seven variants and only two carry
 a record. The tempting shape
@@ -338,55 +273,66 @@ user has no data".
 
 ## What the pointer does NOT give you
 
-**It solves addressing only.** It tells you where the artifact is now. It says
-nothing about whether the state or secrets held under the previous key survived
-the move, and assuming they did produces a bug that looks like "this user has no
-data" rather than an error.
+**It solves addressing only.** It says where the artifact is now, and nothing about
+whether state or secrets under the previous key survived. Delegate secrets move only
+when the app's own UI has run on that user's node, so you can resolve perfectly,
+derive the right key and still find an empty namespace. See `delegate-migration.md`.
 
-Be concrete about it: a design review of River found (as of 2026-08) that
-delegate secrets written to its dedicated secure namespace do **not** survive a
-delegate re-key, while secrets written to its readable blob do, because the
-migration probe only reaches the latter — and River re-keys roughly weekly. So
-an integrator who resolves River's delegate pointer correctly, and then assumes
-the user's secrets came with it, will be wrong for every secret in that
-namespace. Resolving the pointer correctly is necessary for a safe upgrade and
-nowhere near sufficient.
+**Treat "the data arrived" as a separate claim needing its own evidence.** Never
+infer it from a successful resolve or from the mover reporting success. Say "could
+not find your data", not "you have none".
 
-Worse, the gap can be **silent on both sides**, so neither you nor the app you
-depend on learns anything went wrong. Freenet's host-side secret enumeration is
-best-effort by design, and its own source says so: `list_secret_keys` calls
-`unwrap_or_default()` on an unreadable key registry, so it returns an **empty
-list** rather than an error, and `register_key` can store a value while
-declining to register it (an unreadable registry, or a 4096 live-key ceiling),
-warning only on the node. So a handover that enumerates what it holds, ships
-what it finds, and reports success can move a subset and be unable to tell.
-Resolve the pointer perfectly, derive the right key, receive an honest success,
-and still find data missing, with no error anywhere and nothing the user can
-inspect. (Verified in `secrets_store/store.rs` as of 2026-08. Neither River nor
-ghostkeys is exposed today, because both use their own app-level protocols
-rather than host enumeration; a design that enumerates directly is.)
-
-The rule that falls out: **treat "the data arrived" as a separate claim needing
-its own evidence.** Never infer it from a successful resolve, and never infer it
-from the mover reporting success either.
-
-What you *do* get, and it is the thing that was missing in the ghostkeys
-incident, is the ability to tell **"the thing I was built against moved"** apart
-from **"this user has no data"**.
+What you do get, and what was missing in the ghostkeys incident, is the ability to
+tell "the thing I was built against moved" apart from "this user has no data".
 
 ## If the app you depend on has not published a pointer
 
-Today that is the common case, so expect to need this. Ask them to publish one.
-Until they do, the field-proven fallback is to fetch their current key at
-runtime from something whose address *is* stable — typically a file inside their
-webapp bundle, since a web container's id is derived from fixed WASM and fixed
-params, so publishing a new version changes its state and not its id. That
-pattern, its CSP/CORS behaviour inside a sandboxed webapp, and its three rules
-are in `delegate-patterns.md` → "Depending on Someone Else's Delegate".
+Ask them to publish one. Until they do, the fallback is to fetch their current key at
+runtime from something whose address is stable, typically a file inside their webapp
+bundle. A web container's id is derived from fixed WASM and fixed params, so publishing
+a new version changes its state and not its id. ghostkeys publishes such a file
+alongside its pointer:
+
+```js
+const VAULT = 'DLog47hEsrtuGT4N5XCeMBG45m4n1aWM89tBZXue2E1N';  // ghostkeys vault
+const { delegate_key_bytes, code_hash_bytes } =
+  await (await fetch(`/v1/contract/web/${VAULT}/delegate-key.json`)).json();
+```
+
+This works from inside a sandboxed webapp: the gateway serves bundle files with
+`Access-Control-Allow-Origin: *`, and the sandbox CSP permits `connect-src` to the
+gateway origin. `localStorage` throws in that frame, so a webapp's durable client
+state, migration markers included, has to live in the delegate's secret store.
+
+Three rules:
+
+- **Re-fetch on load, cache only for the session.** Persisting it recreates the
+  problem with extra steps.
+- **On a failed fetch, do not fall back to a stored key.** The webapp and the
+  delegate are published together, so a node lacking one almost certainly lacks
+  the other. "Not available on this node" is the honest reading.
+- **You still hardcode one constant**, the webapp contract id. That is a smaller
+  exposure, not zero: it would move if the *web container contract* were upgraded,
+  which is a much larger and more visible event than a delegate re-key.
 
 It works, and it needs no new infrastructure. What it does not give you is
 anything *your* code verifies: no signature you check client-side, no
 anti-rollback floor, and no way for the author to say "withdrawn".
+
+## Reading delegate errors on the client
+
+The client-side `DelegateError` (from `freenet-stdlib`, distinct from the
+`DelegateError` your delegate's `process` returns) is what tells you *why* a
+request did not work. Two variants are worth branching on:
+
+| Variant | Means | What to do |
+|---|---|---|
+| `Missing(key)` | that delegate is **not registered** on this node | almost always a stale hardcoded key. Tell the user the app needs updating, and tell yourself: this is not "the user has no data" |
+| `ExecutionError(msg)` | includes rate limiting after repeated failures | transient. Back off and retry; the message carries the delay |
+
+**Do not treat `Missing` as proof the user has nothing stored.** `UnregisterDelegate`
+removes a delegate's code while leaving its secrets in place, so a node can report
+"no such delegate" while still holding data under it.
 
 ## If you are the author
 
@@ -398,31 +344,28 @@ your own re-keys, and it costs one signed 100-byte record per release.
   Charset is lowercase `[a-z0-9._-]`, 1–64 bytes.
 - **Publish your `author_vk` in your `FREENET.md`.** It is your integrators'
   trust anchor and they are told to take it from there.
-- **The author key is a long-lived identity.** Keep it offline; it is not a
-  per-release key and there is deliberately no delegated signing.
+- **Keep what you publish in step with what it names.** If you also publish a key
+  file, write it in the same operation that changes the key, and gate the publish on
+  the two agreeing.
+- **Batch version bumps with functional changes.** A bump alone re-keys the artifact
+  for nothing.
+- **The author key is a long-lived identity.** There is no delegated signing, and
+  rotating it moves every pointer address, so keep it offline if you can. River,
+  Delta and ghostkeys reuse their web-container key and say so in `FREENET.md`; do
+  the same if you reuse yours.
 - **Gate `version` on a single committed monotonic counter**, the way a
-  web-container version counter works — never a wall-clock timestamp. The
-  contract's own docs give burning the version space as the reason ("an author
-  deriving `version` from a timestamp would land there", i.e. at the reserved
-  `u32::MAX`); a Unix *seconds* timestamp is only about 42% of `u32::MAX` today,
-  so the immediate harm is less that you hit the ceiling than that you can never
-  go back down and have thrown away most of the range. Either way a counter is
-  the answer.
+  web-container version counter works, never a wall-clock timestamp. You can never
+  go back down, so a timestamp throws away most of the version space.
 - **Re-read the pointer after publishing and confirm the version and code hash
   are the ones you meant.** A publish at an already-used version is a silent
   no-op *success* — the contract deliberately does not error on a stale update,
   because that would turn ordinary anti-entropy from a behind peer into a merge
   failure. The network will never tell you your release was ignored.
-- **If you lose the counter's store, recover the version from the network, and
-  only from a record that verifies under your own key.** A counter that restarts
-  makes every later publish a no-op success, freezing the pointer at a
-  generation you are no longer writing to. Adopting an *unverified* read-back is
-  the opposite failure and is worse: nobody else can move your pointer, since
-  only your key signs a record the contract accepts, so a peer that answers with
-  a forged high version simply gets **you** to sign the next one just below the
-  ceiling. `MAX_POINTER_VERSION` is `u32::MAX - 1` because `u32::MAX` itself is
-  reserved: a record there could never be superseded. Monotonicity means you
-  cannot walk a version back down.
+- **If you lose the counter's store, recover the version from the network, only
+  from a record that verifies under your own key.** A restarted counter makes every
+  later publish a no-op success. Adopting an unverified read-back is worse: a forged
+  high version gets you to sign the next record just below the ceiling, and you
+  cannot walk it back down.
 - **PUT the committed, published WASM artifact; never a local rebuild.** A local
   rebuild puts your pointer at an address nobody else derives: invisible to every
   consumer, and indistinguishable from success on your side.
@@ -432,12 +375,9 @@ your own re-keys, and it costs one signed 100-byte record per release.
 
 ## Cross-references
 
-- `delegate-patterns.md` → "Depending on Someone Else's Delegate" — the
-  webapp-bundle fallback and how to read `DelegateError` on the client.
-- `upgrade-and-migration.md` — the author-side playbook, including the pointer
+- `upgrade-and-migration.md`: the author-side playbook, including the pointer
   as a stable identity anchor.
-- `contract-patterns.md` — the in-state `OptionalUpgrade` pointer, a different
-  mechanism for a different reader.
-- `facade-pattern.md` — the `FacadePointer`, a third mechanism again, for moving
-  your own audience to a different contract.
-- freenet-core#2776 — live adoption status.
+- `delegate-migration.md`: moving delegate secrets across a re-key.
+- `facade-pattern.md`: the `FacadePointer`, a different mechanism, for moving your
+  own audience to a different contract.
+- freenet-core#2776: live adoption status.

@@ -1,8 +1,6 @@
 # State Authorization & Replay Protection Patterns
 
-Hard-won patterns for designing contract state that satisfies the "every piece of data in contract state must be cryptographically authorized" rule. These are cross-cutting concerns that bite when you build your second or third contract; capturing them here so future dApp authors don't relearn them.
-
-If your contract holds state contributed by multiple parties, or state that one party controls but other parties read, this file is for you.
+Patterns for contract state contributed by several parties, or controlled by one party and read by others. Every piece of data in contract state must be cryptographically authorized.
 
 ## Authentication Patterns
 
@@ -23,7 +21,7 @@ pub struct InboxMessage {
     pub timestamp: u64,
     pub ciphertext: Vec<u8>,
     pub signature: Signature,  // sender signs canonical bytes of the message
-    pub room_context: ContractInstanceId,
+    pub room_owner: MemberId,  // names the room of the membership claim
 }
 ```
 
@@ -56,7 +54,7 @@ pub struct RecipientState {
 }
 ```
 
-Used for: River's room `Configuration`, the inbox's recipient-controlled state, owner-managed metadata.
+Used for: River's room `Configuration`, a mailbox's recipient-controlled state, owner-managed metadata.
 
 Adding a new field to a bundled-signed struct doesn't require new per-field auth — the wrapping signature covers it. It does require care with the *encoding*: `#[serde(default)]` alone lets old bytes decode, but re-encoding an existing record now emits the new key and invalidates the signature over it. Add `skip_serializing_if` as well; see "`#[serde(default)]` is not enough when a signature covers the encoding" under Wire-Format Stability, which is exactly this case.
 
@@ -107,7 +105,7 @@ Counter goes in the bytes covered by the signature, so signatures are bound to a
 
 ### Tombstones
 
-For "forgotten but must not return" state. River bans persist as tombstones: while the ban is held, a banned member's record is dropped on every merge, including after a re-invitation. The inbox's purged list works the same way: explicitly-purged messages can't be re-submitted.
+For "forgotten but must not return" state. While a ban is held, a banned member's record is dropped on every merge, including after a re-invitation. A mailbox's purged list works the same way: while the entry is held, a purged message can't be re-submitted.
 
 ```rust
 pub struct RecipientState {
@@ -118,19 +116,80 @@ pub struct RecipientState {
 }
 ```
 
-Bound the tombstone list. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full.
+A list suppressing something you can afford to see again, like this one, can be bounded. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full.
 
-That eviction is arrival-ordered, which "A Value One Party Supplies…" below and the order-independence rule under State Size Budget both otherwise forbid, so note what makes it legal here: **no peer ever re-derives the order.** `RecipientState` is a single-writer, version-stamped envelope that the recipient re-signs in full, and the merge is last-writer-wins on that whole envelope — so peers copy the recipient's chosen list rather than each computing their own. Write `purged` as a set the merge *unions* instead, which is the more natural CRDT reflex, and the eviction stops working: every evicted tombstone comes back from any peer still holding an older copy, so the list is unbounded in practice and you are in the State Size Budget trap below. (Note which way that fails — the resurrected tombstone keeps suppressing its message. Losing the suppression is what a *successful* eviction costs, and that is the risk the LWW-envelope design accepts deliberately.)
+That eviction is arrival-ordered, which is legal here only because no peer
+re-derives the order: `RecipientState` is a single-writer envelope the recipient
+re-signs in full, and the merge is last-writer-wins on the whole envelope, so
+peers copy the recipient's list. Losing the suppression is what a successful
+eviction costs, and that is the risk this design accepts deliberately. If the
+merge unions `purged` instead, every evicted tombstone returns from any peer
+holding an older copy, and the list is unbounded in practice.
+
+**A removal tombstone must never be evicted, whichever merge the list uses.** In
+a last-writer-wins envelope, eviction lets the removed item return from a peer
+holding older state. In a unioned list, the evicted tombstone itself returns and
+the list never shrinks. Size the state to hold every removal, or shard.
+
+### Removing Illegal Material
+
+Any system showing content other people published needs a way to identify and remove illegal
+material, or it risks delisting from Atlas and having its links banned from the Freenet Official
+River room, for most dApps the main ways new users find them. This matters most for images and
+video, where the worst material (child sexual abuse material above all) is found. An app letting
+strangers publish media needs this working before launch.
+
+**Identifying it.** Which approach fits depends on the service, so choose with the developer:
+
+- **Curated publishing:** the author or a small set of trusted keys are the check. Only fits a
+  curated site, not one open to strangers.
+- **Moderators who watch the content** and remove what breaks the rules. River rooms rely on
+  this: the owner, anyone above a member in the invite chain, or a deputy can ban that member.
+- **User reports:** a Report action sending the item's id and a reason to whoever moderates,
+  usually through a report-inbox contract. Suits open services. A report inbox nobody reads is
+  worse than none, because users believe they have told someone.
+
+**Removing it.** Where the moderator's key can write to the contract holding the content, it
+tombstones the item: keep a hash of the media bytes, drop the bytes, and drop any item with that
+hash on every later merge. The tombstone hashes the media bytes alone, unlike a Record Identity
+id (`contract-patterns.md`), which covers every term of the record, so the same bytes cannot
+return inside a new record. If the item is simply deleted, the next merge with a peer holding
+older state brings it back. Never evict a removal tombstone (see "Tombstones"). Design this in
+from v1: adding it after launch means a contract upgrade.
+
+Where the moderator cannot write there (content in user-owned contracts, an open index, or a
+separate asset contract), publish an author-signed denylist contract the UI reads, and filter
+before rendering.
+
+Be accurate with users: removal drops the item from current state and from every UI honouring
+it, but does not erase copies peers already hold. Say "removed", not "deleted from the network".
+
+**Consider gating reports with ghost keys.** Junk reports bury real ones, and mass false reports
+are a cheap way to take down legitimate content. A ghost-key signature on each report makes
+volume cost money that better hardware does not reduce, keeps the reporter anonymous, and lets
+the moderator weigh reports by donation amount and key age and ignore a key that has filed
+reports in bad faith. Keep the signature with the report and verify it in `validate_state`,
+because a PUT to a peer not yet holding the contract runs validation only, and filter in
+`update_state` so a bad report is skipped, not refused (`sybil-resistance.md` → "Integration
+sketch"). This is a suggestion: reporting illegal
+material should not cost money, so offer slow proof-of-work as the free fallback
+(`sybil-resistance.md` → "Cryptographic CAPTCHA") and relay the caveats there.
 
 ### Cross-Context Binding
 
-Include the contract identity (or recipient/room) in bytes covered by every signature. Without this, a signed payload valid for inbox-A can be replayed against inbox-B if both share enough state structure.
+Bind an anchor in the bytes covered by every signature. Without one, a signed payload valid for inbox-A can be replayed against inbox-B if both share enough state structure.
+
+The anchor must name this instance across re-keys, and the verifier takes it from parameters, never from the record. If the record also carries it as a field, the verifier compares that field against the parameters.
+
+- A signer's own key never counts: Ed25519 already binds it.
+- An owner key counts only if the parameters are that key alone. An app-chosen id in the parameters is the general form.
+- Never bind a `ContractInstanceId`. It moves on every re-key, so every record would fail verification under the successor.
 
 ```rust
 pub fn build_signed_payload_bytes(
     sender: MemberId,
-    recipient_vk: &VerifyingKey,        // <-- binds to this inbox
-    room_context: &ContractInstanceId,  // <-- binds to membership claim
+    recipient_vk: &VerifyingKey,  // <-- anchor: from parameters, binds to this inbox
+    room_owner: MemberId,         // <-- binds to membership claim
     timestamp: u64,
     ciphertext: &[u8],
 ) -> Vec<u8> {
@@ -202,7 +261,7 @@ pub fn build_signed_payload_bytes(...) -> Vec<u8> {
     let mut out = Vec::with_capacity(...);
     out.extend_from_slice(&sender.to_le_bytes());        // fixed-length
     out.extend_from_slice(recipient_vk.as_bytes());       // 32 bytes
-    out.extend_from_slice(room_context.as_bytes());       // 32 bytes
+    out.extend_from_slice(&room_owner.to_le_bytes());     // fixed-length
     out.extend_from_slice(&timestamp.to_le_bytes());      // 8 bytes
     out.extend_from_slice(&ct_len.to_le_bytes());         // 4 bytes
     out.extend_from_slice(ciphertext);                    // variable, length-prefixed
@@ -214,15 +273,17 @@ State itself can still use CBOR (via `ciborium`) — only the bytes that go thro
 
 ### Length-Prefix Variable-Length Fields
 
-Without an explicit length prefix, an attacker can submit a truncated ciphertext and the verifier may compute different bytes than the signer did. Always: `len_le_u32 || bytes`.
+Two adjacent variable-length fields with no prefix can be re-split: `("ab", "c")`
+and `("a", "bc")` sign the same bytes, so one signature covers two different
+records. Always `len_le_u32 || bytes`.
 
 ### Bind All Relevant Context
 
 The signed bytes should commit to:
 
 - **Sender identity** (cryptographically redundant with using sender's VK to verify, but explicit binding removes ambiguity and matches River's other signed structs).
-- **Recipient/inbox/contract identity** (prevents cross-instance replay).
-- **Logical scope** (e.g., room_context — prevents membership-claim swap).
+- **Instance anchor** from the parameters, never a `ContractInstanceId` (prevents cross-instance replay; see "Cross-Context Binding").
+- **Logical scope** (e.g., `room_owner`, which prevents membership-claim swap).
 - **Timestamp** (replay window for new admissions).
 - **Content** (the actual payload).
 
@@ -230,43 +291,24 @@ If a field is in state and matters, it should be in the signed bytes.
 
 ### Hard-Code Expected Hex in Wire-Format Round-Trip Tests
 
-A test that round-trips its own output catches nothing — `serialize → deserialize → equals input` always passes regardless of encoding changes. Lock the format with a hex constant:
-
-```rust
-#[test]
-fn inbox_wire_format_locked() {
-    let inbox = canonical_test_inbox();
-    let bytes = serialize(&inbox);
-    const EXPECTED_HEX: &str = "a16d6573736167657381a467...";
-    assert_eq!(hex::encode(&bytes), EXPECTED_HEX);
-
-    // Round-trip too, just to catch deserializer asymmetry:
-    let parsed: Inbox = deserialize(&bytes).unwrap();
-    assert_eq!(parsed, inbox);
-}
-```
-
-This catches accidental serde attribute drift, ciborium version bumps that change canonical output, and field reordering.
+A test that round-trips its own output catches nothing — `serialize → deserialize → equals input` always passes regardless of encoding changes. Paste the expected bytes as a hex constant, assert against it, and round-trip as well to catch deserializer asymmetry. This catches accidental serde attribute drift, ciborium version bumps that change canonical output, and field reordering.
 
 ## Time Handling
 
 ### Contracts Must Not Read the Host Clock
 
-`freenet_stdlib::time::now()` — the `freenet_time::__frnt__time__utc_now` import — is **deprecated for contracts** as of freenet-core **v0.2.132**. Do not call it from a contract.
+`freenet_stdlib::time::now()` (the `freenet_time::__frnt__time__utc_now` import)
+is deprecated for contracts. `update_state` must be a function of its inputs,
+and a clock read makes it a function of the evaluating peer: two peers whose
+clocks differ can produce different states from the same delta, and neither is
+wrong. A node warns when it loads a contract that imports the clock, and
+`fdev verify-merge` reports a `host_clock_import` code diagnostic, which never
+fails the command. stdlib has no deprecation warning, so fdev is the check. The
+plan (freenet-core#5465) is that a call will trap; the contract still loads, so
+one that imports the symbol without reaching it needs no rebuild or re-key.
 
-The reason is not stylistic. `update_state` has to be a function of its inputs, because that is what makes replicas converge: two peers given the same updates in any order must arrive at the same state, and the merge laws are the statement of that requirement. A merge that reads the wall clock is not a function of its inputs, so the merge laws are not merely *violated* by such a contract — they are not well-formed statements about it. Two peers whose clocks differ by eleven minutes can produce different states from the same delta, and neither of them is wrong.
-
-What v0.2.132 does, exactly:
-
-- A node logs a warning the first time it loads a contract whose WASM imports the clock, naming the contract key.
-- `fdev verify-merge` reports a `host_clock_import` code diagnostic.
-- **Nothing traps, nothing refuses to load, and no deployed contract broke.** The call still returns a real time.
-
-What comes next (freenet-core#5465): the call is staged to **trap** in a future release. The contract still loads; any actual *call* to the clock fails that operation. Trapping is per-call, so a contract that imports the symbol without ever reaching it keeps working and needs no rebuild or re-key — which matters, because a re-key moves the contract's address, and for a web container that is link rot rather than a republish.
-
-Both the warning and the diagnostic are **import**-level, so a module that links the symbol without calling it is reported too. That superset is deliberate: a call cannot happen without the import, so nothing will trap that was not warned about first.
-
-**Delegates are unaffected** and may keep reading the clock. A delegate holds private per-node state, is never replicated, and has no merge laws, so a clock read in one raises no convergence question at all. Hourly rate limiting inside a delegate is fine.
+**Delegates are unaffected.** A delegate holds private per-node state, is never
+replicated, and has no merge laws.
 
 ### Instead: A Signed Timestamp in State, Checked Only for Monotonicity
 
@@ -285,8 +327,6 @@ let next = if incoming_wins { incoming_state } else { current_state };
 Ok(UpdateModification::valid(next))
 ```
 
-`freenet-weather` uses this shape for its timing: `BeaconState.timestamp_ms` is signed by the announcing client and there is no clock call anywhere in the contract. Its `update_state` does return `Err` for a state that is not newer, which the code above avoids (see `merge-law-compliance.md` → "A validly signed record never makes a merge fail").
-
 **Be clear about what this loses.** A client-supplied timestamp is an *untrusted hint*. It is fine for ordering and ranking, and it cannot do the anti-grief job a host-clock skew check was doing, because the party asserting the time is the party being checked — set it far in the future and the check passes. Swapping in a client timestamp while still treating it as authoritative moves the bug rather than fixing it.
 
 The two shapes that show up in practice:
@@ -298,59 +338,31 @@ The two shapes that show up in practice:
 
 ### Skew Checks Against the Host Clock Are Out, Both Directions
 
-An earlier version of this file blessed a **future-skew** check: reject a message timestamped more than K ahead of the host clock. That is exactly the pattern being removed — the #5465 census found it in every clock-importing contract measured on the network — and it is not rescuable by handing the contract the operation's timestamp instead, because an originator-supplied `now` is attacker-controlled: set it high and the check passes. Determinism and trustworthiness are in direct conflict for this check, and a contract needs the trustworthy one, which means the check does not belong inside the merge at all.
+**Future skew.** Rejecting or pruning a message timestamped ahead of the host
+clock makes the result a function of which peer evaluated it. Handing the
+contract an operation timestamp does not rescue this, because the originator
+sets that value. The check does not belong in the merge.
 
-```rust
-// DON'T DO THIS — the host clock makes the result a function of which peer
-// evaluated the update:
-if message.timestamp > host_now() + MAX_FUTURE_SKEW_SECS {
-    return Invalid;
-}
-```
+**Past skew, and any rule whose truth expires.** Never put a time-derived
+rejection in `validate_state`: it makes state you already hold retroactively
+invalid. Thirty days after a mailbox's oldest message arrives, the mailbox stops
+validating. Peers refuse it and every change to it fails, because
+`validate_state` also gates the state `update_state` returns. An update that
+drops the message lands, but the next-oldest crosses the window soon after, so
+the freeze re-arms. Every peer's copy aged the same way, so no valid donor state
+exists. Worse, when a merge fails on a locally-invalid state, the node replaces it
+with any valid full state it is sent (freenet-core#3109), so the state can be taken
+away.
 
-Rejecting is the mild version. Of the deployed contracts measured for #5465, 11 silently **prune** future-dated entries inside `update_state`, so the resulting state is a function of the evaluating peer's clock — the exact defect class conformance exists to detect, produced by the capability rather than caught by it.
+Replay protection for old messages uses signature-based dedup and tombstones,
+never a time window in `validate_state`.
 
-A **past-skew** check on stored state was always worse, for a reason independent of clocks that still applies to any time-derived rejection in `validate_state`: **a rule whose truth expires makes state you already hold retroactively invalid.** Thirty days after an inbox's oldest message arrives, that inbox stops validating. It is then refused by every peer it is sent to, and every attempt to modify it fails too, because `validate_state` gates the state `update_state` returns as well as the state arriving.
+### On Native Targets `time::now()` Is Undefined Behaviour
 
-An update that *drops* the offending message produces a state that passes and commits, so this is not an instant dead end. What makes it permanent is that the freeze **re-arms**: purge the oldest message and the next-oldest crosses `MAX_PAST_SKEW_SECS` shortly after, so anything short of a prune cycle faster than the window puts you straight back. And unlike the size-cap case there is no help from outside, because **every peer's copy aged into the same condition independently** — there is no valid donor state anywhere in the network to recover from.
-
-Worse, a node may take the state away rather than merely refuse it: a locally-invalid state is what a node's corrupted-state recovery keys on, and it can replace the whole thing (freenet-core#3109).
-
-Do not read the size-cap trap under State Size Budget as the same failure. There the held state is *valid* — it was validated when it was committed, it propagates, and the contract has merely run out of room. Here the held state is invalid, which is what makes it unpushable and what puts that recovery in reach. One wants a prune added; the other wants the rule removed.
-
-Replay protection for old messages should use signature-based dedup (signatures are unique per message) and tombstones — never a time window on `validate_state`.
-
-### Checking a Contract
-
-```bash
-fdev verify-merge --wasm your_contract.wasm --params params.bin \
-  --state s1.bin --state s2.bin
-```
-
-Pass the contract's parameters with `--params`: without it fdev uses empty parameters, a contract whose parameters do not decode from empty bytes, or fail its checks, rejects or fails on every state, every case comes back inconclusive, and the command still exits 0.
-
-It reports a `host_clock_import` **code diagnostic** when the module imports the clock. That is a diagnostic about the code, not a law the contract broke: it does not fail the command, and it is never grounds for removing a contract from the network. The node's warning and this diagnostic come from the same detector, so the developer-facing answer and the node-facing answer cannot disagree.
-
-The bare form — `fdev verify-merge --wasm your_contract.wasm`, no corpus — still prints the clock diagnostic (on stderr), then exits non-zero asking for at least one `--state` or `--transition`. That failure is about the missing corpus, not about the clock.
-
-### The Native Stub Is UB — Now a Delegate Concern
-
-A contract should not be calling `time::now()` at all, which makes this moot there. For **delegate** code, which may still read the clock: the non-WASM stub at `freenet-stdlib/rust/src/time.rs` leaves a `MaybeUninit<DateTime<Utc>>` unwritten and then `assume_init()`s it — undefined behavior on native targets. A host-side test that compiles your delegate for the native target and calls `now()` is reading uninitialized memory. Gate the call and give native tests an override:
-
-```rust
-fn host_now_ts() -> u64 {
-    #[cfg(target_family = "wasm")]
-    {
-        freenet_stdlib::time::now().timestamp() as u64
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        test_clock::get_or_wall_clock()
-    }
-}
-```
-
-The contract deprecation is enforced entirely node-side; nothing in stdlib changed, so there is no compiler warning to catch a contract that still calls the clock. `fdev verify-merge` is the check.
+Delegates may read the clock, but stdlib's non-WASM stub leaves the value
+uninitialized and then `assume_init()`s it, so a host-side test that calls
+`now()` reads uninitialized memory. Gate the call on
+`cfg(target_family = "wasm")` and give native tests an override.
 
 ## Related-Contracts Mechanism
 
@@ -362,22 +374,44 @@ fn validate_state(
     state: State<'static>,
     related: RelatedContracts<'static>,
 ) -> Result<ValidateResult, ContractError> {
-    // First pass: if room_context isn't in `related`, request it:
+    // First pass: if the room's contract isn't in `related`, request it:
     if let Some(missing_id) = self.find_missing_related(&state, &related) {
         return Ok(ValidateResult::RequestRelated(vec![missing_id]));
     }
-    // Second pass: related is populated; check membership:
+    // Second pass: related is populated. Only for a fact that stays true once
+    // true. Live membership is not: use the `update_state` route or a signed
+    // attestation (see "Never Gate an Item's Validity on a Value That Can Decrease").
     self.check_membership(&state, &related)
 }
 ```
 
 Host fetches the requested contracts (locally first, then network) and re-invokes `validate_state` with `related` populated.
 
+The contract id in `find_missing_related` is one this WASM derives, from the entry's `room_owner` and the room contract's code hash built into it. The entry's `room_owner` only selects the contract: accept it only if this instance names that room, in the parameters or in recipient-signed state, otherwise a sender can name a room they created. That id moves when the room contract re-keys, and entries that name the old one stop resolving, so where that matters carry a signed attestation in the entry instead (see "Never Gate an Item's Validity on a Value That Can Decrease").
+
 ### Limits
 
 - **Depth = 1.** A contract returning `RequestRelated` on the second pass is a logic error — host rejects.
 - **Max 10 related contracts per request** (`MAX_RELATED_CONTRACTS_PER_REQUEST`). Give the state a *structural* bound — fixed typed slots rather than an open-ended list other parties can extend — so an eleventh reference cannot arise. A count cap is a poor fallback here, because whichever reference truncation drops is one the contract needed, and the limit is not yours to enforce anyway — the **host** rejects the request outright when a contract asks for more than ten, so the operation fails rather than your `validate_state` returning `Invalid`. Where the set of things to consult is genuinely open-ended, replace the live read with a signed attestation carried in the entry — see "Never Gate an Item's Validity on a Value That Can Decrease" — so there is nothing to fetch and no limit to hit.
 - **10s fetch timeout per request.** Multiple bogus references multiply the latency cost.
+- A related fetch that times out can wedge an UPDATE merge (freenet-core#4077).
+- Clients send `UpdateData::RelatedStateAndDelta`. Bare `RelatedState` and `RelatedDelta` are
+  rejected on `ContractRequest::Update`; they are reserved for the runtime, which surfaces
+  `RelatedState` to your WASM itself.
+- `#[composable]` has no inter-contract awareness, so cross-contract dependencies are
+  hand-rolled.
+
+### Checking a Contract That Reads Related State
+
+`fdev verify-merge --state` runs with no related state, so a contract that requests it comes
+back 100% inconclusive and exits 0, which reads as a clean bill when skimmed. Use `--bundle`
+on a capture holding related state, read any `bundle note:` line on stderr (capture records
+there when it refused related state), count the explicit verdicts, and treat inconclusive as
+not a pass. Exit code 4 means violations were found.
+
+The verifier never fetches related state; it replays what the bundle carries, and capture keeps
+only the most recently observed state per related contract. A defect that needs an older
+related state gets no verdict, and a green run does not exercise production's depth=1 fetch.
 
 ### Requesting Related State From `update_state`
 
@@ -388,11 +422,10 @@ so validate remains the backstop — and note what that costs when your two
 functions disagree about a bound, since the merge is then refused rather than
 corrected: see "Bound It In `update_state`" under State Size Budget.
 
-**Prefer the `update_state` route where either would work.** The preference survives, but the old reason for it does not: validation-resolved related state *is* captured now, since v0.2.131 (2026-08-24, freenet-core#5393 and #5402), so such a contract is no longer unjudgeable by construction. The reason to still prefer the update route is coverage. The update path resolves local-store-first and pushes the result into `updates`, which capture records as a matter of course; the validation path is captured only when it actually fires, and two live contracts were measured carrying zero related entries because they receive only UPDATE traffic. Better still, fold the related fact into your own state as it arrives and gate on your own state — that keeps validity a function of your own inputs, so peers cannot disagree, and puts the fact inside the merge algebra where the laws check it normally.
-
-### Production Track Record
-
-The related-contracts mechanism shipped in freenet-core PR #3650 (March 2026). Comprehensive unit-test suite. Plan for surprises — discovering edge cases in production is what first-users do. Add an explicit local-node smoke test (`e2e-test/`-style) before declaring your dApp production-ready, and consider feature-flagging the dependent UI flow until you've seen the mechanism work in real network conditions.
+**Prefer the `update_state` route where either would work.** Better still, fold
+the related fact into your own state as it arrives and gate on your own state:
+validity stays a function of your own inputs, so peers cannot disagree, and the
+fact sits inside the merge where the laws check it.
 
 ### Never Gate an Item's Validity on a Value That Can Decrease
 
@@ -401,8 +434,8 @@ automatic for a check confined to the bytes in front of it — `balance >= 0`, "
 entry carries a valid signature", "the counter never goes backwards" are all fine,
 and a balance being *spendable* does not make it unusable as a well-formedness
 check. (A bytes-confined check can still be one your own `update_state` is able
-to violate, which freezes the contract; that is a separate hazard, under "Prune
-in `update_state`".) The hazard here is narrower and easy to miss: **an already-accepted item whose
+to violate, which freezes the contract; that is a separate hazard, under "Bound It
+In `update_state`".) The hazard here is narrower and easy to miss: **an already-accepted item whose
 validity depends on a quantity that can later shrink.** Two shapes do it.
 
 1. **A value read live from another contract** (the `RelatedContracts` mechanism
@@ -427,19 +460,9 @@ attestation and validate *that signature*, which stays true forever.
 
 Once any user has state under your contract, the encoding is locked. You cannot reorder fields, rename fields, change tuple ↔ struct, or change CBOR encoder behavior without breaking that user's state.
 
-### Use `#[serde(default)]` on Every Field
+### Use `#[serde(default)]` on Every Added Field
 
-Adding a new field to existing state types should be backwards-compatible — old states should still deserialize, with the new field defaulted.
-
-```rust
-#[derive(Serialize, Deserialize)]
-pub struct Inbox {
-    #[serde(default)]
-    pub messages: Vec<InboxMessage>,
-    #[serde(default)]
-    pub recipient_state: Option<AuthorizedRecipientState>,
-}
-```
+Adding a new field to existing state types should be backwards-compatible: old states should still deserialize, with the new field defaulted.
 
 `#[serde(default)]` doesn't apply to fields that are required for security (e.g., the contract should never silently accept a message with a defaulted-to-zero `signature`). For those, omit the default and let deserialization fail loudly.
 
@@ -478,24 +501,9 @@ Two things to get right beyond the attribute:
   and assert the signature still verifies. Same reasoning as the hard-coded
   expected hex above, one step earlier in the pipeline.
 
-### Don't Default Required Auth Fields
-
-```rust
-// BAD: a malformed encoding produces a "valid-shape" zero message
-// that may pass validation if a sender accidentally signed over zeros.
-pub struct InboxMessage {
-    #[serde(default = "default_signature")]      // BAD
-    pub signature: Signature,
-    #[serde(default = "default_verifying_key")]  // BAD
-    pub sender: VerifyingKey,
-}
-```
-
-These fields must be required; a state lacking them should fail to decode.
-
 ### Never Ship a State Version That Skips Verification
 
-Same class as the above, one step more severe. A defaulted auth field weakens one
+One step beyond defaulting an auth field. A defaulted auth field weakens one
 check; a *version* whose decode path does not verify signatures removes the check
 entirely, and the version tag is attacker-chosen. Anything that can write the
 unverified version — a legacy `V0` kept "for old data", a `Draft` variant, an
@@ -524,19 +532,12 @@ The host enforces `MAX_STATE_SIZE = 50 MiB` as a hard correctness backstop — a
 - Including auth metadata (signatures are 64 bytes, VKs 32 bytes, etc.).
 - Including any tombstone/log structures.
 
-**A count cap is not a size bound.** `MAX_ITEMS = 1000` bounds nothing on its own if
-an item can be any size — the real bound is 1000 × *the largest item the other side
-may send*, and the other side chooses. A cap that reads like a memory limit and is not
-one is how a contract-controlled value becomes an out-of-memory. Whenever you write a
-count over variable-size values, multiply it by that worst case and check the product.
-The product is the bound to reach for: a count cap **times a per-item size cap** bounds
-bytes while staying convergent, because the per-item cap is a property of the entry.
-Budgeting the bytes directly with a running total is the tempting alternative and is
-harder than it looks; "Bound It In `update_state`" below has the counterexample. The
-arithmetic below is exactly that multiplication — note that it is the per-item cap,
-not the count, that makes it come out finite.
-
-Example for the inbox: `MAX_INBOX_MESSAGES = 1000` × `MAX_CIPHERTEXT_BYTES = 32 KiB` = 32 MiB messages, plus ~140 bytes/message metadata = ~32.1 MiB, plus a few KB of recipient_state. Well under the 50 MiB cap — though, per the design target below, `MAX_INBOX_MESSAGES` is a candidate to tune down or to shard further (e.g. archiving older messages into per-time-window contracts) rather than a bound to treat as settled.
+**A count cap is not a size bound.** `MAX_ITEMS = 1000` bounds nothing if an item
+can be any size, and the other side chooses the size. A count cap times a
+per-item size cap bounds bytes and stays convergent, because the per-item cap is
+a property of the entry. Multiply the worst case and check the product. Budgeting
+bytes directly with a running total is harder than it looks; "Bound It In
+`update_state`" below has the counterexample.
 
 **Design target: stay well under 4 MB per instance, regardless of the 50 MiB cap.** The cap is about correctness, not user experience — a GET transfers the entire state before the UI can render anything, so state size is felt directly as load latency, and it's the wire-transfer floor under the streaming behavior described in `ui-patterns.md` → "Large state handling". If a kind of data can grow without bound (message history, uploaded files, a list that only grows), shard by the natural unit of write concurrency — one contract per room, per user, per time-window, per shard-key — so each instance's state stays small no matter how large the dataset gets in aggregate. Treat a multi-MB instance as a signal to split the data model, not to compress harder or budget more cap headroom.
 
@@ -554,26 +555,17 @@ where it is enforced.
 > binds, every write that would cross it is refused — indefinitely, if nothing
 > in the contract ever shrinks the state.
 
-Three things follow, and they are the whole of what you can act on:
+Two things follow:
 
 - **Give the contract something that shrinks.** What is refused is the merge
-  whose *output* exceeds the cap, not every update, so a purge, a removing
-  tombstone or a re-signed smaller envelope lands normally and lifts the freeze.
-  Having one is cheap insurance; not having one is what makes the freeze
-  permanent.
-- **Nothing is corrupted, and nothing diverges.** The stored state was validated
-  when it was committed, so it is valid, it propagates, and peers agree on it.
-  The contract is not broken, it is full. (A smaller state arriving from a peer
-  does not rescue you by itself — the host hands it to your own `update_state`
-  alongside the current state rather than replacing anything, so it helps only
-  if your merge is willing to drop entries.)
-- **It is loud, not silent.** The node logs the refusal as an error rather than
-  swallowing it, so it is findable. Worth saying because a skill that teaches
-  people to fear silent failure should not misapply the label to a failure that
-  announces itself.
+  whose output exceeds the cap, so a purge, a removing tombstone or a re-signed
+  smaller envelope lands normally and lifts the freeze. Without one the freeze
+  is permanent.
+- **Nothing is corrupted.** The stored state is valid and propagates, and peers
+  agree on it. The contract is full. A smaller state from a peer does not rescue
+  it unless your merge is willing to drop entries.
 
-Two rules about how the merge should do the bounding — these are about your
-code, so unlike the paragraph above they do not go stale:
+Two rules about how the merge should do the bounding:
 
 - **The surviving set must be a function of the entry set, not of arrival
   order.** "Evict until it fits" and "refuse the eleventh" decide which entries
@@ -593,60 +585,23 @@ code, so unlike the paragraph above they do not go stale:
   `{p,q}` with `{r}` directly gives `{p}`. Not associative. Skipping the
   oversized entry and carrying on survives *this* example, which is the point: a
   byte budget has more than one plausible reading and each needs its own check.
-- **Rank a party's records only against that party's own.** Any cross-party
-  ranking key is a thing an attacker optimises against: a supplied value
-  directly (see "A Value One Party Supplies…" above), and a content-derived one
-  by grinding the content until its digest sorts where they want it. If you find
-  yourself needing a global bound across mutually-untrusting writers, take that
-  as the signal to shard — one contract instance per writer, per room, per
-  time-window — so no ranking across parties is needed at all.
+- **Rank a party's records only against that party's own** (see "A Value One
+  Party Supplies…"). A content-derived key does not escape this: a writer can
+  grind content until its digest sorts where they want. If you need a global
+  bound across mutually-untrusting writers, shard instead: one contract instance
+  per writer, room or time-window.
 
 The past-skew check under Time Handling is the neighbouring failure, reached by
 expiry rather than by accumulation, and it ends worse.
 
-> **On the node-side detail deliberately left out of this section.** Which
-> executor function validates what, in which order, and what its caller does
-> with the result, is a fact about a freenet-core version rather than about your
-> contract — and nobody re-reads a skill to check whether it still holds. Two
-> earlier revisions of this section got that call graph wrong in opposite
-> directions and one of them shipped. If you need it, read
-> `crates/core/src/contract/executor/runtime/{executor_impl,contract_ops}.rs`
-> rather than trusting a paraphrase of it, including this one.
+For the node's call graph, read
+`crates/core/src/contract/executor/runtime/{executor_impl,contract_ops}.rs`.
 
 ## Per-Context Identity Considerations
 
-If your dApp uses **per-context signing keys** (River's pattern: the inviter generates a fresh keypair for each new member, scoped to one room):
-
-- Keys are context-scoped, not user-global.
-- Looking up a key requires knowing the context (e.g., the room contract instance).
-- Cross-context references in signed payloads must include the context-id.
-- A user's "global identity" doesn't exist — they have one identity per context.
-- Inbox-style contracts that address "this user" must address them in a specific context (e.g., "this user in room X").
-
-This pattern provides cross-context unlinkability for free, at the cost of needing context to look up keys.
-
-## Common Pitfalls List
-
-| Pitfall | Symptom | Fix |
-|---|---|---|
-| Bare derived field with no auth | Malicious PUT can fabricate it | Bundle in signed envelope OR derive from authoritative log |
-| Order-of-list significance unauthorized | Attacker can permute to control eviction | Bundle list in signed envelope |
-| Past-skew check on stored state | State spontaneously becomes invalid over time | Drop check; use dedup + tombstones for replay protection |
-| CBOR canonicality assumed in signed payload | Re-encoded payload bypasses signature | Use manual byte layout for bytes covered by signatures |
-| Self-referential KAT test | Wire-format drift goes undetected | Hard-code expected hex constant |
-| Cross-instance signature replay | Same signed bytes work on different inbox/room | Bind context (recipient_vk, contract_id) in signed bytes |
-| Default-deserialized auth field | Zero-value message passes a sloppy check | Remove `#[serde(default)]` from signature/sender fields |
-| Truncation/extension on variable-length signed field | Attacker submits N-1 bytes of an N-byte ciphertext | Length-prefix every variable-length field in signed bytes |
-| Any `time::now()` call in a *contract* | Replicas can diverge, and the merge laws aren't well-formed statements about the contract; a node warns on load today and the call is staged to trap | Carry a client-signed timestamp in state, check monotonicity only; `fdev verify-merge --wasm` reports the import |
-| Future-skew check against the host clock | Two peers disagree on whether the same update is valid; the pruning variant makes state a function of the evaluating peer's clock | Drop the check; cap by count or a monotonic counter |
-| Native-target `time::now()` in a *delegate's* host-side tests | UB; possibly miscompiled | Gate behind `cfg(target_family = "wasm")`; use test override |
-| Permitted distinct related contracts > 10 | The host refuses the request outright, so every op needing the eleventh reference fails | Bound the count structurally (fixed typed slots), so an eleventh cannot arise |
-| A bound your own `update_state` can step over, checked only in `validate_state` | Every merge that would cross the cap is refused; headroom only shrinks, so the contract ends up taking no write that changes it | Bound it inside `update_state`; keep the N smallest by a key the entries determine, never evict by arrival order |
-| A writer-supplied value deciding which *other parties'* records get evicted | One forged entry evicts everything real | Cap per author and rank within an author's own records; any cross-party ranking key is grindable |
-| Symmetric key treated as proof of authorship | Either party can forge the other's messages inside the encrypted payload | Sign with a key only the claimed author holds; decryption proves membership only |
-| New field added to a signature-covered struct with only `#[serde(default)]` | Re-encoding a pre-existing record adds a map entry and invalidates every old signature | Add `skip_serializing_if`; test against a hand-written byte literal of the old shape |
-| Writer-supplied nonce or id used as record identity | Two records under one id; permanent, unhealable divergence under first-writer-wins | Derive the id from the record's own terms, computed by the contract (`contract-patterns.md` → "Record Identity") |
-
-## Reference: River Inbox Contract
-
-The River inbox contract (`contracts/inbox-contract/`) exercises most of these patterns and is the first production user of the related-contracts mechanism. See `freenet/river#230` for the design discussion that produced this file.
+If your dApp uses per-context signing keys (River's pattern: the inviter
+generates a fresh keypair for each member, scoped to one room), a user has one
+identity per context and no global identity. Signed cross-context references must
+carry the context id, and anything addressing "this user" must name the context.
+This buys cross-context unlinkability, at the cost of needing the context to look
+up a key.

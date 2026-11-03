@@ -8,9 +8,9 @@ catches what the others catch.
 | Tier | What it runs | What it catches | What it misses |
 |---|---|---|---|
 | **rust** | `cargo test --workspace` (incl. `cargo test -p <contract> --features contract` for host-side contract tests) | State logic, commutative-monoid invariants, serialization round-trips, signature verification, validation rules. | Anything involving a live node or the gateway. |
-| **offline** | UI build with `--features example-data,no-sync --no-default-features`, served via `dx serve`, driven by Playwright. | UI flows that don't depend on a node: identity creation against mock data, render correctness, navigation, form validation. | Real WebSocket bridge, real contract PUT/GET/UPDATE, real delegate calls, real AFT, gateway behavior. |
-| **iso** (isolated multi-node E2E) | `cargo make test-e2e-real-node` style: spin up a 2-node Freenet network on `127.0.0.1` via the iso-nodes harness (see `local-dev` SKILL → "isolated multi-node"), publish the webapp, drive the UI via Playwright. | Real round-trip behavior: identity creation persisted to the delegate, contract PUTs landing, AFT burns, cross-node propagation, decrypt-on-receive. Catches the bugs that only appear with a real node. | Production gateway specifics (production has different deployments, NAT, real peer counts). Cost: 5–10 min per run; gate to tags / nightly. |
-| **liveness** | `production-liveness.spec.ts` against the **deployed gateway URL** post-release. | Publish-pipeline bugs: corrupted tar.xz, wrong signature, stale `contract-id.txt`, routing misconfig, gateway CSP regression, iframe-shell regression, vendored asset 404s. **Intentionally minimal** — gateway serves webapp, WASM loads, Dioxus mounts, "create new identity" link renders. | Real round-trip. The deployed gateway has no test fixtures and the test runs as a real user with no identity — it can't verify message delivery, AFT, contract migration, or anything past first render. |
+| **offline** | UI build with its mock-data and no-network features enabled (River uses `--features example-data,no-sync --no-default-features`), served from the dev server and driven by Playwright. | UI flows that don't depend on a node: mock-data flows, render correctness, navigation, form validation. | Real WebSocket bridge, real contract PUT/GET/UPDATE, real delegate calls, any real token or payment flow, gateway behavior. |
+| **iso** (isolated multi-node E2E) | Spin up a 2-node Freenet network on `127.0.0.1` (see the `local-dev` skill, isolated test node), publish the webapp, drive the UI via Playwright. | Real round-trip behavior: state persisted to the delegate, contract PUTs landing, flows that spend or verify a token, cross-node propagation, decrypt-on-receive. Catches the bugs that only appear with a real node. | Production gateway specifics (production has different deployments, NAT, real peer counts). Cost: 5–10 min per run; gate to tags / nightly. |
+| **liveness** | `production-liveness.spec.ts` against the **deployed gateway URL** post-release. | Publish-pipeline bugs: corrupted tar.xz, wrong signature, stale `contract-id.txt`, routing misconfig, gateway CSP regression, iframe-shell regression, vendored asset 404s. **Intentionally minimal** — gateway serves webapp, WASM loads, the UI mounts, a first-screen element renders. | Real round-trip. The deployed gateway has no test fixtures and the test runs as a real user with no identity — it can't verify message delivery, token flows, contract migration, or anything past first render. |
 
 **The shape of a healthy release:**
 
@@ -18,12 +18,9 @@ catches what the others catch.
 2. `iso` gates release tags (or runs nightly if you have <1 release/week).
 3. `liveness` runs immediately post-publish and tells you whether
    anything reached the live gateway at all.
-4. To verify real round-trip in production after a release, either run
-   `iso` against a fresh `freenet local` node pointed at the published
-   contract ID, or follow a manual 7-step checklist (compose → send →
-   switch identity → verify delivery → AFT burn check → reload-persist
-   → cross-identity send via address book). There is no shortcut here;
-   `liveness` does not cover it.
+4. To verify a real round-trip in production after a release, run `iso` against
+   a fresh node pointed at the published contract ID, or follow a manual
+   checklist for your app's core flow. `liveness` does not cover it.
 
 ## Validating the UI during development (the `offline` tier)
 
@@ -34,110 +31,43 @@ automation is the first tier that sees the real thing. It belongs in the
 development loop, not the release checklist.
 
 Serve the UI from its dev server and point Playwright straight at it. There is
-no gateway and no iframe shell in this tier, so ordinary `page.locator(...)`
-works and no `frameLocator` is needed.
-
-```ts
-// e2e/ui-smoke.spec.ts
-import { test, expect } from "@playwright/test";
-
-// dx serve / vite dev origin, NOT a /v1/contract/web/... URL.
-const DEV_URL = process.env.UI_DEV_URL ?? "http://127.0.0.1:8080/";
-
-test("app mounts and the first screen is interactive", async ({ page }) => {
-  const errors: string[] = [];
-  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
-  page.on("pageerror", (e) => errors.push(String(e)));
-
-  await page.goto(DEV_URL);
-
-  // WASM boot is async: assert on rendered content, never on navigation alone.
-  // `.first()` keeps Playwright's strict mode from failing on a second match.
-  await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({
-    timeout: 15_000,
-  });
-
-  // Then exercise one real interaction, so a component that renders but whose
-  // handlers never fire is caught too.
-  await page.getByRole("button", { name: /create new identity/i }).click();
-  await expect(page.getByRole("textbox", { name: /display name/i })).toBeVisible();
-
-  expect(errors, `console errors:\n${errors.join("\n")}`).toEqual([]);
-});
-```
-
-What this tier catches that no Rust test can: a WASM bundle that never boots (a
-panic in `main`, a wrong asset path in `Dioxus.toml`), a component that paints
-but whose event handlers are dead, and console errors from assets that resolve
-in dev but are missing from the bundle. Run it on every PR.
-
-Two gotchas specific to a WASM UI:
+no gateway and no iframe shell in this tier, so plain `page.locator(...)` works.
+Assert that the first screen renders, exercise one real interaction (so a
+component that paints but whose handlers are dead is caught), and fail on any
+console or page error. This tier catches what no Rust test can: a bundle that
+never boots, dead event handlers, and assets that resolve in dev but are missing
+from the bundle. Run it on every PR.
 
 - **Wait on rendered content, not on navigation.** `page.goto` resolves once the
-  HTML shell loads, well before the WASM bundle has booted and mounted. Always
-  assert on a visible element with a generous timeout.
-- **Make sure you are testing the current build.** `dx serve` rebuilds on a
-  delay, so a Playwright run started too early exercises the previous bundle. In
-  CI, build first and serve the built output instead of relying on the watcher.
+  HTML shell loads, well before the WASM bundle has booted. Assert on a visible
+  element with a generous timeout.
+- **Test the current build.** `dx serve` rebuilds on a delay, so a run started
+  too early exercises the previous bundle. In CI, build first and serve the built
+  output.
 
-The strict `errors.toEqual([])` assertion is safe in this tier because there is
-no gateway shell to emit the benign wasm-bindgen `onerror` noise described
-below. Once the app is published to a local node, run the same flows against the
-gateway URL, where the iframe-shell rules apply and that strict assertion has to
-become the curated `FATAL_CONSOLE_PATTERNS` allowlist.
+The strict "no console errors" assertion is safe here because there is no gateway
+shell to emit the benign wasm-bindgen `onerror` noise described below. Against the
+gateway URL it has to become the curated `FATAL_CONSOLE_PATTERNS` allowlist.
 
 ## The two production-only pitfalls
 
-Two things break only after `fdev publish`, not in `dx serve` /
-`vite dev`:
+Two things break only after publish, not under `dx serve` or `vite dev`: **CSP
+blocks remote assets** (`ui-patterns.md` "Gateway CSP"), and **the gateway wraps
+every webapp in an iframe shell**, so standard `page.locator(...)` and
+`page.goto("/")` find the wrong document and silently pass.
 
-1. **CSP blocks remote assets** (see `ui-patterns.md` "Gateway CSP"). Dev
-   loads the page from its own origin where the CSP doesn't apply.
-2. **The gateway wraps every webapp in an iframe shell.** Standard
-   `page.locator(...)` / `page.goto("/")` Playwright idioms find the wrong
-   document and silently pass.
-
-This page covers the iframe shell architecture and a
-`production-liveness.spec.ts` recipe that asserts the publish + gateway
-integration actually produced a working app.
-
-> **Source of truth.** The CSP and shell HTML described below are emitted
-> by `freenet-core/crates/core/src/server/{client_api.rs,path_handlers.rs}`.
-> If a smoke-test recipe stops working, verify the wire shape against
-> those files first — they're the canonical reference.
+> **Source of truth.** The shell and CSP are emitted by
+> `crates/core/src/server/path_handlers.rs`, `path_handlers/assets/shell.html`
+> and `client_api.rs` in freenet-core. If a recipe stops working, check those
+> first.
 
 ## The Gateway Iframe Shell
 
-`GET /v1/contract/web/<id>/` does NOT return your webapp directly. It returns
-a tiny shell HTML, roughly (simplified — see `path_handlers.rs` for the
-exact attribute set):
-
-```html
-<!DOCTYPE html>
-<html>
-<body>
-  <iframe id="app"
-          sandbox="allow-scripts allow-forms allow-popups allow-downloads allow-modals"
-          allow="clipboard-read; clipboard-write"
-          data-src="/v1/contract/web/<id>/?__sandbox=1"></iframe>
-  <script>
-    // Shell page owns the real WebSocket, holds the auth token, and
-    // proxies postMessage from the iframe.
-    function freenetBridge(authToken) { ... }
-  </script>
-  <script>freenetBridge("<auth_token>");</script>
-</body>
-</html>
-```
-
-The second `<script>` tag invokes `freenetBridge` with the auth token; that
-call is what assigns `iframe.src` from `data-src` and actually starts your
-webapp loading. Your webapp then runs inside `<iframe id="app">` at the
-`?__sandbox=1` URL. The shell exists for origin isolation (sandboxed
-iframe, no parent-origin access) and auth token injection (the shell holds
-the token and forwards it via `postMessage`, so the webapp never sees it
-directly). See `ui-patterns.md` "Two Connection Models" for the WebSocket
-implications.
+`GET /v1/contract/web/<id>/` returns a small shell page, not your webapp. Its
+inline bridge script assigns `<iframe id="app">`'s `src` from `data-src`
+(`.../?__sandbox=1`), and your webapp runs inside that sandboxed frame. What the
+shell does for the socket and the CSP it applies are described once, in
+`ui-patterns.md` ("Two Connection Models", "Gateway CSP").
 
 ### Practical Consequences for E2E Tests
 
@@ -260,20 +190,11 @@ test.describe("production liveness", () => {
 });
 ```
 
-### What Each Assertion Catches
-
-| Assertion | Catches |
-|-----------|---------|
-| `iframe#app[src=...__sandbox=1]` | Shell bridge `<script>` ran and wired the iframe |
-| `app.locator("h1")` visible | Publish pipeline produced a usable archive; WASM ran |
-| `fontWeight` matches your vendored value | Vendored CSS reached the iframe (CSP didn't block it) |
-| `fatalErrors == []` | CSP violations, `Refused to ...` blocks, `net::ERR_` failures, WASM panics, unhandled rejections |
-
-The `FATAL_CONSOLE_PATTERNS` list deliberately ignores generic
-`console.error` calls so benign warnings don't flake the test. If your app
-has a known-benign error at startup, it stays out of the fatal list by
-default; if a new error category appears that you want to gate on, add a
-regex.
+`fatalErrors == []` catches CSP violations, `Refused to ...` blocks,
+`net::ERR_` failures, WASM panics and unhandled rejections. The
+`FATAL_CONSOLE_PATTERNS` list deliberately ignores generic `console.error` calls
+so benign warnings do not flake the test; add a regex for any new category you
+want to gate on.
 
 ### Known-benign noise: the wasm-bindgen `onerror` shim crash
 
@@ -295,26 +216,10 @@ allowlist rather than asserting `consoleErrors === []` — a blanket
 "no console errors" assertion will fail against this noise on every run. Do
 **not** add a regex for this message to `FATAL_CONSOLE_PATTERNS`.
 
-One caveat about the recipe above: the `FATAL_CONSOLE_PATTERNS` allowlist
-only filters the `page.on("console", ...)` sink. The `page.on("pageerror",
-...)` handler pushes **every** uncaught exception unconditionally. wasm-bindgen
-catches this thrown value internally and reports it via `console.error`, so in
-practice it lands in the `console` sink (where the allowlist applies), not
-`pageerror`. But if you observe it reaching `pageerror` in your environment,
-filter it there too — otherwise the benign crash still fails the test:
-
-```ts
-page.on("pageerror", (err) => {
-  const text = String(err);
-  // wasm-bindgen onerror shim crash from the gateway WS bridge — benign noise.
-  if (/not marked as 'catch'.*expected a string argument, found undefined/.test(text)) return;
-  fatalErrors.push(text);
-});
-```
-
-If you would rather silence it at the source, mark the relevant `web_sys`
-import with `--catch`; otherwise leave it as benign noise until wasm-bindgen
-fixes the handler upstream.
+`FATAL_CONSOLE_PATTERNS` filters only the `console` sink; the `pageerror`
+handler records every uncaught exception. This noise surfaces through
+`console.error`, so the allowlist covers it. If you ever see it arrive as a
+`pageerror`, filter that message there too.
 
 ### Wiring It In
 
@@ -331,15 +236,15 @@ fixes the handler upstream.
   });
   ```
 
-- **Locally**, after `fdev publish`:
+- **Locally**, after `fdev website publish`:
   `FREENET_BASE_URL=http://127.0.0.1:7509/v1/contract/web/<id>/ npx playwright test e2e/production-liveness.spec.ts`.
 
 - **CI**, sketched as a bash flow:
   ```bash
-  freenet local &                                 # boot local node
-  fdev -p 7509 publish ... | tee publish.log      # publish webapp
-  KEY=$(grep -oE '[A-Za-z0-9]{40,}' publish.log)  # extract contract key
-  export FREENET_BASE_URL="http://127.0.0.1:7509/v1/contract/web/$KEY/"
+  freenet local &                                  # boot local node
+  fdev website init ci-smoke                       # throwaway key
+  fdev website publish ./dist/ --key ci-smoke | tee publish.log
+  export FREENET_BASE_URL=$(grep -oE 'http://127\.0\.0\.1:7509/v1/contract/web/[A-Za-z0-9]+/' publish.log | head -1)
   npx playwright test e2e/production-liveness.spec.ts
   ```
   The skip guard makes the spec a no-op when `FREENET_BASE_URL` is unset,
