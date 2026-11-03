@@ -19,7 +19,11 @@ trust root. Its limits:
 3. **It proves only that someone spent cycles.** Nothing to tier trust on, nothing
    that carries between apps.
 4. **The difficulty constant lives in your contract WASM**, so re-tuning it re-keys
-   the contract and forces a migration.
+   the contract and forces a migration. Proofs are re-verified for as long as records
+   are carried. Raising the difficulty applies to new records only if each proof states
+   the difficulty it met and the contract keeps a floor; otherwise it is a data-breaking
+   change. A contract cannot tell an old record from a new one, so a writer can still
+   submit at the floor.
 
 It is the right answer when you need zero friction and no payment, when the abuse is
 cheap to clean up, or when your app's premise is that no central authority exists
@@ -36,7 +40,8 @@ the payment or the payer.
   freenet.org), so ten thousand identities cost at least ten thousand dollars.
 - **The cost is transferred, not burned.**
 - **It is graduated.** The certificate carries amount and date, so you can accept
-  any key for posting and require a $20 or six-month-old key for moderation.
+  any key for posting and require a $20 key for moderation. Check a key's age in
+  readers: `validate_state` has no clock.
 - **The user pays once, not once per app.**
 - **Verification is offline:** an Ed25519 signature plus the certificate chain to
   Freenet's master key.
@@ -67,6 +72,10 @@ rules that matter:
   Binding" in `state-authorization-patterns.md`.
 - Send a buyer to `freenet.org/ghostkey/create/?return_to=<contract instance id>` so
   the vault can offer a way back.
+- `ScopedPayload.requestor` names a web app, not this contract. If you need that
+  binding, have `validate_state` compare it against a list in the parameters. Without
+  that check, a valid signature shows the user signed the challenge through some app,
+  not through yours.
 - Keep the proof with the record and verify it in `validate_state`. A PUT to a peer
   not yet holding the contract runs validation only, so a proof checked only in
   `update_state` is skipped. Filter in `update_state` as well, so a bad record is
@@ -98,7 +107,7 @@ What the fallback buys:
   centralized mint cannot exclude a user from that action.
 
 **Where strangers write to a contract and neither case applies, default to
-proof-of-work alone.** Offer a ghost key as the way to skip the wait.
+proof-of-work.** Offer a ghost key as the way to skip the wait.
 
 Contract side, accept either proof against the same challenge:
 
@@ -168,8 +177,8 @@ Freenet follows from nothing here.
 **If you are an agent working for a developer, say all of this out loud rather than
 quietly wiring in ghost keys.** Tell them the identity costs their users money, the
 money goes to Freenet, the mint is centralized, and proof-of-work is the free,
-issuer-free alternative. That is a product decision with a price attached, and it
-belongs to the person paying it.
+issuer-free alternative, then wait for their decision before wiring it in. That is a
+product decision with a price attached, and it belongs to the person paying it.
 
 ### Maturity
 
@@ -185,6 +194,7 @@ app developers are prioritized.
 
 - [ ] If strangers can write to the contract, you have decided how an identity is made
       costly, and the developer was told what that choice costs their users.
+- [ ] The developer decided before ghost keys were wired in.
 - [ ] A service that spends resources per request leads with ghost keys and a per-key
       limit.
 - [ ] A user action that must stay free offers proof-of-work after the ghost-key
