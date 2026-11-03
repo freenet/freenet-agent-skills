@@ -638,37 +638,42 @@ impl SignedMessage {
 }
 ```
 
-When adding new fields to signed structs, include them in the signing bytes immediately. If backwards compatibility is needed (old data has signatures that don't cover the new field), use versioned signatures:
+When adding new fields to signed structs, include them in the signing bytes immediately. If old data has signatures that do not cover the new field, use versioned signatures, and accept the old version only with the new field at its default. A contract cannot tell an old record from a new one shaped to look old, so the default must carry no power.
 
 ```rust
+fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 // V1 signing bytes (original)
 fn signing_bytes_v1(id: u64, title: &str, content: &str) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"myapp:item:");
+    let mut buf = b"myapp:item:".to_vec();
     buf.extend_from_slice(&id.to_le_bytes());
-    buf.extend_from_slice(title.as_bytes());
-    buf.extend_from_slice(content.as_bytes());
+    push_field(&mut buf, title.as_bytes());
+    push_field(&mut buf, content.as_bytes());
     buf
 }
 
-// V2 signing bytes (adds new field)
+// V2 signing bytes: a different prefix, so a v1 signature can never verify as v2.
 fn signing_bytes_v2(id: u64, title: &str, content: &str, order: u32) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"myapp:item:v2:");  // different prefix!
+    let mut buf = b"myapp:item:v2:".to_vec();
     buf.extend_from_slice(&id.to_le_bytes());
-    buf.extend_from_slice(title.as_bytes());
-    buf.extend_from_slice(content.as_bytes());
+    push_field(&mut buf, title.as_bytes());
+    push_field(&mut buf, content.as_bytes());
     buf.extend_from_slice(&order.to_le_bytes());
     buf
 }
 
-// Verification: try v2 first, fall back to v1
 fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
     let v2 = signing_bytes_v2(id, &self.title, &self.content, self.order);
     if owner.verify(&v2, &self.signature).is_ok() {
         return Ok(());
     }
-    // Fall back to v1 for old data
+    // A v1 signature does not cover `order`, so a v1 record must hold its default.
+    if self.order != 0 {
+        return Err("v1 signature cannot authorize a non-default order".into());
+    }
     let v1 = signing_bytes_v1(id, &self.title, &self.content);
     owner.verify(&v1, &self.signature)
         .map_err(|e| format!("invalid signature: {e}"))
