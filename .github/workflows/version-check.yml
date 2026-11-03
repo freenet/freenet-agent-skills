@@ -5,7 +5,6 @@ on:
     paths:
       - 'skills/**'
       - 'agents/**'
-      - 'hooks/**'
 
 jobs:
   check-version:
@@ -25,7 +24,7 @@ jobs:
 
           if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
             echo "::error::Plugin content changed but .claude-plugin/marketplace.json version was not bumped (still $OLD_VERSION)."
-            echo "Bump the version in .claude-plugin/marketplace.json and CLAUDE.md."
+            echo "Bump the version in .claude-plugin/marketplace.json and add a CHANGELOG.md entry."
             exit 1
           fi
 

@@ -8,7 +8,7 @@ When making changes to the plugin:
 2. **Update CHANGELOG.md**: Add entry at the top with date and changes
 3. **Commit both files**: Ensure both files are committed together
 
-CI will fail if skills/agents/hooks are changed without a version bump in `marketplace.json`.
+CI will fail if skills or agents are changed without a version bump in `marketplace.json` and an entry in `CHANGELOG.md`.
 
 ### Version Numbering
 
