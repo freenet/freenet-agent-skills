@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.10 (2026-11-02)
+
+**`dapp-builder`: split large or frequently updated sites.**
+
+- `web-container-contract.md` gains a section on the cost of publishing: the
+  container sends its whole state on any newer version, so a site costs size
+  times publish rate times hosts. It covers moving big, stable files to a second
+  site, loading them by path, and publishing in batches.
+- Checked in a sandboxed page on a node at 0.2.146: `fetch` of a file in another
+  contract works, including a WASM file passed to `WebAssembly.compile`, and a
+  contract the node had not unpacked was unpacked on the first file request. A
+  `fetch` of the bare contract URL fails on CORS. A contract the node does not
+  hold at all was not run; the retry advice for that case comes from reading
+  `path_handlers.rs`.
+
 ## 1.39.9 (2026-10-29)
 
 **`release`: run the freenet-core lib tests at the bumped version before the soak.**
