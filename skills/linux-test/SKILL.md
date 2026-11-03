@@ -34,25 +34,7 @@ These tests bind multiple loopback addresses and need Linux:
 
 Determine the command to run inside Docker:
 
-- **No arguments provided:** Display the usage help below and stop.
-
-```
-Usage: /freenet:linux-test <test_name_or_cargo_args>
-
-Examples:
-  /freenet:linux-test run_delegate_messaging_e2e
-  /freenet:linux-test cargo test -p freenet -- test_name
-  /freenet:linux-test cargo test -p freenet-ping-app --test run_app_blocked_peers -- --nocapture
-
-Known Linux-required tests:
-  - run_app_blocked_peers (freenet-ping-app)
-  - run_delegate_messaging_e2e (freenet-ping-app)
-  - run_app_delegate_wasmtime (freenet-ping-app)
-  - edge_case_state_sizes (freenet)
-  - error_notification (freenet)
-  - connectivity tests (freenet)
-```
-
+- **No arguments provided:** print the Arguments section above and the known-tests table, then stop.
 - **Starts with `cargo`:** Use arguments as-is. Append `-- --nocapture` if no `--` separator is present.
 - **Just a test name:** Map to the appropriate cargo test command:
   - If the test name matches a known test above, use the correct package.
@@ -86,13 +68,8 @@ docker/test-runner/run.sh <command args>
 
 ## Step 4: Report Results
 
-After the test completes:
-
-- **If exit code is 0:** Report success with a summary of the output (test count, time taken).
-- **If exit code is non-zero:** Report failure. Show the relevant error output (last ~50 lines). Look for panic messages, assertion failures, or compilation errors and highlight them.
+Report success with the test count and time, or on failure the relevant error output (panic messages, assertion failures, compile errors).
 
 ## Notes
 
-- The first run after building the image will compile from scratch (~10-15 min). Subsequent runs use cached builds via Docker volumes.
-- To reset cached builds: `docker volume rm freenet-test-build freenet-test-target freenet-test-cargo`
-- Source is mounted read-only; the container rsyncs to a build volume for native Linux filesystem speed.
+- The first run compiles from scratch (10-15 min); later runs use cached builds in Docker volumes. To reset them: `docker volume rm freenet-test-build freenet-test-target freenet-test-cargo`
