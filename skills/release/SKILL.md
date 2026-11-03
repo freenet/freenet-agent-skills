@@ -323,7 +323,7 @@ cd <your river checkout>
 cargo run -p riverctl -- member list "$ROOM_VK"
 ```
 
-A bincode deserialization error means **STOP**: roll back (see "Rollback"), file an issue, and rebuild River against the new stdlib. In v0.2.11, enabling WebSocket streaming by default broke riverctl, which was pinned to stdlib 0.1.40.
+A bincode deserialization error means **STOP**: see "Rollback", file an issue, and rebuild River against the new stdlib. In v0.2.11, enabling WebSocket streaming by default broke riverctl, which was pinned to stdlib 0.1.40.
 
 ## Step 6: Post-cut telemetry monitoring through the 0-4h stagger
 
@@ -336,11 +336,15 @@ Peers adopt a release over a **0-4h decentralised-discovery stagger**, so a regr
    - connection counts hold
    - no new error classes appear
    - log growth is normal
-3. **Roll back immediately** on crashes, log spam, data loss or a clear success-rate regression. Open an issue with the evidence, and post a rollback notice on Matrix.
+3. **Act at once (see "Rollback")** on crashes, log spam, data loss or a clear success-rate regression. Open an issue with the evidence, and post a notice on Matrix.
 
 Watch for log spam (it can fill disks within hours), new error patterns, connection failures (`connection refused`, `timeout`, `handshake failed`) and resource exhaustion (`out of memory`, `no space left`, `too many open files`).
 
 ## Rollback
+
+A published release cannot be rolled back across the network: the release-agent refuses downgrades, so peers that have updated stay updated. Recovery is a new patch release carrying the fix. `docs/RELEASING.md` ("Rollback") has that command and the operator path for downgrading a gateway directly.
+
+`release-rollback.sh` removes the tag and GitHub release. It does not move any peer back. Use it for a cut that has not reached users, and only after the crates.io check in Step 3.
 
 ```bash
 # From the root of a freenet-core checkout. Each prompts for "yes"; pipe it in a non-interactive shell.
