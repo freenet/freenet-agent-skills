@@ -284,9 +284,8 @@ substitute for it.
 
 **The *registry-format* half of this is contract-side specifically.** The
 delegate registry can say what the contract registry cannot: `DelegateLineageEntry` stores the full `delegate_key` per row and the
-walk uses it verbatim, never re-deriving it (`delegate_migrate.rs:1547`), and
-the registry row carries an optional `params_hex` that the build-time
-cross-check honours. So the delegate registry *format* can express a parameter
+walk uses it verbatim, never re-deriving it, and the registry row carries an optional
+`params_hex` that the build-time cross-check honours. So the delegate registry *format* can express a parameter
 change, where the contract format cannot express one at all.
 
 **Noticing that you need a row is silent on both sides, though**, and this is
@@ -602,13 +601,14 @@ never answered or was never reached because the hop cap fired: adopt nothing, se
 nothing, retry next load). Both `ProbeAnswer` and `Outcome` are `#[non_exhaustive]`,
 so a `match` needs a wildcard arm.
 
-**Only a complete `Recovered` may record the migration as finished.** A `NotFound` is
-unauthenticated, and a contract that exists can answer it while unfindable, which is
-common rather than momentary. An undecodable answer is a miss too, so a schema break across a whole
-lineage lands on `SeedLocal` with every generation intact. Read `SeedLocal` as "asked
+**For a contract predecessor, only a complete `Recovered` may record the migration as
+finished.** A `NotFound` is unauthenticated, and a contract that exists can answer it
+while unfindable, which is common rather than momentary. An undecodable answer is a miss
+too, so a schema break across a whole lineage lands on `SeedLocal` with every generation intact. Read `SeedLocal` as "asked
 everyone, found nothing this time": seeding your local snapshot forward on it is fine,
 and sealing on it is not. Only `Recovered` with no unresolved candidates and no
-truncated fold may seal. Name that case explicitly and let the wildcard arm fall
+truncated fold may seal. An instance with nothing to recover gets a rate limit on
+re-walking, never a seal. Name that case explicitly and let the wildcard arm fall
 through to "retry next run": a wildcard that defaults to "done" writes a permanent
 marker wrongly, today and for every variant added later.
 
