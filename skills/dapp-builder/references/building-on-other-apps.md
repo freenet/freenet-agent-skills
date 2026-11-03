@@ -47,7 +47,9 @@ problem: you are pinned to a key that is now the *old* one, and there is nothing
 backward about the thing you need to find. A backward search can even find an
 ancient copy and write it forward onto a retired address. Pinning a version of the
 author's crate does not help either: it pins you to *their* view of the key as of
-their release, which is precisely the thing that went stale.
+their release, which is precisely the thing that went stale. Nor does a build-time
+assertion that a bundled hash is current: it protects the binary when built, not when
+run.
 
 ## Check an existing app first
 
@@ -97,7 +99,7 @@ than the live one. Anything a user installs, vendors, or bundles is in this
 group, and so is any server or bot deployed on its own schedule.
 
 You are NOT pinned, on engineering grounds alone, if you are rebuilt and
-redelivered whenever the thing you address changes. A Freenet web app is the
+redelivered whenever the thing you address, when you own it, changes. A Freenet web app is the
 usual example: it ships inside a web container republished in place, and changing
 the contract forces a UI rebuild and republish, so the UI's idea of "current"
 cannot lag reality. Resolving your own artifact's pointer there is close to

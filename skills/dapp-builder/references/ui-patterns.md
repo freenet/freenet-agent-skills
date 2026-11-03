@@ -182,13 +182,10 @@ override (a node on another host or port needs no code change), and app code
 has exactly one code path, so the dev path and the shipped path are the same
 code.
 
-What it does **not** change is auth. A proxy is transport only — no shell
+What it does **not** change is auth. A proxy is transport only: no shell
 appears, so a page served from a dev port is still the "outside the gateway"
-row of the table above and still owns its own `Authenticate`. Be aware that the
-node treats a *missing* auth token on the upgrade as "not an error" — in every
-mode, not only a local one; it is an *invalid* token that closes the socket
-(code 4401). So a page that forgets to authenticate still opens its socket
-cleanly in dev, which is exactly how this gets discovered in production instead.
+row of the table above. A raw client may connect with no token, in every mode,
+and an invalid token closes the socket with code 4401.
 
 Verify the proxy rather than assuming — a dev server that does not proxy
 returns its own 404/index for `/v1/...`, which surfaces as a hang, not an
@@ -328,7 +325,8 @@ requests for the contract it names. Before 0.4.0, concurrent requests for
 different contracts could resolve with each other's responses, so one shard's
 state could render in another shard's place. On an older version, upgrade
 first. If you can't, match responses to requests by key in your own
-`ResponseHandler`.
+`ResponseHandler`. A fan-out of many large shards can exceed the 8 concurrent
+streams the TS client reassembles (`MAX_CONCURRENT_STREAMS`), so bound it.
 
 ## Contract Synchronization and Delegate Messages
 
@@ -428,7 +426,7 @@ To read a response, iterate `DelegateResponse.values` and keep entries whose `in
 
 ### Pre-Decoded Key Bytes Pattern
 
-Derive the delegate key bytes and `code_hash` at build time from the built WASM (see freenet/raven's `Makefile.toml`, `build-identity`) and inject them as constants. Build the WASM through the canonical script into a throwaway target dir first (`build-system.md` → "Byte-reproducibility"), because a reused `target/` can silently change the bytes and this hash is compiled into the UI.
+Derive the delegate key bytes and `code_hash` (BLAKE3 of the WASM) at build time from the built WASM (see freenet/raven's `Makefile.toml`, `build-identity`) and inject them as constants. Build the WASM through the canonical script into a throwaway target dir first (`build-system.md` → "Byte-reproducibility"), because a reused `target/` can silently change the bytes and this hash is compiled into the UI.
 
 Vite injects these as `__DELEGATE_KEY_BYTES__` and `__DELEGATE_CODE_HASH_BYTES__` compile-time constants.
 

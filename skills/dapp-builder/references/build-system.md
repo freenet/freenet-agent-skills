@@ -366,7 +366,7 @@ Put the check in the canonical build script, so it runs on the path `publish` ac
 freenet local                       # terminal 1
 fdev -p 7509 publish --code target/wasm32-unknown-unknown/release/my_contract.wasm \
     --parameters params.bin contract --state initial_state.bin   # prints the contract key
-fdev execute update <key> update.bin
+fdev execute update <key> delta.bin
 fdev execute get <key> --output state.bin
 fdev execute subscribe <key>        # streams until Ctrl+C
 ```

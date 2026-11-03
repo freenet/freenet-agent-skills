@@ -93,7 +93,8 @@ Only when the new container ID is genuinely different (container-WASM migration
 or key rotation). Publish the new web container first and confirm it serves
 (HTTP 200 at its URL). Then re-render the loader with the new ID, pack it, sign a
 fresh pointer with the production key, and push it with
-`fdev execute update --as-state <FACADE_ID> <state-file>`. Gate any release
+`fdev execute update --as-state <FACADE_ID> <state-file>`. Never commit the signed
+state file: it holds a per-build timestamp. Gate any release
 script on the container ID having changed; an unconditional flip burns a version
 number re-publishing the address it already holds. If a script dies between
 publishing the container and flipping the pointer, confirm the container serves,
