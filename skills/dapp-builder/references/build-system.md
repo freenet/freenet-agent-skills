@@ -1,99 +1,41 @@
 # Build System
 
-Freenet dApps can use `cargo-make` (Makefile.toml) or plain `Makefile` for orchestrating builds across contracts, delegates, and UI. River uses cargo-make; freenet-microblogging uses a plain Makefile with Vite.
+A Freenet dApp build orchestrates contracts, delegates and a UI. Use whatever task runner you like: River and freenet/raven both use cargo-make (`Makefile.toml`), but a plain Makefile or shell scripts work the same. What matters is the checklist below, and above all that the contract and delegate WASM come out byte-identical every time.
+
+## Build pipeline checklist
+
+A dApp build has to:
+
+1. Build contract and delegate WASM through **one canonical script** (`scripts/build-contracts.sh`; see "Byte-reproducibility"). Never build a to-be-published contract any other way.
+2. Build the UI after the WASM exists, because the UI embeds the delegate's code hash and key.
+3. Package and publish the UI with `fdev website` (see `web-container-contract.md`). The hand-rolled alternative is River's `web-container-tool sign`, which needs a committed counter file for the version (see "Contract ID reproducibility caveat").
+4. Run the pre-publish gate (see "Pre-Publish Checks") before every publish.
+
+Reference projects: [River's Makefile.toml](https://github.com/freenet/river/blob/main/Makefile.toml) (cargo-make, Dioxus UI) and [freenet/raven's Makefile.toml](https://github.com/freenet/raven/blob/main/Makefile.toml) (formerly freenet-microblogging; cargo-make, TypeScript/Vite UI).
 
 ## Prerequisites
 
 ```bash
-# Install cargo-make
-cargo install cargo-make
-
-# Install WASM target
 rustup target add wasm32-unknown-unknown
-
-# Install Dioxus CLI
-cargo install dioxus-cli
-
-# Install Freenet tools (from freenet-core repo)
-cargo install --path crates/core   # freenet binary
-cargo install --path crates/fdev   # fdev development tool
-
-# For UI styling (optional)
-npm install  # in ui/ directory
+cargo install cargo-make   # if you use cargo-make
+# Dioxus UI: dx must equal the dioxus version in Cargo.lock. A mismatched dx prints
+# "incompatible" and still builds, so a bad build can be published.
+cargo binstall -y dioxus-cli@<dioxus version in Cargo.lock>
 ```
 
 ### Installing `fdev` / `freenet`
 
-Two ways. Pick deliberately.
+Install them from the freenet-core release that matches the gateway you publish to. Download `fdev-<triple>.tar.gz` and `freenet-<triple>.tar.gz` from the GitHub release (Linux triples end `-unknown-linux-musl`; macOS `aarch64-apple-darwin` or `x86_64-apple-darwin`), extract them and put them on `PATH`. It takes seconds, and it pins you to a known fdev flag surface: an old fdev lacks flags such as `execute update --as-state`, which the facade pointer flip needs.
 
-**From the freenet-core release tag (recommended for CI and reproducible
-local setups).** Download the prebuilt `.tar.gz` for your target from
-the freenet-core GitHub releases, extract `fdev` / `freenet` into
-`~/.cargo/bin/`, mark executable. This is the same artifact CI uses and
-takes ~5s instead of 10–15 min, and — importantly — it pins you to a
-known fdev API surface. The facade pointer-flip flow (`fdev execute
-update --as-state`) requires a recent enough fdev; older builds silently
-wrap the file as `UpdateData::Delta` and the on-chain contract rejects
-it. The release tag is the most reliable way to know which flags exist.
-
-```bash
-VERSION="0.2.65"   # match the gateway you publish to
-TARGET="$(uname -m)-$(uname | tr '[:upper:]' '[:lower:]')"
-case "$TARGET" in
-  arm64-darwin)  TRIPLE="aarch64-apple-darwin" ;;
-  x86_64-darwin) TRIPLE="x86_64-apple-darwin" ;;
-  *-linux)       TRIPLE="$(uname -m)-unknown-linux-musl" ;;
-esac
-
-cd /tmp
-curl -sSL "https://github.com/freenet/freenet-core/releases/download/v${VERSION}/fdev-${TRIPLE}.tar.gz"     | tar xz
-curl -sSL "https://github.com/freenet/freenet-core/releases/download/v${VERSION}/freenet-${TRIPLE}.tar.gz" | tar xz
-install -m 0755 fdev freenet ~/.cargo/bin/
-fdev --version && freenet --version
-```
-
-**From source (`cargo install --path …`).** Right when you're developing
-on freenet-core itself or you need an unreleased fix. Slower; gives you
-whatever's on the current branch, which may or may not match the
-gateway you're publishing to. **Version drift between your CLI and the
-gateway breaks publishes silently** (wire format / protocol enums change
-across stdlib minor releases) — see "Version drift is a real hazard"
-below.
-
-### Tooling Preflight
-
-Two release-time gotchas to know about:
-
-- **The Freenet HTTP/WebSocket gateway port is `7509`.** Earlier builds
-  listened on `50509`; older docs and example scripts you find online may
-  still hard-code that. If a probe or smoke test silently false-negatives,
-  check the port first. (Note: `fdev publish` itself uses the Rust `tar`
-  crate, not the system `tar` binary, so the build host's tar version
-  doesn't affect `fdev` directly.)
-- **For byte-reproducible webapp archives across build hosts**, invoke
-  `tar` with `--sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner`
-  in your `Makefile.toml`. This keeps diffs between releases meaningful
-  (the diff reflects content changes, not file-order or timestamp churn)
-  and lets two machines produce the same archive bytes from the same
-  source tree. macOS BSD `tar` doesn't accept those flags, so on macOS
-  install GNU tar (`brew install gnu-tar`) and use `gtar`. Optional but
-  recommended; River currently uses plain `tar -cJf`.
+`cargo install --path crates/fdev` (or `crates/core` for `freenet`) builds whatever is on the checked-out branch, which may not match the gateway. **Version drift between your CLI and the gateway breaks publishes silently**, because wire formats change across stdlib minor releases. Rebuild every consumer (CLI, webapp, test tools) against the same stdlib version as the gateway you publish to, and run the smoke test (`production-smoke-testing.md`) before shipping.
 
 ## Per-contract lockfile isolation
 
-**The problem.** A Freenet contract ID is `hash(wasm, parameters)`. The
-WASM bytes depend on every transitive dependency. If your contract
-shares the workspace `Cargo.lock` with the UI crate, a routine bump to
-`dioxus`, `chrono`, `serde`, etc. resolves a different patch version
-deep in the contract's dependency tree → WASM bytes shift → contract ID
-rotates → every user's stored state under the old ID is orphaned.
+**The problem.** A Freenet contract ID is `hash(wasm, parameters)`. The WASM bytes depend on every transitive dependency. If your contract shares the workspace `Cargo.lock` with the UI crate, a routine bump to `dioxus`, `chrono`, `serde`, etc. resolves a different patch version deep in the contract's dependency tree, the WASM bytes shift, the contract ID rotates, and every user's stored state under the old ID is orphaned.
 
-This happens silently. There is no warning. The first sign is users
-saying "my inbox is empty after the update."
+This happens silently. There is no warning. The first sign is users saying "my inbox is empty after the update."
 
-**The fix.** Exclude every committable-state contract / delegate from
-the workspace, give it its own `Cargo.lock`, and pin every dependency
-that affects WASM output with `=x.y.z`.
+**The fix.** Exclude every committable-state contract and delegate from the workspace and give it its own committed `Cargo.lock`.
 
 ```toml
 # Cargo.toml (workspace root)
@@ -108,39 +50,27 @@ exclude = [
 ```
 
 ```toml
-# contracts/inbox/Cargo.toml — NOT a workspace member
+# contracts/inbox/Cargo.toml: NOT a workspace member
 [package]
 name        = "my-inbox-contract"
 version     = "0.1.0"
 edition     = "2021"
 publish     = false
 
-# One-line stanza so fdev's get_workspace_target_dir() walk doesn't
-# panic when run from inside this crate.
+# Makes this crate its own workspace root, so fdev puts its output in this
+# crate's own target/ and not the UI workspace's.
 [workspace]
 
 [dependencies]
-freenet-stdlib = { version = "=0.8.0", features = ["contract"] }
-ml-dsa         = "=0.0.4"
-chrono         = { version = "=0.4.40", default-features = false }
-serde          = { version = "=1.0.219", features = ["derive"] }
-ciborium       = "=0.2.2"
+freenet-stdlib = { version = "=<ver>", features = ["contract"] }
+serde          = { version = "=<ver>", features = ["derive"] }
 ```
 
-Commit `contracts/inbox/Cargo.lock`. `cargo update` at the workspace
-root cannot touch it. The contract WASM stays byte-stable until you
-edit a `=x.y.z` pin in this manifest yourself.
+Commit `contracts/inbox/Cargo.lock` and build `--locked`. `cargo update` at the workspace root cannot touch it. Pin direct dependencies with `=x.y.z` if you want a manifest edit to be the only way a direct version moves; the lockfile is what fixes the transitive ones.
 
-**`CARGO_TARGET_DIR` per crate.** `fdev build` walks up to find
-`Cargo.toml`, then uses cargo's default `target/` (which is the
-workspace's). Two problems: (1) it shares a `target/` with workspace
-builds whose dependency tree is different, so cargo wastes work, and
-(2) on machines that have the workspace `Cargo.lock`-locked target dir
-already populated, fdev's resolver disagrees with cargo and panics.
-Pin the target dir to the crate-local one in every build task:
+**`CARGO_TARGET_DIR` per crate.** `fdev build` puts output in the `target/` of the workspace it finds, or the crate's own `target/`. Set `CARGO_TARGET_DIR` to the crate's own directory in each build task so an isolated contract never shares a `target/` with the UI, whose dependency tree differs:
 
 ```toml
-# Makefile.toml
 [tasks.build-inbox-contract]
 description = "Build the inbox contract WASM (lockfile-isolated)"
 script = '''
@@ -150,121 +80,41 @@ CARGO_TARGET_DIR="$CRATE_DIR/target" fdev build --features contract
 '''
 ```
 
-**Deliberate rotation.** When you DO want to rotate the contract ID
-(e.g. a contract upgrade), it's now a one-line diff: bump a `=x.y.z`
-pin in the contract's manifest, rebuild, and pair the change with the
-migration recipe in `contract-patterns.md` (append the prior
-`CODE_HASH` to your `LEGACY_*_CODE_HASHES` list). The rotation is now
-explicit, reviewable, and recoverable.
+**Deliberate rotation.** When you do want to rotate the contract ID (a contract upgrade), it is a small diff: change the dependency, rebuild, and pair the change with the migration recipe in `contract-patterns.md` (append the prior `CODE_HASH` to your `LEGACY_*_CODE_HASHES` list). The rotation is then explicit, reviewable and recoverable.
 
 ## Contract ID reproducibility caveat
 
-Contract IDs are **not reproducible from unpinned source on an arbitrary
-host** — toolchain version, `wasm-opt`, and dependency drift all move the
-WASM bytes, and the ID moves with them (see the next section). With the
-pins in place they *are* reproducible, which is exactly why the
-byte-equality CI gate below can be green and is worth enforcing. They are
-unconditionally reproducible from the committed **artifacts**: the ID is
-`BLAKE3(BLAKE3(wasm) || params)` and nothing else.
+Contract IDs are **not reproducible from unpinned source on an arbitrary host**: toolchain version, `wasm-opt`, and dependency drift all move the WASM bytes, and the ID moves with them (see the next section). With the pins in place they are reproducible, which is why the byte-equality CI gate below can be green and is worth enforcing. They are unconditionally reproducible from the committed **artifacts**: the ID is `BLAKE3(BLAKE3(wasm) || params)` and nothing else.
 
-> **A signing timestamp does NOT move the contract ID.** An earlier version
-> of this section claimed that because `web-container-tool` writes
-> `SystemTime::now().as_secs()` into the signed payload's `version` field,
-> two developers signing at different moments get different IDs. That is
-> wrong: the `version` and signature live in the webapp **metadata**, which
-> is part of the contract's *state*. The only ID inputs are the container
-> WASM and the `parameters` file (32 bytes of Ed25519 verifying key).
-> Different signing times produce different *state*, at the same ID — which
-> is precisely the in-place upgrade mechanism described in
-> `web-container-contract.md`.
+A signing timestamp does not move the contract ID. The webapp's `version` and signature live in its metadata, which is part of the contract's state; the ID depends only on the container WASM and the `parameters` file (32 bytes of Ed25519 verifying key). Different signing times change the state at the same ID, which is the in-place upgrade described in `web-container-contract.md`.
 
-The `version` field still matters, just for a different failure. The
-container's `update_state` requires it to be **strictly** greater than
-the stored version, so a bad version scheme breaks your ability to
-*publish an update*, while leaving the ID alone. A commit-hash scheme is
-not monotonic (any hash can compare either way against any other) and
-broke the v0.1.1 release of freenet/mail for exactly this reason.
-Wall-clock seconds fail the same way when two publishes tie or a clock
-runs ahead. Prefer a committed monotonic counter file.
+The `version` field still matters for a different failure. The container's `update_state` requires it to be **strictly** greater than the stored version, so a bad version scheme breaks your ability to publish an update while leaving the ID alone. A commit-hash scheme is not monotonic and broke the v0.1.1 release of freenet/mail for exactly this reason. Wall-clock seconds fail the same way when two publishes tie or a clock runs ahead. Use a committed monotonic counter file (River keeps `published-contract/contract-version.txt`).
 
 **Practical consequences.**
 
-- Commit `published-contract/<contract>.wasm` and
-  `published-contract/*.parameters`. Those two files *are* your address;
-  `contract-id.txt` is a convenience copy derived from them, worth
-  committing so a mistake is visible in review.
-- CI should enforce byte-equality on the committed **WASM**, which is the
-  check that actually catches an unintended re-key. Recomputing the ID
-  from the committed WASM + parameters is a valid second check.
-- A second developer *can* redo a publish from a clean checkout and reach
-  the same ID, provided they use the committed WASM and parameters rather
-  than rebuilding the contract.
-- `rust-toolchain.toml` must be committed and mirrored in any CI
-  workflow that rebuilds the contract — rustc version affects WASM
-  bytes, and the byte-equality check will fail if CI's rustc differs
-  from the one that produced the committed snapshot. Rustc is not the
-  only cause, and mirroring the toolchain alone will not fix a CI
-  mismatch: absolute build paths and a stale `target/` both move the
-  bytes too. See "Byte-reproducibility" below before concluding it is
-  the compiler.
+- Commit `published-contract/<contract>.wasm` and `published-contract/*.parameters`. Those two files *are* your address; `contract-id.txt` is a convenience copy derived from them, worth committing so a mistake is visible in review.
+- CI should enforce byte-equality on the committed **WASM**, which is the check that actually catches an unintended re-key. Recomputing the ID from the committed WASM + parameters is a valid second check.
+- A second developer can redo a publish from a clean checkout and reach the same ID, provided they use the committed WASM and parameters rather than rebuilding the contract.
+- `rust-toolchain.toml` must be committed and mirrored in any CI workflow that rebuilds the contract. Rustc is not the only cause of a mismatch, though; see "Byte-reproducibility" before concluding it is the compiler.
 
 ## Byte-reproducibility: the lockfile is necessary but NOT sufficient
 
-A contract's key is `BLAKE3(BLAKE3(wasm) || params)`, so a rebuild that changes
-the WASM bytes re-keys the contract and orphans every user's stored state — and
-the bytes change from more than source edits. This is the single biggest source
-of silent data loss; treat reproducibility as a first-class requirement.
+A contract's key is `BLAKE3(BLAKE3(wasm) || params)`, so a rebuild that changes the WASM bytes re-keys the contract and orphans every user's stored state, and the bytes change from more than source edits. This is the single biggest source of silent data loss; treat reproducibility as a first-class requirement.
 
 **The minimum bar (do all three):**
 
-1. **Commit a `Cargo.lock`** (workspace-root, or per-contract per "Per-contract
-   lockfile isolation" above — the latter is more robust because a UI-only
-   `cargo update` then can't touch the contract). River's `Cargo.lock` was
-   *gitignored* until freenet/river#393, so every build re-resolved the
-   dependency graph; a transitive dep drift silently changed the WASM bytes and
-   therefore the contract/delegate keys, orphaning room data with **no code
-   change at all**. Committing the lock is the fix.
-2. **Pin the toolchain** with a committed `rust-toolchain.toml` (rustc version
-   changes the bytes).
-3. **Build `--locked`.** A `--locked` build fails loudly on a stale lock instead
-   of silently re-resolving and re-keying.
+1. **Commit a `Cargo.lock`** (workspace root, or per contract per "Per-contract lockfile isolation"; the latter is more robust because a UI-only `cargo update` then cannot touch the contract). River's `Cargo.lock` was gitignored until freenet/river#393, so every build re-resolved the dependency graph and a transitive drift silently changed the WASM and the contract/delegate keys with **no code change at all**.
+2. **Pin the toolchain** with a committed `rust-toolchain.toml` (rustc version changes the bytes).
+3. **Build `--locked`.** A `--locked` build fails loudly on a stale lock instead of silently re-resolving and re-keying.
 
-**Why that is still not enough** — these also change the bytes and none is
-covered by the lockfile:
+**Why that is still not enough.** These also change the bytes, and none is covered by the lockfile:
 
-- **`wasm-opt` / binaryen version.** If your build runs `wasm-opt` (directly or
-  via `dx`), its version changes the output. Pin it (or build in a pinned
-  container).
-- **The UI toolchain (`dx`) version.** For a UI compiled to WASM, the Dioxus CLI
-  version affects the bytes just like rustc does. Pin it.
-- **`cargo fmt`.** Panic locations embed `file:line`, so reformatting a contract
-  crate moves the panic metadata and therefore the WASM bytes and the contract
-  address — with no semantic change and nothing in the diff that looks like a
-  re-key. Observed for real in the freenet-bitcoin bridge, where a `cargo fmt`
-  re-keyed the contracts and the successor came up with zero claims. Either treat a
-  contract crate's formatting as frozen between deliberate re-keys, or run `cargo
-  fmt` and re-key on purpose, registering the outgoing hash first.
-- **Absolute build-path embedding — and remapping your own source path is not
-  enough.** Release binaries embed panic locations as `file:line`, and for
-  dependencies cargo passes **absolute** paths, so the registry root lands in the
-  bytes. Measured in a real contract: `/home/ian/.cargo/registry/.../blake3-1.8.7/`
-  and thirteen other crate roots, 21 occurrences in one WASM. Because the address
-  is `BLAKE3(BLAKE3(wasm) ‖ params)`, **every contract that project had built was
-  bound to the machine that built it** — a GitHub runner and the dev box produced
-  different contracts from one commit, so nobody could reproduce what was deployed.
-  A developer who remaps only the repo root will still ship a machine-specific
-  contract and see nothing wrong.
+- **`wasm-opt` / binaryen version.** If your build runs `wasm-opt` (directly or via `dx`), its version changes the output. Pin it (or build in a pinned container).
+- **The UI toolchain (`dx`) version.** For a UI compiled to WASM, the Dioxus CLI version affects the bytes just like rustc does. Pin it.
+- **`cargo fmt`.** Panic locations embed `file:line`, so reformatting a contract crate moves the panic metadata and therefore the WASM bytes and the contract address, with no semantic change and nothing in the diff that looks like a re-key. This re-keyed the contracts of the freenet-bitcoin bridge and the successor came up with zero claims. Either treat a contract crate's formatting as frozen between deliberate re-keys, or run `cargo fmt` and re-key on purpose, registering the outgoing hash first.
+- **Absolute build-path embedding, and remapping your own source path is not enough.** Release binaries embed panic locations as `file:line`, and for dependencies cargo passes **absolute** paths, so the registry root lands in the bytes. Measured in a real contract: `/home/ian/.cargo/registry/.../blake3-1.8.7/` and thirteen other crate roots, 21 occurrences in one WASM. Because the address is `BLAKE3(BLAKE3(wasm) ‖ params)`, **every contract that project had built was bound to the machine that built it**: a GitHub runner and the dev box produced different contracts from one commit, so nobody could reproduce what was deployed. A developer who remaps only the repo root will still ship a machine-specific contract and see nothing wrong.
 
-  Remap all three varying roots — `CARGO_HOME`, `RUSTUP_HOME`, and the repo — or
-  build in a pinned container. **`--remap-path-prefix` is the option that works
-  today.** Cargo's `trim-paths = "all"` profile setting covers dependency and
-  sysroot paths more thoroughly, but it is still unstable: on Rust 1.96.0 it fails
-  with *"the package requires the Cargo feature called `trim-paths`, but that
-  feature is not stabilized in this version of Cargo"*, and there is no
-  `-Ctrim-paths` codegen flag at all (`rustc -Ctrim-paths=all` → *"unknown codegen
-  option"*). Check stabilization before reaching for it; River intends to adopt it
-  on its next deliberate re-key (freenet/river#393). The working example is
-  `freenet-bitcoin/scripts/build-contracts.sh`:
+  Remap all three varying roots (`CARGO_HOME`, `RUSTUP_HOME`, and the repo) or build in a pinned container. **`--remap-path-prefix` is the option that works.** Cargo's `trim-paths = "all"` profile setting is still unstable on stable Cargo (checked on 1.98.1: "the package requires the Cargo feature called `trim-paths`, but that feature is not stabilized"), and there is no `-Ctrim-paths` codegen flag, so check stabilization again before reaching for it. The working example is `freenet-bitcoin/scripts/build-contracts.sh`:
 
   ```bash
   CARGO_DIR="${CARGO_HOME:-$HOME/.cargo}"
@@ -276,90 +126,25 @@ covered by the lockfile:
   --remap-path-prefix=$REPO=/build"
   ```
 
-  **The replacement names are now part of the contract's identity.** They are
-  arbitrary, but changing one re-keys every contract, so pick them once and treat
-  them as frozen. This is also why the flags belong in one canonical script and
-  nowhere else: a second invocation that sets them differently, or not at all,
-  produces a different contract while looking like the same command.
+  **The replacement names are part of the contract's identity.** They are arbitrary, but changing one re-keys every contract, so pick them once and treat them as frozen. This is also why the flags belong in one canonical script and nowhere else: a second invocation that sets them differently, or not at all, produces a different contract while looking like the same command.
 
-- **A stale `target/` silently changes contract identity.** `cargo clean -p` on the
-  workspace crates is **not** sufficient: dependency artifacts are reused, and under
-  fat LTO they yield a different module and therefore a different contract. Measured
-  the same day — two fresh clones at different paths agreed with each other, and a
-  long-lived working tree agreed with neither. Anything whose hash you intend to
-  record or pin must be built into a throwaway target dir:
+- **A stale `target/` silently changes contract identity.** `cargo clean -p` on the workspace crates is **not** sufficient: dependency artifacts are reused, and under fat LTO they yield a different module and therefore a different contract. Measured: two fresh clones at different paths agreed with each other, and a long-lived working tree agreed with neither. Anything whose hash you intend to record or pin must be built into a throwaway target dir:
 
   ```bash
   D=$(mktemp -d); ./scripts/build-contracts.sh "$D"; rm -rf "$D"
   ```
 
-  The nasty case is not a build that fails; it is a bundle built against a stale
-  `target/` that derives perfectly self-consistent addresses for a contract nobody
-  publishes to any more. That has happened. Cross-check the embedded bytes against
-  the migration registry, not only against themselves.
+  The nasty case is not a build that fails; it is a bundle built against a stale `target/` that derives perfectly self-consistent addresses for a contract nobody publishes to any more. That has happened. Cross-check the embedded bytes against the migration registry, not only against themselves.
 
-**Build-command footgun — always use the canonical build script.** Building a
-contract crate **alone** (`cargo build -p my-contract`) can produce *different*
-bytes than building it **co-built** with sibling crates, because cargo unifies
-feature flags across the crates in one invocation. River's `-p room-contract`
-alone and `-p room-contract -p chat-delegate` together yield different
-`room_contract.wasm` bytes for exactly this reason (a sibling enables an extra
-feature on a shared crate). Never rebuild a to-be-published contract with an
-ad-hoc `cargo build -p`; always go through the project's canonical build script
-so the feature unification — and therefore the key — is stable.
+**Build-command footgun: always use the canonical build script.** Building a contract crate **alone** (`cargo build -p my-contract`) can produce *different* bytes than building it **co-built** with sibling crates, because cargo unifies feature flags across the crates in one invocation. River's `-p room-contract` alone and `-p room-contract -p chat-delegate` together yield different `room_contract.wasm` bytes for exactly this reason (a sibling enables an extra feature on a shared crate). Never rebuild a to-be-published contract with an ad-hoc `cargo build -p`; go through the project's canonical build script so the feature unification, and therefore the key, is stable.
 
-This whole area is tracked upstream as "graceful upgrades for delegates and
-contracts" (freenet-core#2776).
+There is no node-level mechanism for carrying delegate secrets across a re-key today. Do not wait for one: migrate at the app level. Status is tracked in freenet-core#2776.
 
-## Publishing hygiene: pre-commit hook
+## Keep committed WASM and its identity together
 
-The signed-and-committed model means `published-contract/` is the only
-place a `.wasm` should ever live in the tree. Any other staged `.wasm`
-is either (a) a forgotten build artifact, or (b) a snapshot drift the
-author didn't notice. Both lose users access to old state when they
-land.
+Whatever directories hold committed `.wasm` files, a change to one must travel in the same commit as the contract-id file and, for a contract or delegate that already has users, the registry entry for the outgoing hash (see `upgrade-and-migration.md`). A stray `.wasm` added elsewhere is either a forgotten build artifact or snapshot drift the author did not notice, and both cost users access to old state. Enforce this in the publish task and in CI (see "Pre-Publish Checks"); a local git hook is optional.
 
-Enforce it locally with a repo-managed git hook:
-
-```bash
-# .githooks/pre-commit
-#!/bin/bash
-set -euo pipefail
-
-stray=$(git diff --cached --name-only --diff-filter=A \
-        | grep -E '\.wasm$' \
-        | grep -v '^published-contract/' || true)
-if [ -n "$stray" ]; then
-    echo "error: .wasm files staged outside published-contract/:" >&2
-    echo "$stray" >&2
-    echo "Either move them to published-contract/ (with a matching" >&2
-    echo "contract-id.txt update) or add them to .gitignore." >&2
-    exit 1
-fi
-
-# If published-contract/*.wasm changed, contract-id.txt must change too.
-wasm_changed=$(git diff --cached --name-only \
-               | grep -E '^published-contract/.*\.wasm$' || true)
-if [ -n "$wasm_changed" ]; then
-    id_staged=$(git diff --cached --name-only \
-                | grep -E '^published-contract/(contract|facade)-id\.txt$' || true)
-    if [ -z "$id_staged" ]; then
-        echo "error: published-contract/*.wasm changed but no *-id.txt is staged." >&2
-        echo "Run \`cargo make update-published-contract\` (or the equivalent" >&2
-        echo "snapshot task) and stage the resulting *.wasm, *.parameters," >&2
-        echo "and *-id.txt together." >&2
-        exit 1
-    fi
-fi
-```
-
-Activate per-clone:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-## Project Cargo.toml (Workspace Root)
+## Project Cargo.toml (workspace root)
 
 ```toml
 [workspace]
@@ -372,364 +157,13 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Mirror River's pinned versions; bump together when upgrading. Check
-# https://github.com/freenet/river/blob/main/Cargo.toml before pinning.
-# 0.8.5 is River's pin, NOT the latest release (0.9.0 through 0.12.1
-# followed; no 0.7 was ever published to crates.io). For a CONTRACT crate that
-# is fine. A DELEGATE crate should be on 0.11.0 or later: 0.8.5 through 0.10.0
-# expose DelegateCtx write/subscribe methods that no node implements, and
-# calling one compiles, publishes, and then fails at module instantiation.
-# Manifest wake-ups need 0.12.1. See references/delegate-patterns.md.
-freenet-stdlib = { version = "0.8.5", features = ["contract"] }
-freenet-scaffold = "0.2.2"
-freenet-scaffold-macro = "0.2.2"
+# Use the versions River pins: https://github.com/freenet/river/blob/main/Cargo.toml
+freenet-stdlib = { version = "<ver>", features = ["contract"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-**Version drift is a real hazard.** Each stdlib minor release has changed
-protocol enums and wire format at least once. Always rebuild *all* consumer
-binaries (CLI, webapp, test tools) against the same stdlib version as the
-gateway you publish to, and run the smoke-test below before shipping.
-
-## Makefile.toml
-
-```toml
-[config]
-default_to_workspace = false
-
-# ============================================
-# CONTRACT BUILD
-# ============================================
-
-# One task builds BOTH wasm crates, through the one script that sets the
-# --remap-path-prefix flags and runs the fail-closed path check. Two separate
-# `cargo build -p` tasks would be two bugs at once: each crate would be built
-# without the sibling, changing the feature unification and therefore the key
-# (see "Build-command footgun"), and neither would be remapped, binding both
-# contracts to this machine (see "Byte-reproducibility").
-[tasks.build-contracts]
-description = "Build contract + delegate to WASM, reproducibly"
-script = '''
-./scripts/build-contracts.sh
-'''
-
-[tasks.copy-contract]
-description = "Copy contract WASM to UI public folder"
-dependencies = ["build-contracts"]
-script = '''
-mkdir -p ui/public/contracts
-cp target/wasm32-unknown-unknown/release/my_contract.wasm ui/public/contracts/
-'''
-
-# ============================================
-# DELEGATE BUILD
-# ============================================
-
-[tasks.copy-delegate]
-description = "Copy delegate WASM to UI public folder"
-dependencies = ["build-contracts"]
-script = '''
-mkdir -p ui/public/contracts
-cp target/wasm32-unknown-unknown/release/my_delegate.wasm ui/public/contracts/
-'''
-
-# ============================================
-# UI BUILD
-# ============================================
-
-[tasks.build-css]
-description = "Build Tailwind CSS"
-cwd = "./ui"
-command = "npm"
-args = ["run", "build:css"]
-
-[tasks.build-ui]
-description = "Build UI with Dioxus"
-dependencies = ["build-css", "copy-contract", "copy-delegate"]
-cwd = "./ui"
-command = "dx"
-args = ["build", "--release"]
-
-# ============================================
-# DEVELOPMENT
-# ============================================
-
-[tasks.dev]
-description = "Run development server"
-dependencies = ["copy-contract", "copy-delegate"]
-cwd = "./ui"
-command = "dx"
-args = ["serve"]
-
-[tasks.dev-example]
-description = "Run with example data"
-dependencies = ["copy-contract", "copy-delegate"]
-cwd = "./ui"
-command = "dx"
-args = ["serve", "--features", "example-data"]
-
-[tasks.dev-no-sync]
-description = "Run without Freenet sync"
-dependencies = ["copy-contract", "copy-delegate"]
-cwd = "./ui"
-command = "dx"
-args = ["serve", "--features", "no-sync"]
-
-[tasks.dev-example-no-sync]
-description = "Run with example data and no sync"
-dependencies = ["copy-contract", "copy-delegate"]
-cwd = "./ui"
-command = "dx"
-args = ["serve", "--features", "example-data,no-sync"]
-
-# ============================================
-# FULL BUILD
-# ============================================
-
-[tasks.build]
-description = "Full release build"
-dependencies = [
-    "build-contract",
-    "build-delegate",
-    "build-ui",
-]
-
-# ============================================
-# PACKAGING & DEPLOYMENT
-# ============================================
-
-[tasks.package-webapp]
-description = "Create webapp archive"
-dependencies = ["build"]
-script = '''
-mkdir -p target/webapp
-cd target/dx/my-dapp-ui/release/web/public
-tar -cJf ../../../../../webapp/webapp.tar.xz .
-'''
-
-[tasks.sign-webapp]
-description = "Sign webapp for deployment"
-dependencies = ["package-webapp"]
-script = '''
-# Most projects should use `fdev website publish/update` instead of this
-# hand-rolled pipeline — it ships a generic container contract and signer.
-# See web-container-contract.md. The tasks below are the River-style bespoke
-# path, kept for projects that already have one.
-#
-# web-container-tool is built in the web-container-contract subcrate
-# (see contracts/web-container-contract/web-container-tool in River).
-# Version must be strictly greater than the currently-published metadata.
-# Source it from a COMMITTED COUNTER FILE, not wall-clock time: ties and
-# clock skew both hard-block future publishes. This publishes to the SAME
-# contract ID every release — that is the in-place upgrade, not a re-key.
-web-container-tool sign \
-    --input target/webapp/webapp.tar.xz \
-    --output target/webapp/webapp.metadata \
-    --parameters target/webapp/webapp.parameters \
-    --version ${WEBAPP_VERSION}
-'''
-
-[tasks.publish]
-description = "Publish to local Freenet node"
-dependencies = ["sign-webapp"]
-script = '''
-# Publishes a webapp-bearing contract. --code/--parameters go BEFORE the
-# `contract` subcommand; --webapp-archive/--webapp-metadata go AFTER.
-# --parameters must be the committed file whose bytes determine the contract
-# ID (changing it changes the contract key). fdev defaults to local mode on
-# 127.0.0.1:7509; override with -p if your node uses a different port.
-fdev -p 7509 publish \
-    --code target/wasm32-unknown-unknown/release/web_container_contract.wasm \
-    --parameters target/webapp/webapp.parameters \
-    contract \
-    --webapp-archive target/webapp/webapp.tar.xz \
-    --webapp-metadata target/webapp/webapp.metadata
-'''
-
-# ============================================
-# TESTING
-# ============================================
-
-[tasks.test]
-description = "Run all tests"
-command = "cargo"
-args = ["test", "--workspace"]
-
-[tasks.test-contract]
-description = "Run contract tests"
-command = "cargo"
-args = ["test", "-p", "my-contract"]
-
-[tasks.clippy]
-description = "Run clippy"
-command = "cargo"
-args = ["clippy", "--workspace", "--all-targets"]
-
-# ============================================
-# LOCAL MODE TESTING
-# ============================================
-
-[tasks.local-node]
-description = "Start Freenet in local mode for testing"
-command = "freenet"
-args = ["local"]
-# Runs on 127.0.0.1:7509 by default
-
-[tasks.publish-local]
-description = "Publish contract to local node"
-dependencies = ["build-contract"]
-script = '''
-# For a plain (non-webapp) contract. fdev defaults to local mode (127.0.0.1:7509).
-fdev -p 7509 publish \
-    --code target/wasm32-unknown-unknown/release/my_contract.wasm \
-    --parameters parameters.bin \
-    contract \
-    --state initial_state.bin
-'''
-
-[tasks.update-local]
-description = "Send update to local contract"
-script = '''
-fdev execute update ${CONTRACT_KEY} \
-    --delta delta.bin
-'''
-
-[tasks.get-local]
-description = "Get current state of a local contract"
-script = '''
-fdev execute get ${CONTRACT_KEY} --output state.bin
-'''
-```
-
-## UI package.json (for Tailwind)
-
-```json
-{
-  "scripts": {
-    "build:css": "npx tailwindcss -i ./src/input.css -o ./public/tailwind.css --minify",
-    "watch:css": "npx tailwindcss -i ./src/input.css -o ./public/tailwind.css --watch"
-  },
-  "devDependencies": {
-    "tailwindcss": "^3.4"
-  }
-}
-```
-
-## Common Commands
-
-```bash
-# Development
-cargo make dev                    # Start dev server
-cargo make dev-example            # With example data
-cargo make dev-no-sync            # Without Freenet connection
-cargo make dev-example-no-sync    # Both features
-
-# Building
-cargo make build                  # Full release build
-cargo make build-contract         # Just the contract
-cargo make build-delegate         # Just the delegate
-cargo make build-ui               # Just the UI
-
-# Unit testing
-cargo make test                   # All tests
-cargo make clippy                 # Linting
-
-# Integration testing with local mode
-cargo make local-node             # Start local Freenet node
-cargo make publish-local          # Publish contract to local node
-
-# Deployment
-cargo make package-webapp         # Create archive
-cargo make sign-webapp            # Sign for deployment
-cargo make publish                # Publish to Freenet
-```
-
-## Plain Makefile (TypeScript + Vite)
-
-For TypeScript UIs, a plain `Makefile` is simpler than cargo-make:
-
-```makefile
-PROJECT_DIR := $(abspath .)
-WEB_DIR := $(PROJECT_DIR)/web
-CONTRACT_DIR := $(PROJECT_DIR)/contracts/my-contract
-DELEGATE_DIR := $(PROJECT_DIR)/delegates/my-delegate
-
-# Require CARGO_TARGET_DIR to avoid path assumptions
-ifeq ($(CARGO_TARGET_DIR),)
-$(error CARGO_TARGET_DIR is not set)
-endif
-
-build: contract delegate publish-contract publish-delegate webapp publish-webapp
-
-# --- Contract ---
-contract:
-	cd $(CONTRACT_DIR) && fdev build
-	# Extract contract key hash for the webapp
-	hash=$$(fdev inspect $(CONTRACT_DIR)/build/freenet/my_contract key \
-	    | grep 'code key:' | cut -d' ' -f3) && \
-	    printf '%s' $$hash > $(WEB_DIR)/model_code_hash.txt
-
-publish-contract:
-	fdev publish \
-	    --code $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/my_contract.wasm \
-	    contract \
-	    --state $(CONTRACT_DIR)/initial_state.json
-
-# --- Delegate ---
-delegate:
-	cd $(DELEGATE_DIR) && fdev build --package-type delegate
-
-publish-delegate:
-	# 1. Publish and capture key (strip ANSI escape codes from fdev output)
-	key=$$(fdev publish \
-	    --code $(DELEGATE_DIR)/build/freenet/my_delegate \
-	    delegate 2>&1 \
-	    | sed 's/\x1b\[[0-9;]*m//g' \
-	    | grep -o 'key: [^ ,]*' | head -1 | cut -d' ' -f2) && \
-	    printf '%s' $$key > $(WEB_DIR)/delegate_key.txt && \
-	    node -e "const bs58=require('bs58'); \
-	        console.log(JSON.stringify(Array.from(bs58.default.decode('$$key'))))" \
-	        > $(WEB_DIR)/delegate_key_bytes.json
-	# 2. Compute code_hash from raw WASM (BLAKE3).
-	#    This value is baked into the UI, so it must come from a build you
-	#    trust: a reused CARGO_TARGET_DIR can change the bytes (see
-	#    "Byte-reproducibility"). Point CARGO_TARGET_DIR at a fresh dir for
-	#    any build whose hash you record.
-	code_hash_hex=$$(b3sum --no-names \
-	    $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/my_delegate.wasm) && \
-	    node -e "console.log(JSON.stringify(Array.from( \
-	        Buffer.from('$$code_hash_hex'.trim(),'hex'))))" \
-	        > $(WEB_DIR)/delegate_code_hash_bytes.json
-
-# --- Webapp ---
-webapp:
-	cd $(WEB_DIR) && npm install && npm run build && fdev build
-
-publish-webapp:
-	fdev publish \
-	    --code $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/my_web.wasm \
-	    contract \
-	    --state $(WEB_DIR)/build/freenet/contract-state
-
-# --- Utilities ---
-run-node:
-	RUST_BACKTRACE=1 RUST_LOG=freenet=debug,info \
-	    freenet local --ws-api-address 127.0.0.1
-
-clean-node:
-	rm -rf ~/Library/Application\ Support/The-Freenet-Project-Inc.Freenet
-	rm -rf ~/Library/Caches/The-Freenet-Project-Inc.freenet
-
-clean:
-	cargo clean
-	rm -rf $(WEB_DIR)/dist $(WEB_DIR)/build
-	rm -f $(WEB_DIR)/model_code_hash.txt $(WEB_DIR)/delegate_key*.json
-```
-
-## fdev Publish: Contracts vs Delegates (CRITICAL)
-
-The `fdev publish` command works **differently** for contracts and delegates:
+## `fdev publish`: contracts vs delegates
 
 | | Contracts | Delegates |
 |---|---|---|
@@ -737,60 +171,17 @@ The `fdev publish` command works **differently** for contracts and delegates:
 | Subcommand | `contract` | `delegate` |
 | State | `--state initial_state.json` | None |
 
-```bash
-# Contract: raw WASM file
-fdev publish --code target/wasm32-unknown-unknown/release/my_contract.wasm \
-    contract --state initial_state.json
+`--code` and `--parameters` go before the `contract`/`delegate` subcommand; contract flags such as `--state` and `--webapp-archive` go after it.
 
-# Delegate: packaged file (NOT raw WASM)
-fdev publish --code delegates/my-delegate/build/freenet/my_delegate \
-    delegate
-```
+To get a contract key without publishing, use `fdev get-contract-id --code ... --parameters ...`; `fdev inspect <packaged file> key` prints `code key: <key>` for empty parameters. Derive a delegate's key and `code_hash` offline from the built WASM (a delegate key is `BLAKE3(code_hash || parameters)`, the same rule as a contract key) rather than scraping `fdev publish` output; see freenet/raven's `Makefile.toml` (`build-identity-delegate`).
 
-Using the wrong file type causes silent failures or cryptic errors.
+## Contract WASM optimization
 
-### ANSI Escape Code Stripping
-
-`fdev` output contains ANSI color codes. When piping to `grep` or capturing keys, strip them:
-
-```bash
-fdev publish ... 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'key: [^ ,]*'
-```
-
-### clean-node Pattern
-
-When republishing contracts/delegates with the same key (common during development), the node may reject the update. Delete node data between iterations:
-
-```bash
-# macOS
-rm -rf ~/Library/Application\ Support/The-Freenet-Project-Inc.Freenet
-
-# Linux
-rm -rf ~/.local/share/freenet/
-```
-
-## Contract WASM Optimization
-
-For smaller WASM files, add to contract's Cargo.toml:
-
-```toml
-[profile.release]
-opt-level = "z"      # Optimize for size
-lto = true           # Link-time optimization
-codegen-units = 1    # Better optimization
-panic = "abort"      # Smaller binary
-
-[profile.release.package.my-contract]
-opt-level = "z"
-```
+Size-optimize contracts with the usual release profile (`opt-level = "z"`, `lto = true`, `codegen-units = 1`, `panic = "abort"`). Changing a profile changes the contract's WASM, and therefore its key.
 
 ### Signature-heavy contracts: build the crypto crates for speed
 
-`opt-level = "z"` makes signature verification about 1.4x slower than
-`opt-level = 3`. For a contract whose `validate_state` or `update_state` checks
-many signatures, that is often the difference between fitting the node's per-call
-time limit and not. Build only the signature and hash crates for speed and leave
-everything else at `"z"`:
+`opt-level = "z"` makes signature verification about 1.4x slower than `opt-level = 3`. For a contract whose `validate_state` or `update_state` checks many signatures, that is often the difference between fitting the node's per-call time limit and not. Build only the signature and hash crates for speed and leave everything else at `"z"`:
 
 ```toml
 [profile.release.package.curve25519-dalek]
@@ -803,87 +194,25 @@ opt-level = 3
 opt-level = 3
 ```
 
-Measured 2026-10-26: ed25519-dalek 2.2 `verify_strict`, one fixed signature
-verified 2,000 times per run inside a wasmtime 47 host configured like
-freenet-core's engine (Cranelift `OptLevel::None`, 256 MiB reservation, epoch
-interruption, fuel off), median of 5 runs, on an Intel i9-9900K under load 3-9:
+Measured 2026-10-26 (ed25519-dalek `verify_strict` in a wasmtime host configured like the node's): about 327 us per signature with the crates at `"z"`, 227 us at `3`, 741 us with a forced 64-bit curve backend, 42-46 us native. The WASM file grows (River's room contract went from 799 KB to 811 KB). Do not force the 64-bit curve backend on `wasm32`: WASM has no 64x64-to-128-bit multiply, so the emulated multiplies make it about 2x slower than the default 32-bit backend.
 
-| Guest build | per signature |
-|---|---|
-| crypto crates at `opt-level = "z"` | 327 us |
-| crypto crates at `opt-level = 3` | 227 us |
-| `--cfg curve25519_dalek_bits="64"` (forced 64-bit backend) | 741 us |
-| `ed25519-compact` instead of ed25519-dalek | 720 us or more |
-| native (same CPU, for comparison) | 42-46 us |
+**Apply this to a new contract, or as part of a planned re-key with migration (`references/upgrade-and-migration.md`), never as a quiet rebuild of a deployed contract.**
 
-The WASM file grows (38 KB to 60 KB for the benchmark guest; River's next room
-contract went from 799 KB to 811 KB). Do not force the 64-bit curve backend on
-`wasm32`: WASM has no 64x64-to-128-bit multiply, so the emulated multiplies make
-it about 2x slower than the default 32-bit backend.
+**Budget the time per call, measured in WASM.** The node limits each contract call to 5 s. One incoming full-state update runs `validate_state` on the incoming state, `update_state`, then `validate_state` on the result, each a separate call, so the largest valid state AND the merge of two such states must each finish well under that limit. Native `cargo test` timings say nothing about this: in WASM a signature check costs about 5-8x native. Build the largest state your caps allow, time `validate_state` and `update_state` on the release WASM in a wasmtime host, and set the caps from that measurement. If the caps you need still do not fit, the limit is signature cost inside WASM; native-speed verification for contracts is tracked in [freenet-core#6000](https://github.com/freenet/freenet-core/issues/6000).
 
-**Changing a profile changes the contract's WASM, and therefore its key.** Apply
-this to a new contract, or as part of a planned re-key with migration
-(`references/upgrade-and-migration.md`), never as a quiet rebuild of a deployed
-contract.
+## Build verification
 
-**Budget the time per call, measured in WASM.** The node limits each contract
-call to 5 s. One incoming full-state update runs `validate_state` on the incoming
-state, `update_state`, then `validate_state` on the result, each a separate call,
-so the largest valid state AND the merge of two such states must each finish
-well under that limit. Native `cargo test` timings say nothing about this: in
-WASM a signature check costs about 5-8x native. Build the largest state your caps
-allow, time `validate_state` and `update_state` on the release WASM in a wasmtime
-host with the settings above, and set the caps from that measurement. If the caps
-you need still do not fit, the limit is signature cost inside WASM; native-speed
-verification for contracts is tracked in
-[freenet-core#6000](https://github.com/freenet/freenet-core/issues/6000).
+River's `cli/build.rs` is the reference for a crate that embeds committed WASM and checks it against the built artifact.
 
-## Build Verification
+### Reproduce build-caching bugs in a real clone, not a worktree
 
-River's CLI includes build verification to prevent deploying stale contracts:
+In a worktree `.git` is a *file*, so `println!("cargo:rerun-if-changed=../.git/HEAD")` names a path that cannot resolve, and cargo treats an unresolvable `rerun-if-changed` as always-dirty. The build script then re-runs on every build and never caches, which is exactly the condition under which a stale-artifact bug cannot appear. Resolve git metadata paths with `git rev-parse --git-path <spec>` instead of hardcoding `../.git/...`.
 
-```rust
-// cli/build.rs
-fn main() {
-    // Embed contract WASM into CLI binary
-    println!("cargo:rerun-if-changed=../contracts/my-contract/src/lib.rs");
-
-    let wasm = std::fs::read("../target/wasm32-unknown-unknown/release/my_contract.wasm")
-        .expect("Contract WASM not found - run `cargo make build-contract` first");
-
-    // Verify it matches the freshly built version
-    let fresh_hash = sha256(&wasm);
-    // ... verification logic
-}
-```
-
-### Build-caching bugs are invisible from a git worktree
-
-**Reproduce any stale-artifact or build-caching bug in a real clone, never in a
-worktree.** In a worktree `.git` is a *file*, not a directory, so a `build.rs`
-line like `println!("cargo:rerun-if-changed=../.git/HEAD")` names a path that
-cannot resolve, and cargo treats an unresolvable `rerun-if-changed` as
-always-dirty. The build script then re-runs on every build and never caches,
-which is precisely the condition under which a stale-artifact bug cannot appear.
-Delta's stale legacy-delegate table (freenet/delta#52, #53) survived
-investigation for exactly this reason: every reproduction attempt happened in a
-worktree, while `cargo make publish-delta` runs in a real clone. The fix is to
-resolve git metadata paths with `git rev-parse --git-path <spec>` instead of
-hardcoding `../.git/...` (freenet/delta#58).
-
-**Related, and worth knowing in the same breath: `cargo:` directives are parsed
-from stdout only.** `eprintln!("cargo:warning=...")` renders nothing at all, so a
-build script that "warns" on stderr and continues is silent rather than loud. And
-a `cargo:warning` is not a gate even on stdout, because nothing fails on it: when
-a build script finds a condition that must stop the build, `panic!`.
+`cargo:` directives are read from stdout only. `eprintln!("cargo:warning=...")` renders nothing, and even on stdout a `cargo:warning` is not a gate because nothing fails on it. When a build script finds a condition that must stop the build, `panic!`.
 
 ### Verify no build-machine path survived, and fail closed
 
-A hash-equality check cannot catch a machine-specific path, because the committed
-artifact it compares against was produced on the same machine. It needs its own
-check, and that check must **refuse the build** rather than warn — the same
-argument as the `cargo:warning` one above, applied to the bytes. From
-`freenet-bitcoin/scripts/build-contracts.sh`:
+A hash-equality check cannot catch a machine-specific path, because the committed artifact it compares against was produced on the same machine. It needs its own check, and that check must **refuse the build** rather than warn. From `freenet-bitcoin/scripts/build-contracts.sh`:
 
 ```bash
 for f in "$OUT"/my_contract.wasm; do
@@ -902,192 +231,38 @@ for f in "$OUT"/my_contract.wasm; do
 done
 ```
 
-Two things make this work. It is a **deny-list of roots known to vary**, not an
-allow-list of acceptable path shapes — an allow-list would have to enumerate every
-shape a path can take. And the second, generic `/home|/Users` probe catches a root
-nobody thought to remap: a vendored artifact, a build script writing its own path,
-a dependency baking one in. A varying root that is not on the list is the next
-instance of this bug.
+Two things make this work. It is a **deny-list of roots known to vary**, not an allow-list of acceptable path shapes (an allow-list would have to enumerate every shape a path can take). And the generic `/home|/Users` probe catches a root nobody thought to remap: a vendored artifact, a build script writing its own path, a dependency baking one in. A varying root that is not on the list is the next instance of this bug.
 
-Put the check in the canonical build script, so it runs on the path `publish`
-actually takes, and not only in CI — see "Pre-Publish Checks" below on why a gate
-that lives only in CI is a gate the publish can walk around.
+Put the check in the canonical build script, so it runs on the path `publish` actually takes and not only in CI (see "Pre-Publish Checks").
 
-## Testing with Local Mode
+## Testing with local mode
 
-Freenet's **local mode** runs a standalone executor without network connectivity. Use this for testing contract and delegate logic during development.
-
-### What Local Mode Does
-
-- Runs contracts/delegates locally without P2P networking
-- WebSocket API available at `127.0.0.1:7509`
-- Operations complete immediately (no network round-trips)
-- Subscribe operations are no-ops (no remote peers)
-- All state stored and retrieved locally
-
-### Development Workflow
-
-**Terminal 1: Start Local Node**
-```bash
-# With debug logging
-RUST_BACKTRACE=1 RUST_LOG=freenet=debug freenet local
-
-# Or via cargo-make
-cargo make local-node
-```
-
-**Terminal 2: Publish and Test**
-```bash
-# Build contract
-cargo make build-contract
-
-# Publish to local node (fdev defaults to local mode; -p overrides the port).
-# --code/--parameters go BEFORE the `contract` subcommand; --state goes AFTER.
-fdev -p 7509 publish \
-    --code target/wasm32-unknown-unknown/release/my_contract.wasm \
-    --parameters params.bin \
-    contract \
-    --state initial_state.bin
-
-# Returns contract key, e.g.: HjT8Kf2...
-
-# Send an update
-fdev execute update HjT8Kf2... \
-    --delta update.bin
-
-# Get current state
-fdev execute get HjT8Kf2...
-
-# Get state and save to file
-fdev execute get HjT8Kf2... --output state.bin
-
-# Subscribe to updates (streams until Ctrl+C)
-fdev execute subscribe HjT8Kf2...
-```
-
-**Terminal 3: Run UI**
-```bash
-# UI connects to local node at ws://127.0.0.1:7509
-cargo make dev
-```
-
-### Testing Levels
-
-1. **Unit Tests** - Test state logic without Freenet
-   - Commutativity tests (see contract-patterns.md)
-   - Serialization round-trips
-   - Validation logic
-   ```bash
-   cargo test -p my-contract
-   ```
-
-2. **Local Mode** - Test with real Freenet executor
-   - Contract deployment and state management
-   - Delegate secret storage
-   - UI integration via WebSocket
-   ```bash
-   freenet local  # Terminal 1
-   cargo make dev # Terminal 2
-   ```
-
-3. **Network Simulation** - Test P2P behavior (advanced)
-   ```bash
-   fdev test single-process --nodes 5
-   ```
-   Runs multiple simulated nodes in-memory for network behavior testing.
-
-### Environment Variables
+1. **Unit tests** for state logic: no node. Commutativity tests (`contract-patterns.md`), serialization round-trips, validation.
+2. **`freenet local`** for contract state logic and UI wiring: a standalone executor, WebSocket API at `127.0.0.1:7509`, operations complete immediately, subscribe is a no-op. **Do not use it to test a delegate's contract access.** A delegate's contract GET/PUT/UPDATE/SUBSCRIBE, notifications and wake-ups silently do nothing there; that needs `freenet network` (see the `local-dev` skill and `delegate-patterns.md`, "`freenet local` Does Not Run the Delegate Contract Loop").
+3. **`fdev test --nodes N single-process`** for network behavior: simulated nodes in one process. Flags go before `single-process`.
 
 ```bash
-# Enable debug logging
-RUST_LOG=freenet=debug
-
-# Show backtraces on panic
-RUST_BACKTRACE=1
-
-# fdev mode (default is already "local")
-MODE=local
+freenet local                       # terminal 1
+fdev -p 7509 publish --code target/wasm32-unknown-unknown/release/my_contract.wasm \
+    --parameters params.bin contract --state initial_state.bin   # prints the contract key
+fdev execute update <key> update.bin
+fdev execute get <key> --output state.bin
+fdev execute subscribe <key>        # streams until Ctrl+C
 ```
+
+To start from a clean state, stop the test node and delete its own `--data-dir` and `--config-dir` (see the `local-dev` skill). Never delete the default data directory: it is your real node's contracts, delegates and secrets.
 
 ## Pre-Publish Checks
 
-Add a preflight task that runs before every publish to catch issues early:
+Add a preflight task that runs before every publish: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and a `check-migration` step. The `check-migration` step verifies that committed WASM files match what is built from source, and that delegate migration entries exist when the WASM has changed. See Delta's `scripts/check-migration.sh` for a full implementation. Make `publish` depend on `preflight`.
 
-```toml
-[tasks.preflight]
-description = "Run all checks before publishing"
-dependencies = ["check-migration"]
-script = '''
-#!/bin/bash
-set -euo pipefail
-echo "Running cargo fmt --check..."
-cargo fmt --check || { echo "FAILED: Run cargo fmt"; exit 1; }
-echo "Running cargo clippy..."
-cargo clippy --all-targets -- -D warnings || { echo "FAILED: Fix clippy"; exit 1; }
-echo "Running tests..."
-cargo test || { echo "FAILED: Fix tests"; exit 1; }
-echo "All checks passed."
-'''
-
-[tasks.publish]
-dependencies = ["build-tailwind", "preflight"]
-# ... build and publish steps
-```
-
-The `check-migration` task verifies that committed WASM files match what's built from source, and that delegate migration entries exist when the WASM has changed. See Delta's `scripts/check-migration.sh` for the full implementation.
-
-**Wire the gate into the publish task itself, not only into CI.** A check that
-runs in CI but not on the path `publish` actually takes does not gate the moment
-the mistake becomes permanent, and the two drift apart quietly because nothing
-fails when they do. ghostkeys hit this shape while adding its pointer record: the
-cross-check that the registry's author verifying key matches the one published in
-`FREENET.md` lived only in the CI freshness gate, while `sign-webapp` (which
-`publish-ghostkeys` depends on) depends on a *different* script, so a key mismatch
-had no backstop at the one moment it becomes permanent. It was caught in review
-and the check now runs on both paths (freenet/ghostkeys#37). The rule to keep:
-name the task your publish actually depends on and put the gate there, then let
-CI be the second copy.
+**Wire the gate into the task your publish actually depends on, not only into CI.** A check that runs in CI but not on the path `publish` takes does not gate the moment the mistake becomes permanent, and the two drift apart quietly because nothing fails when they do. Let CI be the second copy.
 
 ## GitHub Actions CI
 
-Every Freenet dApp should have CI that runs on push and PRs:
+Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and a `wasm32-unknown-unknown` build in CI as for any Rust project. The job specific to Freenet is the WASM staleness check:
 
 ```yaml
-# .github/workflows/ci.yml
-name: CI
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
-jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-      - name: Check WASM builds
-        # Compile check only — nothing here is hashed, committed or published.
-        # Bytes destined for publication come from scripts/build-contracts.sh.
-        run: cargo build --release --target wasm32-unknown-unknown -p my-contract -p my-delegate
-      - name: Check UI builds
-        run: cargo check -p my-ui --target wasm32-unknown-unknown
-
   wasm-staleness:
     runs-on: ubuntu-latest
     steps:
@@ -1109,47 +284,4 @@ jobs:
           [ "$COMMITTED" = "$BUILT" ] || { echo "::error::WASM stale"; exit 1; }
 ```
 
-Note this job deliberately does **not** restore the `target` cache the `check` job
-above uses. It builds into a fresh `mktemp -d`, because a hash recorded from a
-reused `target/` is not trustworthy (see "Byte-reproducibility"). Caching the
-registry is fine; caching `target` for a job whose entire output is a hash is not.
-This is stricter than most projects currently manage — freenet-bitcoin's own CI
-still uses `Swatinem/rust-cache` and the default `target/` for its hash-reporting
-steps — so treat it as the bar to move towards, and be aware that a pinned-vector
-test running out of a cached tree is weaker evidence than it looks.
-
-## Resilience Patterns
-
-### Delegate State Backup
-
-Back up contract state to the delegate after every GET or UPDATE response. If the network drops the contract, restore from the backup:
-
-```rust
-// After receiving state from the network
-delegate::backup_site_state(&prefix, &state);
-
-// When GET times out or returns NotFound
-delegate::request_state_backup(&prefix);
-// Response handler: PUT the backed-up state to re-publish it
-```
-
-### GET Timeout Handling
-
-GET timeouts arrive as WebSocket errors, not `ContractResponse::NotFound`. Handle both:
-
-```rust
-// In the WebSocket error callback
-if error_msg.contains("GET operation timed out") {
-    // Try restoring from delegate backup for any site still showing empty state
-    for (prefix, site) in sites.iter() {
-        if site.state == Default::default() {
-            delegate::request_state_backup(prefix);
-        }
-    }
-}
-```
-
-## Reference Projects
-
-- [River's Makefile.toml](https://github.com/freenet/river/blob/main/Makefile.toml) — cargo-make with Dioxus UI
-- [freenet-microblogging's Makefile](https://github.com/freenet/freenet-microblogging/blob/main/Makefile) — plain Make with TypeScript + Vite UI
+This job deliberately does **not** restore a `target` cache. It builds into a fresh `mktemp -d`, because a hash recorded from a reused `target/` is not trustworthy (see "Byte-reproducibility"). Caching the registry is fine; caching `target` for a job whose entire output is a hash is not.
