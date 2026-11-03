@@ -13,9 +13,7 @@ This is the **single entry point** for cutting a freenet-core release. The order
 2. Steps 1-5: version, trigger, watch (including the ship-vs-soak check **before** the tag is pushed), verify artifacts, River smoke test.
 3. **Step 6: post-cut telemetry monitoring** through the 0-4h auto-update stagger.
 
-**Do not dispatch `release.yml` or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only thing you may run beforehand is `scripts/release.sh --dry-run`.
-
-**A `dry_run=true` dispatch of `release.yml` is NOT side-effect free.** Its version-bump job has no dry-run guard, so it pushes a release branch, opens a real `build: release X.Y.Z` PR and auto-merges it into `main`. That makes it a trigger: it needs the preconditions too, and it moves `main` past the SHA you soaked.
+**Do not dispatch a live `release.yml` run or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only things you may run beforehand are `scripts/release.sh --dry-run` and `gh workflow run release.yml --field dry_run=true` from a ref that contains the #5936 guard (current `main`). A dry run pushes no branch, opens no PR and tags nothing, so `main` does not move. It exercises only the bump and the packaging check, not the token check, the merge queue, the tag, Gate A or the publish, so a green dry run is not a gate. Dispatched from an older ref, `dry_run` still pushes and auto-merges the bump PR.
 
 The release pipeline runs entirely in GitHub Actions: version-bump PR, merge-queue CI gate, `cargo publish --dry-run`, tag and draft GitHub release, cross-compiled binaries, Gate A, crates.io publish, then un-draft. The `release.published` event then auto-triggers `gateway-update.yml` (which HMAC-POSTs each gateway's release-agent) and `release-announce.yml` (Matrix and River posts). CI does **not** exercise a real NATed peer, and it does not exercise the shipping binary's own updater. That is why the preconditions exist.
 
@@ -53,7 +51,7 @@ Coordinate first. **Re-run these checks immediately before Step 2**: the soak ta
 
 ### P1: Auto-update is not broken (updater diff + BOTH canary suites)
 
-Auto-update is the highest-consequence subsystem in a release because a peer's update path has only one leg. Every stage of it is the binary being replaced. A broken updater therefore **cannot be recovered in the field**: the affected cohort never self-heals and has to be fixed by hand. v0.2.120/v0.2.121 (#5221) did exactly this. It was broken fleet-wide, went unnoticed for two releases, and about 1,100 nodes were updated manually. Answer "is auto-update safe?" with commands, not from memory, and not from the fact that CI is green.
+Auto-update is the highest-consequence subsystem in a release because a peer's update path has only one leg. Every stage of it is the binary being replaced. A broken updater therefore **cannot be recovered in the field**: the affected cohort never self-heals and has to be fixed by hand. v0.2.120/v0.2.121 (#5221) did exactly this and went unnoticed for two releases. Answer "is auto-update safe?" with commands, not from memory, and not from the fact that CI is green.
 
 **Step 1: does the payload touch the updater?**
 
@@ -109,7 +107,7 @@ Unit, simulation and CI tests miss regressions that only real subscription and U
   cargo test -p freenet --lib
   ```
 
-  Any failure blocks the soak: fix it on `main` (for a marker test, record what the release ships, as RELEASING.md describes) and re-run. `$SHIP` must be the SHA you soak; if `main` moves first, re-run this step on the new HEAD. Why: 0.2.151's marker test failed in the bump PR's merge queue, after the soak, which cost a fix PR (freenet-core#6014), a re-soak and five hours.
+  Any failure blocks the soak: fix it on `main` (for a marker test, record what the release ships, as RELEASING.md describes) and re-run. `$SHIP` must be the SHA you soak; if `main` moves first, re-run this step on the new HEAD. Why: a marker test that fails in the bump PR's merge queue, after the soak, costs a fix PR and a re-soak.
 
 - **Exact ship SHA.** Build the SHA the bump PR will sit on top of: the current `origin/main` HEAD. The release is tagged on the bump PR's merge commit, so the version bump should be the only thing separating the tag from what you soaked. If `main` moves before you trigger, the soak no longer covers what ships, so re-soak the new SHA. Step 3 checks this again the moment the bump PR merges.
 - **Merge freeze from soak start until the bump PR merges.** Nothing may merge to freenet-core `main` in that window, including PRs queued ahead of the bump PR in the merge queue. Any such merge moves `main` off the soaked SHA, so the release would ship code the soak never ran, and a soak-gate hook will refuse the cut. Ask the user to declare a merge freeze before you start the soak. Do not enqueue or auto-merge your own PRs in that window, and disable auto-merge on any that are pending (`gh pr merge <N> --repo freenet/freenet-core --disable-auto`). If anything merges in the window anyway, re-soak the new `origin/main` HEAD.
@@ -181,8 +179,7 @@ gh workflow run release.yml --repo freenet/freenet-core --field version="$VER"
 Inputs (see `gh workflow view release.yml --yaml`):
 
 - `version`: **always set it explicitly** to the version confirmed in Step 1. Never leave it blank: blank auto-bumps from the latest crates.io release, not from `Cargo.toml` (see Arguments).
-- `skip_tests`: skips the pre-release local tests (CI still runs on the PR).
-- `dry_run`: skips the tag and the GitHub release, **but still opens and auto-merges the version-bump PR**. Treat it as a real trigger.
+- `dry_run`: rehearses the cut and mutates nothing when run from a ref with the #5936 guard. Never use it from an older ref.
 
 Get the id of the run you just started. `gh run list --limit 1` right after the trigger often still returns the previous run, so filter by `T0`:
 
@@ -266,8 +263,6 @@ gh run view "$RUN_ID" --repo freenet/freenet-core --json status,jobs \
 git ls-remote --tags origin "v$VER"                                       # must print nothing
 ```
 
-Ignore the `Release summary` job's log after a cancel. It is `if: always()` and can still say the release was cut.
-
 If the cancel lost the race and `v$VER` exists, act fast. The tag's `cross-compile.yml` run reaches `attach-to-release` about 25 minutes after the tag push, and that job runs Gate A and then publishes to crates.io. Cancel it first:
 
 ```bash
@@ -312,16 +307,7 @@ gh run list --workflow gateway-update.yml --repo freenet/freenet-core --limit 1
 gh run list --workflow release-announce.yml --repo freenet/freenet-core --limit 1
 ```
 
-**Required binaries:**
-
-- `freenet-x86_64-unknown-linux-musl.tar.gz`
-- `freenet-aarch64-unknown-linux-musl.tar.gz`
-- `freenet-x86_64-apple-darwin.tar.gz`
-- `freenet-aarch64-apple-darwin.tar.gz`
-- `freenet-x86_64-pc-windows-msvc.zip`
-- `freenet.exe`
-- the corresponding `fdev-*` archives
-- `SHA256SUMS.txt`
+**Required assets:** the `freenet-*` and `fdev-*` archives for linux-musl (x86_64, aarch64), apple-darwin (x86_64, aarch64) and windows-msvc (`.zip`), `freenet.exe`, `Freenet-X.Y.Z.dmg` and `Freenet.dmg`, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`. A missing `.sig` means the release is unsigned (`FREENET_RELEASE_SIGNING_KEY`).
 
 Both cascade runs should show recent runs started after the release. If either is missing, `RELEASE_PAT` may have expired (see freenet-core's AGENTS.md).
 
@@ -369,22 +355,13 @@ Watch for log spam (it can fill disks within hours), new error patterns, connect
 - **Merge queue is slow on the release PR.** Release `merge_group` entries run the full suite (Unit & Integration, Simulation, NAT Validation) as the pre-publish gate (#3973). Expect 20-30 min. Do not merge by hand to skip it.
 - **The cascade didn't fire after `release.published`.** `RELEASE_PAT` is missing or expired. The manual fallback is `gh workflow run gateway-update.yml --field version=X.Y.Z` and `gh workflow run release-announce.yml --field version=X.Y.Z`.
 - **Cross-compile attached partial binaries.** Find the failed target with `gh run view <run-id> --log-failed`, then re-run it with `gh run rerun <run-id> --failed`, or with `gh workflow run cross-compile.yml`.
-- **Re-announcing by hand.** Check that every required binary is attached first. The automatic cascade waits for `release.published`, which fires only after the binaries exist; a manual re-trigger does not wait.
+- **Re-announcing by hand.** Check that every required asset is attached first. The automatic cascade waits for `release.published`, which fires only after the binaries exist; a manual re-trigger does not wait.
 - **A draft release has NO Windows assets.** Windows Authenticode signing is fail-closed by design. The `Verify signatures` step throws before upload, so an empty Windows slot is the expected shape of a signing failure. Read that step's output first. **Never strip the signing steps** to force a release through.
-
-## Version Scheme
-
-- **freenet:** `0.2.X`, with the patch incremented each release.
-- **fdev:** `0.3.X`, with the patch auto-incremented by the workflow (independent versioning).
 
 ## Incident Learnings
 
-- **Releasing without the real-NAT soak.** The soak and auto-update gates once lived only in one maintainer's local skill, so a session using this skill nearly cut a release without them. That is why they are MANDATORY PRECONDITIONS here.
-- **A broken updater is unrecoverable in the field.** v0.2.120/v0.2.121 (#5221): about 1,100 nodes were updated by hand. The soak peer's auto-update had been disabled for a measurement and was never re-enabled.
-- **A `-dirty` soak binary has auto-update off** (#5613), so the soak passes while proving nothing. Check `--version` on the artifact.
 - **Don't run release steps by hand** (`cargo publish`, `gh release create`, `gh release edit`). Doing so caused a user-facing 404 during v0.1.177.
 - **Log spam can fill disks within hours.** v0.2.62 hit about 10 GB/day on gateways (#4251).
-- **The streaming default broke riverctl** (v0.2.11). Always run the Step 5 smoke test.
 - **PATH shadowing.** A stale `~/.cargo/bin/freenet` can shadow the installed binary, so use absolute paths when verifying versions.
 - **A binary on disk is not the running process.** Verify with `/proc/<MainPID>/exe`.
 
@@ -396,7 +373,7 @@ The release is complete when all of these hold:
 - ✓ the `release.yml` workflow succeeded, AND the tag's `cross-compile.yml` run succeeded, including Gate A and Gate B
 - ✓ `git diff <soaked-sha> <bump PR merge commit>` touched only version files, checked **before** the tag was pushed
 - ✓ crates.io shows the new version for both `freenet` and `fdev`
-- ✓ the GitHub release is tagged, with all required binaries attached
+- ✓ the GitHub release is tagged, with all required assets attached
 - ✓ the `gateway-update.yml` and `release-announce.yml` cascade runs succeeded
 - ✓ the River smoke test passes
 - ✓ gateways run the new version and their logs are clean
