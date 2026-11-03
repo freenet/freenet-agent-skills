@@ -4,25 +4,7 @@ The UI is the interaction layer that connects to the Freenet Kernel via WebSocke
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Web Browser                          │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                    Your UI (WASM)                   │    │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌────────────┐   │    │
-│  │  │ Components  │  │ State Mgmt  │  │Synchronizer│   │    │
-│  │  └─────────────┘  └─────────────┘  └────────────┘   │    │
-│  └──────────────────────────┬──────────────────────────┘    │
-└─────────────────────────────┼───────────────────────────────┘
-                              │ WebSocket
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Freenet Kernel (Local)                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │  Contracts   │  │  Delegates   │  │   Gateway    │       │
-│  └──────────────┘  └──────────────┘  └──────────────┘       │
-└─────────────────────────────────────────────────────────────┘
-```
+The UI runs as WASM in the browser and talks to the local Freenet node over a WebSocket; contracts and delegates run in the node. A published webapp is served by the node's gateway inside a sandboxed iframe.
 
 ## Gateway CSP: Vendor Your Assets
 
@@ -69,13 +51,7 @@ default the moment the stylesheet fails to load.
 
 ### Large Binary Assets: Their Own Contract, Not the Webapp Bundle
 
-Vendoring covers your CSS/JS/fonts, but don't extend that reflex to
-large or unbounded binary assets — audio, video, images, datasets, user
-uploads. Those don't belong in the webapp contract's state at all, for the
-same reason described in `state-authorization-patterns.md` → "State Size
-Budget": state is versioned as a whole, so every byte you embed gets
-re-published and re-transferred on every unrelated UI change, and a GET
-transfers the entire state before the UI can render anything.
+Large or unbounded binary assets (audio, video, images, datasets, user uploads) don't belong in the webapp contract's state; see `state-authorization-patterns.md` → "State Size Budget".
 
 The fix isn't to fetch the asset from an external server — the CSP above
 blocks that (`connect-src`/`default-src <iframe-origin>` only). It's to give
@@ -90,105 +66,13 @@ even though it names a different contract than the one serving the page:
 <audio src="/v1/contract/web/{ASSET_CONTRACT_KEY}/track.mp3"></audio>
 ```
 
-A contract used purely as an asset store doesn't need an `index.html` — it
-can just be a bundle of static files addressed by key. Splitting assets out
-this way also decouples their hosting from the UI contract's: Freenet's
-demand-driven hosting retains/evicts each contract instance independently
-based on its own subscriber/access pattern, so an asset contract's
-popularity (or lack of it) no longer forces every peer serving your UI to
-also carry bytes nobody is requesting.
+A contract used purely as an asset store doesn't need an `index.html`; it can just be a bundle of static files addressed by key.
 
-## Dioxus Setup
+## Dioxus
 
-### Project Structure
+River's `ui/Cargo.toml` and `ui/Dioxus.toml` are the template; copy them rather than writing your own. Two things are not obvious. `dx` must equal the `dioxus` crate version in `Cargo.lock`. And a webapp served under `/v1/contract/web/<key>/` needs `base_path` set at build time so asset URLs resolve inside the iframe (River keeps the line commented in `Dioxus.toml` and uncomments it during the build; the Vite equivalent is `base: "./"`). Keep the `WebApi` handle in a `GlobalSignal` so any component can send requests.
 
-```
-ui/
-├── Cargo.toml
-├── Dioxus.toml
-├── src/
-│   ├── main.rs
-│   └── components/
-│       ├── app.rs
-│       └── ...
-├── public/
-│   ├── contracts/     # WASM files
-│   └── assets/
-└── tailwind.config.js
-```
-
-### Cargo.toml
-
-```toml
-[package]
-name = "my-dapp-ui"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-# Mirror River's pinned versions; see https://github.com/freenet/river/blob/main/ui/Cargo.toml
-# 0.8.5 is River's pin, not the latest release (0.9.0 through 0.12.1 followed).
-dioxus = { version = "0.7.9", features = ["web"] }
-dioxus-free-icons = { version = "0.10.0", features = ["font-awesome-solid"] }
-freenet-stdlib = { version = "0.8.5", features = ["net"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "Window", "Location"] }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-# Required for wasm32-unknown-unknown; pulls crypto.getRandomValues from JS
-getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
-
-# Shared types with contract/delegate
-common = { path = "../common" }
-
-[features]
-default = []
-example-data = []  # Pre-populated test data
-no-sync = []       # Disable network synchronization
-```
-
-### Dioxus.toml
-
-```toml
-[application]
-name = "my-dapp"
-default_platform = "web"
-
-[web.app]
-title = "My Freenet dApp"
-
-[web.watcher]
-reload_html = true
-watch_path = ["src", "public"]
-
-[web.resource]
-dev_assets_path = "public"
-assets_path = "dist"
-```
-
-## Global State Management
-
-Use Dioxus signals for reactive state:
-
-```rust
-use dioxus::prelude::*;
-
-// Global state accessible from any component
-pub static CONTRACTS: GlobalSignal<HashMap<ContractKey, ContractState>> = Global::new(HashMap::new);
-pub static CURRENT_CONTRACT: GlobalSignal<Option<ContractKey>> = Global::new(|| None);
-pub static SYNC_STATUS: GlobalSignal<SyncStatus> = Global::new(|| SyncStatus::Disconnected);
-pub static WEB_API: GlobalSignal<Option<WebApi>> = Global::new(|| None);
-
-#[derive(Clone, PartialEq)]
-pub enum SyncStatus {
-    Disconnected,
-    Connecting,
-    Connected,
-    Syncing,
-    Error(String),
-}
-```
+River's `ui/Cargo.toml` also defines `example-data` and `no-sync` features, which pre-populate test data and disable network synchronization for UI-only work.
 
 ## WebSocket Connection
 
@@ -200,9 +84,9 @@ The correct choice depends on **how the client loads**, not on what it wants to 
 | Client load path | Connection model | What to do |
 |------------------|------------------|-----------|
 | Loaded as a **webapp via `/v1/contract/web/{key}/`** (runs inside the gateway's sandboxed iframe) | **Shell-managed WebSocket.** The gateway's outer page owns the real socket and injects the auth token. Your WASM calls `WebSocket::new(url)` and a shimmed `window.WebSocket` transparently forwards messages via `postMessage`. | Derive the URL from `window.location` (see below). **Do NOT call `Authenticate`; the shell injects it.** Use `freenet-stdlib::WebApi::start()`. |
-| Loaded **outside the gateway** (native CLI, Playwright page served from a dev port like `python3 -m http.server`, a Node script, or any page that did not come from `/v1/contract/web/...`) | **Raw WebSocket.** There is no shell; you talk directly to the node's WS API. | **For a browser page, prefer removing this case** — see "Dev servers: proxy instead of hardcoding" below — so the URL derivation still applies. For a CLI or script, configure the address (flag or env var); hardcode only as the default behind that override. After the socket opens, **send `ClientRequest::Authenticate { token }` yourself** with a token from the node's config or `~/.config/freenet/`. See the `local-dev` skill for details. |
+| Loaded **outside the gateway** (native CLI, Playwright page served from a dev port like `python3 -m http.server`, a Node script, or any page that did not come from `/v1/contract/web/...`) | **Raw WebSocket.** There is no shell; you talk directly to the node's WS API. | **For a browser page, prefer removing this case** — see "Dev servers: proxy instead of hardcoding" below — so the URL derivation still applies. For a CLI or script, configure the address (flag or env var); hardcode only as the default behind that override. The node accepts a connection with no token, as `fdev` does. See the `local-dev` skill for details. |
 
-In short: **if your code is running inside an iframe served by `/v1/contract/web/...`, the shell does auth for you.** Everywhere else, you do it yourself. Getting this wrong produces confusing symptoms: the shell model fails with "Auth token not found" if you try to authenticate manually, and the raw model hangs forever if you forget.
+In short: **inside an iframe served by `/v1/contract/web/...` the shell manages the socket and the token, so do not authenticate yourself.** Everywhere else, connect directly. A stale token (after a node restart) is reported as `AUTH_TOKEN_INVALID`; reload the page.
 
 See also `production-smoke-testing.md` for the shell HTML structure and the
 Playwright idioms (`frameLocator` / absolute-URL `goto`) needed to reach
@@ -359,7 +243,7 @@ asynchronously. Wait for the "connected" callback before sending requests.
 The UI crate needs these dependencies for WebSocket to work on `wasm32-unknown-unknown`:
 
 ```toml
-freenet-stdlib = { version = "0.8.5", features = ["net"] }
+freenet-stdlib = { version = "<ver>", features = ["net"] }
 # Required for wasm32-unknown-unknown: use JS crypto.getRandomValues for RNG
 getrandom = { version = "0.2", features = ["js", "wasm-bindgen", "js-sys"], default-features = false }
 ```
@@ -380,24 +264,11 @@ Without the `getrandom` js feature, `getrandom 0.2` emits a `compile_error!` on
 
 ## Reading Contracts Efficiently
 
-A GET is a search of the network, not a database lookup, and two read
-patterns make an app slow even when every contract it reads is small. Both
-showed up in one live directory app in October 2026. It sharded its data by
-month × category and derived each shard's key in the UI. On every page load it
-GETted about 13 shards that nobody had written yet, one at a time. Its last
-section appeared about 100 seconds after the page opened, even though every
-contract the gateway already held was served in milliseconds.
+A GET is a search of the network, not a database lookup, and two read patterns make an app slow even when every contract it reads is small: GETting keys nobody has written, and GETting independent keys one at a time.
 
 ### A GET for a key nobody has PUT is the slowest read there is
 
-The node cannot tell "this contract does not exist" from "I have not reached
-a peer that has it yet", so a GET for a never-created key runs its whole
-search, retries included, before it answers `NotFound`. Measured through the nova
-gateway on v0.2.142, that took 4–14 seconds per key. One took 63 seconds,
-past the stdlib's 30-second default timeout, so the caller got a timeout
-instead of `NotFound`. A GET for a contract that exists stops at the first
-peer holding it, which is much faster. So a missing key is often the most
-expensive read your app makes.
+The node cannot tell "this contract does not exist" from "I have not reached a peer that has it yet", so a GET for a never-created key runs its whole search, retries included, before it answers `NotFound`. That is seconds per key, and sometimes longer than the request timeout (30 s in the TS client), so the caller gets a timeout instead of `NotFound`. A GET for a contract that exists stops at the first peer holding it, which is much faster. So a missing key is often the most expensive read your app makes.
 
 So don't make readers find out what exists by GETting it. This matters most
 for derived keys: per-period or per-category shards, per-user inboxes, "the
@@ -455,226 +326,11 @@ state could render in another shard's place. On an older version, upgrade
 first. If you can't, match responses to requests by key in your own
 `ResponseHandler`.
 
-## Contract Synchronization
+## Contract Synchronization and Delegate Messages
 
-### Subscribing to Contracts
+Send requests with `WebApi::send(ClientRequest::ContractOp(...))` or `ClientRequest::DelegateOp(...)`. Every response arrives at the single result handler passed to `WebApi::start`, so match responses to requests by contract key. For a working subscribe, update and delegate flow read River's `room_synchronizer.rs` and `chat_delegate.rs`.
 
-```rust
-use freenet_stdlib::client_api::{ClientRequest, ContractRequest};
-
-pub async fn subscribe_to_contract(
-    connection: &FreenetConnection,
-    contract_key: ContractKey,
-) -> Result<(), Error> {
-    let request = ClientRequest::ContractOp(ContractRequest::Subscribe {
-        key: contract_key,
-        summary: None,  // Get full state initially
-    });
-
-    let bytes = serialize(&request)?;
-    connection.send(&bytes)?;
-
-    Ok(())
-}
-```
-
-### Handling Updates
-
-```rust
-pub fn handle_contract_update(response: ContractResponse) {
-    match response {
-        ContractResponse::GetResponse { key, state, .. } => {
-            // Full state received
-            let contract_state: MyState = deserialize(&state)?;
-            CONTRACTS.write().insert(key, contract_state);
-        }
-
-        ContractResponse::UpdateNotification { key, update } => {
-            // Delta update received
-            if let Some(state) = CONTRACTS.write().get_mut(&key) {
-                state.apply_delta(&update.delta)?;
-            }
-        }
-
-        ContractResponse::SubscribeResponse { key, .. } => {
-            log::info!("Subscribed to contract: {:?}", key);
-        }
-
-        _ => {}
-    }
-}
-```
-
-### Sending Updates
-
-```rust
-pub async fn send_update(
-    connection: &FreenetConnection,
-    contract_key: ContractKey,
-    delta: StateDelta,
-) -> Result<(), Error> {
-    let request = ClientRequest::ContractOp(ContractRequest::Update {
-        key: contract_key,
-        data: UpdateData::Delta(delta),
-    });
-
-    let bytes = serialize(&request)?;
-    connection.send(&bytes)?;
-
-    Ok(())
-}
-```
-
-## Delegate Communication
-
-### Registering a Delegate
-
-```rust
-use freenet_stdlib::client_api::DelegateRequest;
-
-pub async fn register_delegate(
-    connection: &FreenetConnection,
-    delegate_wasm: &[u8],
-    parameters: Parameters,
-) -> Result<DelegateKey, Error> {
-    let request = ClientRequest::DelegateOp(DelegateRequest::RegisterDelegate {
-        delegate: DelegateContainer::Wasm(delegate_wasm.to_vec()),
-        cipher: Cipher::Plain,  // or encrypted
-        nonce: None,
-    });
-
-    let bytes = serialize(&request)?;
-    connection.send(&bytes)?;
-
-    // Wait for response with delegate key
-    Ok(delegate_key)
-}
-```
-
-### Sending Messages to Delegate
-
-```rust
-pub async fn send_to_delegate(
-    connection: &FreenetConnection,
-    delegate_key: DelegateKey,
-    message: impl Serialize,
-) -> Result<(), Error> {
-    let payload = serialize(&message)?;
-
-    let request = ClientRequest::DelegateOp(DelegateRequest::ApplicationMessages {
-        key: delegate_key,
-        params: vec![],
-        inbound: vec![InboundDelegateMsg::ApplicationMessage(
-            ApplicationMessage {
-                app: app_contract_key(),
-                payload: payload.into(),
-                context: DelegateContext::default(),
-                processed: false,
-            }
-        )],
-    });
-
-    let bytes = serialize(&request)?;
-    connection.send(&bytes)?;
-
-    Ok(())
-}
-```
-
-## Reactive Components
-
-### Basic Component Pattern
-
-```rust
-use dioxus::prelude::*;
-
-#[component]
-fn ContractView(contract_key: ContractKey) -> Element {
-    // Read from global state (reactive)
-    let contracts = CONTRACTS.read();
-    let state = contracts.get(&contract_key);
-
-    match state {
-        Some(state) => rsx! {
-            div { class: "contract-view",
-                h2 { "{state.title}" }
-                // Render state...
-            }
-        },
-        None => rsx! {
-            div { class: "loading", "Loading..." }
-        },
-    }
-}
-```
-
-### Form with State Update
-
-```rust
-#[component]
-fn MessageInput(contract_key: ContractKey) -> Element {
-    let mut message = use_signal(String::new);
-
-    let send = move |_| {
-        let text = message.read().clone();
-        if !text.is_empty() {
-            spawn(async move {
-                if let Some(api) = WEB_API.read().as_ref() {
-                    let delta = create_message_delta(&text);
-                    send_update(&api.connection, contract_key, delta).await.ok();
-                }
-            });
-            message.set(String::new());
-        }
-    };
-
-    rsx! {
-        div { class: "message-input",
-            input {
-                value: "{message}",
-                oninput: move |e| message.set(e.value().clone()),
-                onkeypress: move |e| if e.key() == Key::Enter { send(()) },
-            }
-            button { onclick: send, "Send" }
-        }
-    }
-}
-```
-
-## Development Features
-
-### Example Data Mode
-
-```rust
-#[cfg(feature = "example-data")]
-fn initial_state() -> AppState {
-    AppState {
-        contracts: example_contracts(),
-        // Pre-populated test data
-    }
-}
-
-#[cfg(not(feature = "example-data"))]
-fn initial_state() -> AppState {
-    AppState::default()
-}
-```
-
-### No-Sync Mode
-
-```rust
-#[cfg(not(feature = "no-sync"))]
-async fn start_sync() {
-    let connection = FreenetConnection::connect(GATEWAY_WS).await?;
-    // Start synchronization...
-}
-
-#[cfg(feature = "no-sync")]
-async fn start_sync() {
-    // Do nothing - offline mode
-    log::info!("Running in no-sync mode");
-}
-```
+Type details that are easy to get wrong: `ContractRequest::Subscribe` takes a `ContractInstanceId`, while `ContractRequest::Update` takes a `ContractKey`; an `UpdateNotification` carries an `UpdateData` (state, delta or both), not a bare delta; and `DelegateRequest::RegisterDelegate` takes a `cipher` and `nonce` that the node ignores, so any bytes will do.
 
 ---
 
@@ -792,15 +448,12 @@ const handler: ResponseHandler = {
       // Parse and apply delta...
     }
   },
-  // Added in stdlib v0.2.0: fired when a GET targets a missing contract instance
+  // Fired when a GET targets a missing contract instance
   onContractNotFound: (instanceId) => {
     console.warn("[freenet] Contract not found:", instanceId);
   },
-  // Added in stdlib v0.2.0: fired on SUBSCRIBE confirmation (subscribed flag = success).
-  // On stdlib TS >= 0.4.0 this fires alongside the api.subscribe() promise, which now
-  // also resolves/rejects on this same response. On older versions (0.3.0 and below;
-  // npm has published 0.4.0 since 2026-08-31) this callback is the only way
-  // to detect a refused subscribe. See "Contract Operations" below.
+  // Fired on SUBSCRIBE confirmation (subscribed flag = success). On stdlib TS >= 0.4.0
+  // it fires alongside the api.subscribe() promise. See "Contract Operations" below.
   onSubscribeResponse: (key, subscribed) => {
     console.log("[freenet] Subscribe:", key.encode(), "ok=", subscribed);
   },
@@ -812,7 +465,7 @@ const handler: ResponseHandler = {
     console.log("[freenet] Connected");
     // Now safe to send GET, SUBSCRIBE, etc.
   },
-  // Added in stdlib v0.2.0: WebSocket close. All pending promises will already have rejected.
+  // WebSocket close. All pending promises will already have rejected.
   onClose: (code, reason) => {
     console.warn("[freenet] Disconnected:", code, reason);
     // App layer decides reconnect strategy — SDK does NOT auto-reconnect.
@@ -840,13 +493,7 @@ const contractKey = new ContractKey(instanceBytes, instanceBytes);
 
 ### Contract Operations
 
-stdlib TS v0.2.0 made `get`, `put`, and `update` **promise-based**. They resolve with the typed response, reject on timeout (default 30s), connection close, or host error. The legacy callbacks in `ResponseHandler` still fire for the same response — both APIs coexist for backward compatibility.
-
-**`subscribe` is version-dependent — check which stdlib TS version you're on.** As of freenet-stdlib PR #94 (merged 2026-08-22, ships as TS package **0.4.0**), `subscribe()` correlates to its response the same way: it resolves on `SubscribeResponse{subscribed:true}` and rejects on `subscribed:false`, a host error naming the contract, connection close, or timeout — the `try/catch` pattern in the example below is correct from 0.4.0 on. **Before 0.4.0** (npm's latest until 0.4.0 was published on 2026-08-31), `subscribe()` just calls the synchronous `sendRequest()` and returns: the promise resolves as soon as the request is *sent*, never on the host's response, so it can't reject on a refused subscribe (e.g. hitting the node's per-client subscription cap of 50). On a pre-0.4.0 version, detect the real outcome via the `ResponseHandler` callbacks instead — `onSubscribeResponse` for success/failure the host reports back, `onErr` for a host-level error.
-
-`disconnect` is untouched by #94: in every version it resolves as soon as the request is sent, not on any response — there's no pending-request queue for it the way `pendingGets`/`pendingPuts`/`pendingUpdates`/`pendingSubscribes` back the others.
-
-#94 also narrowed host-error handling: from 0.4.0, a host error only rejects in-flight requests for the contract it names (previously any host error rejected every pending request on the connection), and concurrent requests for different contracts can no longer cross-resolve with each other's responses.
+`get`, `put`, `update` and (from stdlib TS 0.4.0) `subscribe` return promises that resolve with the typed response and reject on timeout (default 30 s), connection close, or a host error that names the contract. The legacy callbacks in `ResponseHandler` still fire for the same response. Before 0.4.0, `subscribe()` resolved as soon as the request was sent and never rejected on a refused subscribe (for example the node's per-client subscription cap), so on an older version detect failure through `onSubscribeResponse` and `onErr`. `disconnect` resolves when the request is sent, in every version.
 
 ```typescript
 // GET — fetch current state (await + try/catch)
@@ -860,16 +507,8 @@ try {
   console.error("[freenet] GET failed:", err); // timeout / not-found / closed
 }
 
-// SUBSCRIBE — receive real-time updates.
-// stdlib TS >= 0.4.0: api.subscribe() resolves on SubscribeResponse{subscribed:true}
-// and rejects on subscribed:false / a host error / connection close / timeout —
-// this try/catch is correct.
-// stdlib TS < 0.4.0 (still the published npm version as of 2026-08-22): the
-// promise resolves as soon as the request is SENT and never rejects on a
-// refused subscribe (e.g. the per-client subscription cap). On that version,
-// detect failure via the ResponseHandler callbacks instead:
-//   onSubscribeResponse: (key, subscribed) => { if (!subscribed) { /* failed */ } }
-//   onErr: (err) => { /* host-level error, e.g. limit reached */ }
+// SUBSCRIBE: receive real-time updates. From stdlib TS 0.4.0 the promise rejects
+// on a refused subscribe; on older versions use onSubscribeResponse / onErr.
 try {
   await api.subscribe(new SubscribeRequest(contractKey, []));
 } catch (err) {
@@ -888,22 +527,9 @@ try {
 }
 ```
 
-### Large state handling (streaming)
+### Large state handling
 
-stdlib TS v0.2.0 ports the Rust streaming protocol. You don't need to call any special API — chunking and reassembly are transparent — but you should know the limits.
-
-**Outbound (request side):**
-- Any serialized request larger than `CHUNK_THRESHOLD = 512 KB` is automatically split into sequential `StreamChunk` messages of `CHUNK_SIZE = 256 KB` by `sendRequest()`.
-- A 600 KB `PutRequest` goes over the wire as multiple chunks; the receiver reassembles it. Your code just does `await api.put(req)` — no opt-in flag.
-
-**Inbound (response side):**
-- The SDK reassembles incoming chunked responses inside `ReassemblyBuffer`. If you ever need raw control (e.g., a custom transport), import the buffer directly:
-  ```typescript
-  import { ReassemblyBuffer } from "@freenetorg/freenet-stdlib"; // or "@freenetorg/freenet-stdlib/streaming"
-  ```
-- Limits hard-coded in v0.2.0: per-stream TTL **60 s**, max **8 concurrent streams**, max **256 chunks/stream**. Out-of-order chunks are tolerated; duplicates and overflows are rejected with `StreamError`.
-
-**When this matters:** large media uploads, snapshot-style state initialization, multi-MB contract codes. Below 512 KB the protocol is invisible.
+Requests over 512 KB are chunked and responses reassembled by the SDK; there is no opt-in. A GET of a multi-MB state is slow regardless (see `state-authorization-patterns.md`, "State Size Budget").
 
 ### Delegate Communication (TypeScript)
 
@@ -961,7 +587,7 @@ export async function sendDelegateMessage(
 }
 ```
 
-> **Warning — unstable API:** `(api as any).sendRequest(...)` reaches into a private SDK method because the public delegate-request builder is not yet stable in stdlib v0.2.0. This cast may break on any minor SDK bump. Track [freenet-stdlib](https://github.com/freenet/freenet-stdlib) for a public `api.sendDelegateMessage()` (or equivalent) before relying on this in production.
+> **Warning — unstable API:** `(api as any).sendRequest(...)` reaches into a private SDK method because the public delegate-request builder is not exposed by the SDK. This cast may break on any minor SDK bump. Track [freenet-stdlib](https://github.com/freenet/freenet-stdlib) for a public `api.sendDelegateMessage()` (or equivalent) before relying on this in production.
 
 ### Parsing Delegate Responses
 
@@ -994,34 +620,18 @@ export function parseDelegateResponse(response: DelegateResponse): object[] {
 
 ### Pre-Decoded Key Bytes Pattern
 
-The browser sandbox can't reliably run base58 decoding libraries. Pre-decode keys at build time and inject as JSON arrays:
-
-```bash
-# In your Makefile publish-identity target:
-# 1. Publish delegate, capture base58 key
-key=$(fdev publish --code ... delegate 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'key: [^ ,]*' | head -1 | cut -d' ' -f2)
-
-# 2. Decode base58 → JSON byte array (requires bs58 npm package)
-node -e "const bs58=require('bs58');console.log(JSON.stringify(Array.from(bs58.default.decode('$key'))))" > delegate_key_bytes.json
-
-# 3. Compute code_hash from raw WASM (BLAKE3).
-#    Build this through the project's canonical build script into a throwaway
-#    target dir -- a reused target/ can silently change the bytes, and this hash
-#    is compiled into the UI. See build-system.md -> "Byte-reproducibility".
-code_hash_hex=$(b3sum --no-names target/wasm32-unknown-unknown/release/my_delegate.wasm)
-node -e "const h='$code_hash_hex'.trim();console.log(JSON.stringify(Array.from(Buffer.from(h,'hex'))))" > delegate_code_hash_bytes.json
-```
+Derive the delegate key bytes and `code_hash` at build time from the built WASM (see freenet/raven's `Makefile.toml`, `build-identity-delegate`) and inject them as constants. Build the WASM through the canonical script into a throwaway target dir first (`build-system.md` → "Byte-reproducibility"), because a reused `target/` can silently change the bytes and this hash is compiled into the UI.
 
 Vite injects these as `__DELEGATE_KEY_BYTES__` and `__DELEGATE_CODE_HASH_BYTES__` compile-time constants.
 
-### Microblogging Reference
+### Raven Reference
 
-See [freenet-microblogging](https://github.com/freenet/freenet-microblogging) for a complete TypeScript + Vite implementation:
+See [freenet/raven](https://github.com/freenet/raven) (formerly freenet-microblogging) for a complete TypeScript + Vite implementation:
 - `web/src/freenet-api.ts` — FreenetWsApi wrapper with GET/UPDATE/SUBSCRIBE
 - `web/src/delegate-api.ts` — Delegate FlatBuffers message building
 - `web/src/identity.ts` — Identity management (delegate + in-memory fallback)
 - `web/vite.config.ts` — Build-time key injection
-- `Makefile` — Full build pipeline
+- `Makefile.toml` — Build pipeline
 
 ## River UI Reference
 
