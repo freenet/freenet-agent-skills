@@ -416,7 +416,8 @@ Write these before trusting the merge, and run them on every change to it:
   not checked. BASE is the state the peer held and RESULT the state it
   reached; supplied the other way round, a conforming contract is reported as
   violating the law. With `--state` files it cannot check a contract that
-  needs related contracts (see `SKILL.md`).
+  needs related contracts (see `state-authorization-patterns.md` → "Checking a
+  Contract That Reads Related State").
 - **Mutation-check the fuzzer.** Move a cap ahead of cleanup, delete a
   dedup, or drop the digest from a summary, and confirm the fuzzer fails. A
   fuzzer that stays green under those changes does not cover them.
