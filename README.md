@@ -4,55 +4,13 @@ AI coding agent skills for building applications on Freenet. Compatible with [Cl
 
 ## Available Skills
 
-### [dapp-builder](./skills/dapp-builder/)
-
-Build decentralized applications on Freenet. Guides through:
-1. Designing contracts (shared, replicated state)
-2. Implementing delegates (private, local state)
-3. Building the UI (WebSocket connection to Freenet)
-
-Based on [River](https://github.com/freenet/river), a decentralized chat application.
-
-### [pr-creation](./skills/pr-creation/)
-
-Guidelines for creating high-quality Freenet pull requests. Includes:
-- Four parallel review subagents (code-first, testing, skeptical, big-picture)
-- Big-picture review catches "CI chasing" anti-patterns
-- Test quality standards and regression prevention
-- Worktree-based workflow
-
-### [systematic-debugging](./skills/systematic-debugging/)
-
-Methodology for debugging non-trivial problems:
-- Hypothesis formation before code changes
-- Parallel investigation with subagents
-- Anti-patterns to avoid (jumping to conclusions, weakening tests)
-- Test coverage gap analysis
-
-### [pr-review](./skills/pr-review/)
-
-Risk-tiered, multi-perspective PR review — triages the change, runs specialist subagents in
-parallel (code-first, testing, skeptical, big-picture), plus an external model pass scaled to
-risk, then posts a consolidated review to the PR.
-
-### [release](./skills/release/)
-
-Orchestrates a Freenet release. It runs the mandatory pre-cut gates first: no concurrent cut,
-the auto-update updater diff and canary suites, a 30-minute real-NAT soak of the exact ship
-SHA, and a telemetry baseline. Then it determines the next version, shows the changelog,
-confirms with the user, triggers the release pipeline via GitHub Actions, and monitors
-telemetry through the 0-4h auto-update stagger.
-
-### [linux-test](./skills/linux-test/)
-
-Runs integration tests that require Linux's full loopback range via Docker — for tests that fail
-on macOS with "Can't assign requested address".
-
-### [local-dev](./skills/local-dev/)
-
-Set up and manage local Freenet development environments: run a local node, publish contracts,
-query connections/diagnostics, and iterate on a Freenet application without deploying to the live
-network.
+- [dapp-builder](./skills/dapp-builder/): build decentralized applications on Freenet (contracts, delegates, UI), based on [River](https://github.com/freenet/river).
+- [local-dev](./skills/local-dev/): run a local node, publish contracts, query diagnostics and iterate without deploying to the live network.
+- [pr-creation](./skills/pr-creation/): standards for opening a high-quality Freenet pull request.
+- [pr-review](./skills/pr-review/): risk-tiered, multi-perspective PR review with parallel specialist subagents and an external model pass.
+- [systematic-debugging](./skills/systematic-debugging/): hypothesis-driven debugging with a scope ladder from unit test to real network.
+- [release](./skills/release/): orchestrates a Freenet release, from the mandatory pre-cut gates through post-release monitoring.
+- [linux-test](./skills/linux-test/): runs integration tests that need Linux's full loopback range in Docker.
 
 ## Hooks
 
@@ -157,41 +115,6 @@ git add .claude/skills
 
 **Verify installation:**
 Ask your AI agent: "What skills are available?" - it should list the installed skills.
-
-## Repository Structure
-
-```
-freenet-agent-skills/
-├── .claude-plugin/
-│   └── marketplace.json   # Claude Code marketplace manifest
-├── skills/
-│   ├── dapp-builder/
-│   │   ├── SKILL.md       # Main skill definition
-│   │   ├── README.md      # Skill documentation
-│   │   └── references/    # Detailed documentation
-│   ├── linux-test/
-│   │   └── SKILL.md
-│   ├── local-dev/
-│   │   └── SKILL.md
-│   ├── pr-creation/
-│   │   └── SKILL.md
-│   ├── pr-review/
-│   │   └── SKILL.md
-│   ├── release/
-│   │   └── SKILL.md
-│   └── systematic-debugging/
-│       ├── SKILL.md
-│       └── references/
-├── hooks/
-│   ├── hooks.json         # Claude Code hooks (run before git commit)
-│   ├── pre-commit         # Git pre-commit hook for cargo fmt/clippy
-│   └── README.md
-├── agents/                # Subagent definitions (reviewers, etc.)
-├── index.js               # OpenCode plugin entry point / npm programmatic API
-├── package.json           # npm package manifest
-├── README.md
-└── LICENSE
-```
 
 ## Version Management
 
