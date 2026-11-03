@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.39.11 (2026-11-02)
+
+**`dapp-builder`: make the site-splitting example generic.**
+
+- Replaces an example filename and a file size in `web-container-contract.md` with generic wording.
+
 ## 1.39.10 (2026-11-02)
 
 **`dapp-builder`: split large or frequently updated sites.**

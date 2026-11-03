@@ -248,8 +248,8 @@ So keep the site small and keep what changes apart from what doesn't.
    ```
 
    The 50 MiB limit applies to each site separately, and to the compressed
-   archive, not the raw files. WASM usually compresses well, so a 46 MB file may
-   well fit. If the assets do not fit, use more than one assets site.
+   archive, not the raw files. WASM usually compresses well, so a file over the
+   limit may still fit. If the assets do not fit, use more than one assets site.
 
 3. **Load them by path from the main site.** The contract key stays the same
    across versions (see "What *does* move the URL" for the exceptions), so the
@@ -257,7 +257,7 @@ So keep the site small and keep what changes apart from what doesn't.
 
    ```js
    const ASSETS = "/v1/contract/web/<assets-contract-key>";
-   const bytes = await (await fetch(`${ASSETS}/moderator.tflite`)).arrayBuffer();
+   const bytes = await (await fetch(`${ASSETS}/model.bin`)).arrayBuffer();
    const wasm = await (await fetch(`${ASSETS}/engine.wasm`)).arrayBuffer();
    const module = await WebAssembly.compile(wasm);
    ```
