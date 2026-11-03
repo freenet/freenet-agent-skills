@@ -330,14 +330,13 @@ fn process(
     origin: Option<MessageOrigin>,
     message: InboundDelegateMsg,
 ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
-    // The node delivers these itself, with no origin. Name them here, because
-    // the gate below refuses `None`.
+    // These run without a caller's authority, so treat every field as untrusted
+    // input. The gate below refuses `None`, so they are named here.
     if matches!(
         message,
-        InboundDelegateMsg::Lifecycle(_)
-            | InboundDelegateMsg::WakeupFired { .. }
-            | InboundDelegateMsg::ContractNotification(_)
-    ) {
+        InboundDelegateMsg::Lifecycle(_) | InboundDelegateMsg::WakeupFired { .. }
+    ) || (origin.is_none() && matches!(message, InboundDelegateMsg::ContractNotification(_)))
+    {
         return handle_background(ctx, message);
     }
     // One gate, ahead of the match. A request family added later cannot
@@ -347,13 +346,28 @@ fn process(
         InboundDelegateMsg::ApplicationMessage(msg) => handle_request(ctx, msg),
         // Each user or contract response the delegate asks for gets an arm here.
         // Refuse the rest: a variant nobody placed must not read as success.
-        other => Err(DelegateError::Other(format!("refused message: {other:?}"))),
+        other => Err(DelegateError::Other(format!(
+            "refused message: {}",
+            variant_name(&other)
+        ))),
+    }
+}
+
+// Name the variant, never its contents, so a refusal puts no payload in a log.
+fn variant_name(message: &InboundDelegateMsg) -> &'static str {
+    match message {
+        InboundDelegateMsg::ApplicationMessage(_) => "ApplicationMessage",
+        InboundDelegateMsg::UserResponse(_) => "UserResponse",
+        InboundDelegateMsg::GetContractResponse(_) => "GetContractResponse",
+        InboundDelegateMsg::ContractNotification(_) => "ContractNotification",
+        InboundDelegateMsg::DelegateMessage(_) => "DelegateMessage",
+        _ => "another variant",
     }
 }
 ```
 
-Treat `new_state` in a `ContractNotification` as a hint, and re-read the contract
-before acting on it. A contract response carries the origin of the run that asked, so the response to a
+The handler for a `ContractNotification` acts only on a re-read of the contract. A
+contract response carries the origin of the run that asked, so the response to a
 background run's request has none and this gate refuses it. A delegate that reads
 contracts in the background needs a separate path for that case, doing only what a
 background run may.
@@ -413,8 +427,6 @@ code *asks* for removal, not that the node performed it.
 ## Worked patterns
 
 ```rust
-const PENDING_PROMPT: &[u8] = b"pending_prompt";
-
 // A delegate serving several apps needs the caller's id, so it matches the
 // origin itself. A delegate serving one app uses `authorize` above.
 fn app_of(origin: Option<&MessageOrigin>) -> Result<ContractInstanceId, DelegateError> {
@@ -430,14 +442,13 @@ fn process(
     origin: Option<MessageOrigin>,
     message: InboundDelegateMsg,
 ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
-    // No origin: the node delivered these itself.
+    // These run without a caller's authority, so treat every field as untrusted input.
     if matches!(
         message,
-        InboundDelegateMsg::Lifecycle(_)
-            | InboundDelegateMsg::WakeupFired { .. }
-            | InboundDelegateMsg::ContractNotification(_)
-    ) {
-        return Ok(vec![]); // ...background work...
+        InboundDelegateMsg::Lifecycle(_) | InboundDelegateMsg::WakeupFired { .. }
+    ) || (origin.is_none() && matches!(message, InboundDelegateMsg::ContractNotification(_)))
+    {
+        return Ok(vec![]); // ...background work, acting only on a re-read of a contract...
     }
     let app = app_of(origin.as_ref())?;
     match message {
@@ -452,31 +463,40 @@ fn process(
             Ok(vec![OutboundDelegateMsg::ApplicationMessage(reply)])
         }
         InboundDelegateMsg::UserResponse(r) => {
-            // Answer only the prompt this delegate raised.
-            if ctx.get_secret(PENDING_PROMPT).as_deref() != Some(&r.request_id.to_le_bytes()[..]) {
+            // An answer counts only for the prompt it was asked about, from the
+            // caller it was asked of. `app` selects the slot, the slot holds the id.
+            let slot = prompt_slot(&app);
+            if ctx.get_secret(slot.as_bytes()).as_deref() != Some(&r.request_id.to_le_bytes()[..]) {
                 return Err(DelegateError::Other("response to an unknown prompt".into()));
             }
-            ctx.remove_secret(PENDING_PROMPT);
+            ctx.remove_secret(slot.as_bytes());
             let allowed = &*r.response == b"Allow".as_slice();
             // ...sign, or refuse...
             Ok(vec![])
         }
         InboundDelegateMsg::GetContractResponse(r) => {
-            let pending: &[u8] = r.context.as_ref(); // what the request carried
+            let pending: &[u8] = r.context.as_ref(); // untrusted: validate it against what you stored
             // ...r.state is Option<WrappedState>...
             Ok(vec![])
         }
         // InboundDelegateMsg is #[non_exhaustive]. Refuse what nothing above placed.
-        other => Err(DelegateError::Other(format!("refused message: {other:?}"))),
+        other => Err(DelegateError::Other(format!(
+            "refused message: {}",
+            variant_name(&other)
+        ))),
     }
 }
 
-// Ask the user. Unanswered prompts auto-deny after 60 s. A fixed id lets any app
-// answer a prompt it did not raise, so each prompt gets a random id, kept in
-// secrets because a run gets a fresh WASM instance. The host RNG can return zeroes.
-fn ask(ctx: &mut DelegateCtx) -> Result<OutboundDelegateMsg, DelegateError> {
+fn prompt_slot(app: &ContractInstanceId) -> String {
+    format!("{app}:pending_prompt")
+}
+
+// Ask the user. Unanswered prompts auto-deny after 60 s. Each prompt gets a random
+// id, stored per app in secrets, because a run gets a fresh WASM instance. The
+// host RNG can return zeroes.
+fn ask(ctx: &mut DelegateCtx, app: &ContractInstanceId) -> Result<OutboundDelegateMsg, DelegateError> {
     let id = freenet_stdlib::rand::rand_bytes(4);
-    if id == [0u8; 4] || !ctx.set_secret(PENDING_PROMPT, &id) {
+    if id == [0u8; 4] || !ctx.set_secret(prompt_slot(app).as_bytes(), &id) {
         return Err(DelegateError::Other("could not allocate a prompt id".into()));
     }
     let message = NotificationMessage::try_from(&serde_json::json!("Allow this app to sign?"))
@@ -499,6 +519,8 @@ fn read_contract(contract_id: ContractInstanceId, pending: Vec<u8>) -> OutboundD
 }
 ```
 
+- The `GetContractResponse` arm serves client-driven runs only. A background read
+  needs the separate path under "Check the Origin at the Boundary, Not Per Handler".
 - Encode a binary origin before using it in a key. A lossy UTF-8 conversion maps
   every invalid byte to U+FFFD, so distinct keys alias.
 - Delegates hold no state between calls. Carry a continuation in the `context`
