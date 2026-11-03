@@ -1,7 +1,7 @@
 # Upgrading Contracts and Delegates Safely
 
 This is the hub for upgrading a live Freenet dApp: the playbook below, then the discipline behind it (migration
-properties, test harness, rollout). Contract mechanics live in `contract-patterns.md` and delegate mechanics in
+properties, test harness, rollout). Contract mechanics are under "Contract mechanics" below, and delegate mechanics in
 `delegate-migration.md`. Design for it before your first release; read it before your second.
 
 ## Upgrading a Freenet dApp: the painless path
@@ -41,7 +41,7 @@ The whole procedure, start to finish:
      whose author-signed state `{version, code_hash, sig}` names the current code hash of another contract or delegate. A
      client resolver ships in `freenet-migrate` (`freenet_migrate::pointer`). It solves **addressing only**: it says nothing
      about whether state or secrets under the old key survived, and assuming they did produces a bug shaped like "this user
-     has no data". It is a different mechanism from the in-state `OptionalUpgrade` pointer in `contract-patterns.md`, which
+     has no data". It is a different mechanism from the in-state `OptionalUpgrade` pointer under "Contract mechanics", which
      only clients already holding a reference to that contract can find. Adoption is thin: publish one for your integrators,
      but do not assume the apps you depend on have one. Resolving a pointer for an app you do not own is
      `building-on-other-apps.md`; status is tracked in freenet-core#2776.
@@ -88,7 +88,7 @@ The whole procedure, start to finish:
    one that shipped `handle_export_request`, or a protocol general enough to enumerate its own secret namespace) can be
    recovered from. Every release shipped without that handler adds one unrecoverable generation, so "we have no migration
    to do yet" is the argument for adopting sooner. Mechanics: `delegate-migration.md` ("A delegate migration is
-   forward-only", "Delegate secret migration is app-level") and `contract-patterns.md`. The `freenet-migrate` README covers
+   forward-only", "Delegate secret migration is app-level") and "Contract mechanics" below. The `freenet-migrate` README covers
    swapping an existing hand-rolled sweep for the crate.
 
 5. **Publish the new version, then let clients migrate themselves.** Publish the
@@ -326,8 +326,9 @@ Practical rules:
    signature chaining to an authority, *any* node can GET old-key state and PUT
    it to the new key, and the new contract validates it from the bytes alone —
    migration is permissionless and needs no owner online. The cost: you may never
-   accept unauthorized state "temporarily," or you forfeit this. See
-   `state-authorization-patterns.md`.
+   accept unauthorized state "temporarily," or you forfeit this. A permissive
+   `validate_state` lets a malicious re-PUT win: if any field can be forged,
+   migration is an attack vector. See `state-authorization-patterns.md`.
 2. **Backwards/forwards-compatible serialization.** The same bytes must validate
    under old and new WASM during the rollout window. Additive-only
    (`#[serde(default)]`, plus `skip_serializing_if` wherever a signature covers
@@ -349,6 +350,10 @@ Practical rules:
    and signing keys under *separate* delegate keys, so a delegate-migration bug
    degrades to "rejoin via invite," not permanent loss. Design so one migration
    failure can't destroy everything.
+
+State must also merge lawfully: carrying old state into the new key is a merge, and
+old and new writes coexist during the rollout. Without these the new contract rejects
+old state, or the merge does not converge, and migration silently fails.
 
 ## The five properties of a safe migration
 
@@ -519,8 +524,111 @@ re-keys.
 
 **Trigger rule.** Probe unconditionally per `(instance, current_code_hash)`, gate only
 the repeat on a durable marker, and never gate the first run on the successor being
-empty. This file covers what the migration must do once it fires; the `freenet-migrate`
-README covers the probe's outcomes and which of them may seal a marker.
+empty. "Contract mechanics" below covers the probe's outcomes and which of them may seal
+a marker.
+
+## Contract mechanics
+
+Contract state moves by a backward probe over a committed, append-only registry of
+every past code hash, walked newest first. Reconstruct each predecessor's key from
+`BLAKE3(BLAKE3(old_wasm) || params)`, where `params` are the bytes that generation was
+published under ("A parameter-struct change is a migration too"), GET the old state,
+fold it forward, and re-PUT it under the current key. The current hash is never in the
+registry. For per-user state with no shared owner the probe is the only option.
+
+### Where the registry lives
+
+- **Put it where the prober is built.** If an outside integrator building from
+  crates.io probes, it ships inside the published crate (River's
+  `common/legacy_room_contracts.toml`, so `riverctl` has it). If only your UI probes,
+  the repo root is fine. If consumers cannot run the sweep at all, do not ship it.
+- **A registry edit must not change contract WASM bytes**, or recording a migration
+  re-keys the contracts it describes. Keep the registry in a crate outside the
+  contract build graph, or inside it behind a `#[cfg(feature)]` the contract builds
+  do not enable (River: `#[cfg(feature = "migration")]`). Verify on the artifact:
+  edit the registry, rebuild, and compare `b3sum` of the contract and delegate WASM.
+  `cargo tree --invert` shows crate edges, not whether bytes moved.
+
+### What the app owns around the probe
+
+- **Set the in-progress marker (property 2) before the first GET**, so a session
+  that ends before any GET resolves re-attempts.
+- **Key per-user markers and duplicate suppression on the cryptographic identity**,
+  not on a mutable alias.
+
+**Cross-user sends with mixed versions.** If users on different contract versions
+address each other, the sender must derive the recipient's contract key from the
+recipient's advertised WASM hash, not its own. Capture it at contact-import time
+from the import GET's `key.code_hash()` (requires `return_contract_code: true`),
+store it on the contact record with `#[serde(default)]`, and pass it explicitly
+when building the recipient's key. Derivations of your own identity keep using your
+embedded hash.
+
+### Driving the probe
+
+`ProbeDriver` is a sans-IO state machine that owns order and adoption: newest
+generation first by the registry's generation field, first real state wins, an
+undecodable or placeholder response is a miss and advances the walk, late responses
+are ignored, and a hop cap bounds the walk. The app pumps I/O and supplies a
+`ProbeStateOps` adapter.
+
+`migrate_contract` is a thin async wrapper over it that awaits a `ProbeIo::get` per
+candidate: right for a CLI, a bridge, a test harness, or anything with awaitable
+request and response correlation. A Rust browser app on stdlib's `WebApi` has none,
+because every response goes to one app-registered handler. There, construct
+`ProbeDriver` directly: `next_action()`, send the GET and arm a timeout, feed the
+result to `on_response`, `on_absent` or `on_unknown` (an expired timer is
+`on_unknown`), then `take_outcome()` at `Step::Done`. Hand-pumping also puts the
+sequencing in code `cargo test` runs on the host.
+
+A TS UI is not exempt. `FreenetWsApi` returns a promise per request and correlates by
+contract key, but it rejects on `NotFound` (`"Contract not found"`) and on a deadline
+(`"Request timeout"`) alike, so `Absent` and `Unknown` arrive in the same shape,
+separable only by matching the error string. The idiomatic
+`try { await get() } catch { /* nothing there */ }` is the data-loss default the next
+section forbids. Concurrent requests for the same contract are not correlated
+exactly, and `migrate_contract` has no JavaScript binding, so a TS app writes the loop
+itself.
+
+### Silence is not absence
+
+Your adapter's `ProbeIo::get` returns a three-way `ProbeAnswer`: `State(bytes)`;
+`Absent` for the node's real `ContractResponse::NotFound`; and `Unknown` for a
+timeout, send failure, dropped transport, cancelled correlation slot, or any other
+non-answer. A timeout is never a miss. Under `NewestFirstWins` an unanswered candidate
+halts the walk; `ProbeDriver::continue_past_unknown` with a `RollbackRiskAck` opts out
+and forfeits the anti-rollback guarantee for that probe. Do not route not-founds
+through the deprecated `on_timeout`: it forwards to `on_unknown`, so the walk stops at
+its first empty generation and never asks the older ones.
+
+The main outcomes are `Recovered` (a generation had real state), `SeedLocal` (every
+candidate was asked and answered, and none had state), and
+`Indeterminate { local, unresolved }` (nothing recovered, and at least one candidate
+never answered or was never reached because the hop cap fired: adopt nothing, seal
+nothing, retry next load). Both `ProbeAnswer` and `Outcome` are `#[non_exhaustive]`,
+so a `match` needs a wildcard arm.
+
+**Only a complete `Recovered` may record the migration as finished.** A `NotFound` is
+unauthenticated, and a contract that exists can answer it while momentarily
+unfindable. An undecodable answer is a miss too, so a schema break across a whole
+lineage lands on `SeedLocal` with every generation intact. Read `SeedLocal` as "asked
+everyone, found nothing this time": seeding your local snapshot forward on it is fine,
+and sealing on it is not. Only `Recovered` with no unresolved candidates and no
+truncated fold may seal. Name that case explicitly and let the wildcard arm fall
+through to "retry next run": a wildcard that defaults to "done" writes a permanent
+marker wrongly, today and for every variant added later.
+
+`SelectionPolicy::NewestFirstWins` is the default and is safe for delete-by-absence
+states. `SelectionPolicy::FoldAll` folds every real generation and is sound only for
+tombstoned states with a commutative, idempotent merge, so it takes a loudly-named ack
+plus `policy_check` property helpers.
+
+### Optional: an in-state upgrade pointer
+
+An owner can write a field such as River's `OptionalUpgradeV1` announcing the new key
+to clients still on old code. It is a courtesy for stragglers. No app drives migration
+off it, and it cannot work for per-user state. Add it only if you want un-upgraded
+clients told where the new contract lives.
 
 ## Enumerate dynamic key families
 
@@ -780,14 +888,13 @@ derivation is BLAKE3 (River lost rooms to a SHA256 migration entry).
 
 - `web-container-contract.md`: shipping a new UI is an in-place state update, with no
   re-key and no migration.
-- `contract-patterns.md`: contract upgrade mechanics. `delegate-migration.md`: delegate
-  secret migration.
+- `delegate-migration.md`: delegate secret migration.
 - `build-system.md`: byte-reproducibility (`Cargo.lock`, toolchain pin, `--locked`, path
   embedding) and the `freenet-migrate` / stdlib compatibility table.
 - `state-authorization-patterns.md`: self-authorizing state, the precondition for
   permissionless migration.
-- The `freenet-migrate` README: the probe's outcomes, which of them may seal a marker, and
-  how to swap an existing hand-rolled sweep for the crate.
+- The `freenet-migrate` README: the crate's API, and how to swap an existing hand-rolled
+  sweep for it.
 - [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) is the live
   home base for addressing, contract-state and delegate-secret migration status. Check it
   before trusting any status claim here.
