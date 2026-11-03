@@ -148,9 +148,10 @@ same bytes in a different order.
 ### 1. Set-Based Operations
 
 ```rust
-// Members stored as a set: adding is commutative.
+// Members stored as a set: adding is commutative. Each record is signed by the
+// member it names. `VerifyingKey` is not `Ord`, so key the map on its bytes.
 pub struct MembersV1 {
-    members: BTreeMap<VerifyingKey, SignedMember>,
+    members: BTreeMap<[u8; 32], SignedMember>,
 }
 
 impl MembersV1 {
@@ -163,12 +164,15 @@ impl MembersV1 {
             }
             // Two records under one key: a rule over their own bytes picks the
             // same one on every peer. A bare `insert` lets arrival order pick.
+            // A signature tie-break is safe only when the key is the signer,
+            // because a signer can grind signatures. Where someone else signs,
+            // rank by authority first and a digest last.
             match self.members.get(key) {
                 Some(held) if held.signature.to_bytes() >= member.signature.to_bytes() => {}
                 _ => { self.members.insert(*key, member.clone()); }
             }
         }
-        // Caps and any other removal run here, after the union.
+        // Caps, removals and dependencies are decided here, after the union.
         self.cleanup(params);
     }
 }
@@ -184,7 +188,7 @@ pub struct MessagesV1 {
 // MessageId includes timestamp for deterministic ordering
 pub struct MessageId {
     timestamp: DateTime<Utc>,
-    author: VerifyingKey,
+    author: [u8; 32],  // the key's bytes: `VerifyingKey` is not `Ord`
     sequence: u32,  // Tie-breaker
 }
 ```
@@ -219,7 +223,7 @@ fn merge(a: &Self, b: &Self) -> Self {
     else if b.version > a.version { b.clone() }
     else {
         // Deterministic tie-breaker (e.g., lexicographic signature)
-        if a.signature.as_bytes() > b.signature.as_bytes() { a.clone() }
+        if a.signature.to_bytes() > b.signature.to_bytes() { a.clone() }
         else { b.clone() }
     }
 }
@@ -230,7 +234,7 @@ fn merge(a: &Self, b: &Self) -> Self {
 **CRITICAL: Every field in contract state must be covered by a signature.** Contracts run on untrusted peers who can modify state. The contract's `validate_state` checks signatures, but only for fields included in the signing bytes. An unsigned field is effectively world-writable.
 
 ```rust
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 pub struct SignedMessage {
     pub content: MessageContent,
@@ -264,12 +268,12 @@ fn signing_bytes_v1(id: u64, title: &str, content: &str) -> Vec<u8> {
     buf
 }
 
-// V2 signing bytes. The tags must be prefix-free: `myapp:item:` is a prefix of
-// `myapp:item:v2:`, so a crafted v1 could equal a v2. V2 also binds a stable
-// anchor, here the owner key, which a re-key does not move.
-fn signing_bytes_v2(owner: &VerifyingKey, id: u64, title: &str, content: &str, order: u32) -> Vec<u8> {
+// V2 signing bytes. Tags must be prefix-free, and `myapp:item:` and `myapp:item2:`
+// are: with a tag like `myapp:item:v2:`, a crafted v1 could equal a v2. V2 also
+// binds `room_id` from the parameters, which names this instance across re-keys.
+fn signing_bytes_v2(room_id: &[u8; 32], id: u64, title: &str, content: &str, order: u32) -> Vec<u8> {
     let mut buf = b"myapp:item2:".to_vec();
-    buf.extend_from_slice(owner.as_bytes());
+    buf.extend_from_slice(room_id);
     buf.extend_from_slice(&id.to_le_bytes());
     push_field(&mut buf, title.as_bytes());
     push_field(&mut buf, content.as_bytes());
@@ -277,10 +281,15 @@ fn signing_bytes_v2(owner: &VerifyingKey, id: u64, title: &str, content: &str, o
     buf
 }
 
-fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
-    let v2 = signing_bytes_v2(owner, id, &self.title, &self.content, self.order);
+// V2 sorts above V1, so ranking on this enum prefers the newer form.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SignedForm { V1, V2 }
+
+fn verify(&self, id: u64, params: &RoomParameters) -> Result<SignedForm, String> {
+    let owner = &params.owner_verifying_key;
+    let v2 = signing_bytes_v2(&params.room_id, id, &self.title, &self.content, self.order);
     if owner.verify(&v2, &self.signature).is_ok() {
-        return Ok(());
+        return Ok(SignedForm::V2);
     }
     // A v1 signature does not cover `order`, so a v1 record must hold its default.
     if self.order != 0 {
@@ -288,11 +297,17 @@ fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
     }
     let v1 = signing_bytes_v1(id, &self.title, &self.content);
     owner.verify(&v1, &self.signature)
+        .map(|_| SignedForm::V1)
         .map_err(|e| format!("invalid signature: {e}"))
+}
+
+// The merge keeps the higher rank for one id, whichever arrives first.
+fn rank(&self, form: SignedForm) -> (SignedForm, [u8; 64]) {
+    (form, self.signature.to_bytes())
 }
 ```
 
-Both forms stay valid, so the merge ranks v2 above v1 for one id, whichever arrives first.
+Both forms stay valid, so the merge has to rank them.
 
 **Write a test for every signed field** that verifies tampering with it causes verification to fail.
 
