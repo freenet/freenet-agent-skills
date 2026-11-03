@@ -64,7 +64,7 @@ freenet network \
   --log-dir ~/freenet-test-node/logs
 ```
 
-A gateway needs both `--public-network-address` and `--public-network-port`; without them it exits at startup. The API binds to loopback by default. Only add `--ws-api-address 0.0.0.0` for phone testing, because anything that can reach that port can read your contract state and keys.
+A gateway needs both `--public-network-address` and `--public-network-port`; without them it exits at startup. The API binds to loopback by default. Only add `--ws-api-address 0.0.0.0` for phone testing on a network you trust.
 
 Give every test node its own `--config-dir` and `--data-dir`. `fdev` defaults to port 7509 and will silently target whichever node owns that port, often your system service, so pass `fdev --port 7510 ...` for a test node. Details, a gateway plus peer on one host, and phone testing: `references/node-isolation-and-debugging.md`.
 

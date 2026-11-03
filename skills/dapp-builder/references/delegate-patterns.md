@@ -331,12 +331,13 @@ fn process(
     message: InboundDelegateMsg,
 ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
     // These run without a caller's authority, so treat every field as untrusted
-    // input. The gate below refuses `None`, so they are named here.
+    // input. They are named here because they do not pass the caller gate below.
     if matches!(
         message,
-        InboundDelegateMsg::Lifecycle(_) | InboundDelegateMsg::WakeupFired { .. }
-    ) || (origin.is_none() && matches!(message, InboundDelegateMsg::ContractNotification(_)))
-    {
+        InboundDelegateMsg::Lifecycle(_)
+            | InboundDelegateMsg::WakeupFired { .. }
+            | InboundDelegateMsg::ContractNotification(_)
+    ) {
         return handle_background(ctx, message);
     }
     // One gate, ahead of the match. A request family added later cannot
@@ -445,9 +446,10 @@ fn process(
     // These run without a caller's authority, so treat every field as untrusted input.
     if matches!(
         message,
-        InboundDelegateMsg::Lifecycle(_) | InboundDelegateMsg::WakeupFired { .. }
-    ) || (origin.is_none() && matches!(message, InboundDelegateMsg::ContractNotification(_)))
-    {
+        InboundDelegateMsg::Lifecycle(_)
+            | InboundDelegateMsg::WakeupFired { .. }
+            | InboundDelegateMsg::ContractNotification(_)
+    ) {
         return Ok(vec![]); // ...background work, acting only on a re-read of a contract...
     }
     let app = app_of(origin.as_ref())?;

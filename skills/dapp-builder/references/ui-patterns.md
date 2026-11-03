@@ -77,7 +77,7 @@ or audit what the app does with their data. Any one of these is enough:
 - **Source repository:** if open source, the exact repo the published WASM was built from.
 - **Email:** a pseudonymous address is fine.
 - **River member ID,** with the full verifying key from River's member info panel. The short ID
-  is a 40-bit truncation two members can share, so alone it can be impersonated.
+  is truncated and not unique, so give the full key.
 
 A pseudonymous channel counts: the aim is a channel to the author, not their identity.
 

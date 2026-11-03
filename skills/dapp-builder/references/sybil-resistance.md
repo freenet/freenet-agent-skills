@@ -72,10 +72,12 @@ rules that matter:
   Binding" in `state-authorization-patterns.md`.
 - Send a buyer to `freenet.org/ghostkey/create/?return_to=<contract instance id>` so
   the vault can offer a way back.
-- `ScopedPayload.requestor` names a web app, not this contract. If you need that
-  binding, have `validate_state` compare it against a list in the parameters. Without
-  that check, a valid signature shows the user signed the challenge through some app,
-  not through yours.
+- `ScopedPayload.requestor` names a web app or a delegate, not this contract. Without
+  a check on it, a valid signature shows the user signed the challenge through some
+  app, not through yours. To bind it, `validate_state` compares it against a list in
+  the parameters, but that list is frozen with the key: pin the container, keep every
+  past id, and treat adding one as a parameters-only re-key. If the web app must be
+  able to move, do not bind to it.
 - Keep the proof with the record and verify it in `validate_state`. A PUT to a peer
   not yet holding the contract runs validation only, so a proof checked only in
   `update_state` is skipped. Filter in `update_state` as well, so a bad record is

@@ -74,7 +74,7 @@ freenet network ... --ws-api-address 0.0.0.0 --ws-api-port 7510
 # http://{YOUR_LAN_IP}:7510/v1/contract/web/{CONTRACT_ID}/
 ```
 
-Anything that can reach that port can read your contract state and keys, so use a trusted network.
+Use a network you trust.
 Find the LAN IP with `ifconfig en0 | grep "inet "` (macOS) or `ip addr show wlan0` (Linux).
 
 A mobile browser suspends WebSocket connections when the screen locks, the tab goes to the

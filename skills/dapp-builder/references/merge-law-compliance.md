@@ -173,8 +173,7 @@ must stick needs a tombstone (`state-authorization-patterns.md` → "Tombstones"
 
 **A capped ban list is not a lasting removal.** Admitting one more ban evicts a
 held one, and the evicted ban's target can return from any peer that still holds
-the target's record. River's bans are suppression under a cap, not removal
-tombstones. A removal that must last needs a record no cap evicts, and then that
+the target's record. A removal that must last needs a record no cap evicts, and then that
 cap does not bound the state's size. The bounded tombstone list in
 `state-authorization-patterns.md` → "Tombstones" has the same limit, so it suits
 suppression you can afford to lose, never a removal.

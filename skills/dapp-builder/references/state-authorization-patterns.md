@@ -105,7 +105,7 @@ Counter goes in the bytes covered by the signature, so signatures are bound to a
 
 ### Tombstones
 
-For "forgotten but must not return" state. River's bans are suppression under a cap, not removal tombstones: while the ban is held, a banned member's record is dropped on every merge, including after a re-invitation. A mailbox's purged list works the same way: while the entry is held, a purged message can't be re-submitted.
+For "forgotten but must not return" state. While a ban is held, a banned member's record is dropped on every merge, including after a re-invitation. A mailbox's purged list works the same way: while the entry is held, a purged message can't be re-submitted.
 
 ```rust
 pub struct RecipientState {
@@ -378,14 +378,16 @@ fn validate_state(
     if let Some(missing_id) = self.find_missing_related(&state, &related) {
         return Ok(ValidateResult::RequestRelated(vec![missing_id]));
     }
-    // Second pass: related is populated; check membership:
+    // Second pass: related is populated. Only for a fact that stays true once
+    // true. Live membership is not: use the `update_state` route or a signed
+    // attestation (see "Never Gate an Item's Validity on a Value That Can Decrease").
     self.check_membership(&state, &related)
 }
 ```
 
 Host fetches the requested contracts (locally first, then network) and re-invokes `validate_state` with `related` populated.
 
-The contract id in `find_missing_related` is one this WASM derives, from the entry's `room_owner` and the room contract's code hash built into it. That id moves when the room contract re-keys, and entries that name the old one stop resolving, so where that matters carry a signed attestation in the entry instead (see "Never Gate an Item's Validity on a Value That Can Decrease").
+The contract id in `find_missing_related` is one this WASM derives, from the entry's `room_owner` and the room contract's code hash built into it. The entry's `room_owner` only selects the contract: accept it only if this instance names that room, in the parameters or in recipient-signed state, otherwise a sender can name a room they created. That id moves when the room contract re-keys, and entries that name the old one stop resolving, so where that matters carry a signed attestation in the entry instead (see "Never Gate an Item's Validity on a Value That Can Decrease").
 
 ### Limits
 
