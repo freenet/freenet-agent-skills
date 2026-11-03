@@ -1,30 +1,19 @@
 # Upgrading Contracts and Delegates Safely
 
-This is the hub for upgrading a live Freenet dApp. The **painless-path playbook**
-below is the start-to-finish procedure; the rest of the document is the
-operational discipline behind it (the five properties that keep a migration from
-losing data, the test harness, and rollout mechanics). The per-component
-*mechanics* live in `contract-patterns.md` ("Contract WASM Upgrade & State
-Migration") and `delegate-patterns.md` ("Delegate WASM Upgrade & Secret
-Migration"), which the playbook links to. Every lesson here was paid for in
-production by River (freenet/river#345, #352, #253, #204, #393). Read it before
-your *second* release, and design for it before your *first*.
+This is the hub for upgrading a live Freenet dApp: the playbook below, then the discipline behind it (migration
+properties, test harness, rollout). Contract mechanics live in `contract-patterns.md` and delegate mechanics in
+`delegate-migration.md`. Design for it before your first release; read it before your second.
 
-## Upgrading a Freenet dApp — the painless path
+## Upgrading a Freenet dApp: the painless path
 
 **If you are here to upgrade an existing dApp — bump `freenet-stdlib`, ship a new
 contract or delegate version, or fix a bug that changes the WASM — start here.**
 
-A routine WASM/stdlib bump is **low-risk and mechanical when you designed for it
-at v1.** It is NOT "recreate everything and all invites die." River's live 0.6→0.8
-stdlib re-key (verified 2026-07-12) migrated every room on the next refresh, kept
-every invite and share link working, and left the 78-member Official room intact —
-with no recreation. The property that makes this work: the contract key moves on
-any WASM change, but your app's durable references were anchored to a **stable
-identifier that does not move with the WASM** (River's rooms anchor on the owner's
-verifying key; other designs use a fixed namespace, a DID, or an index contract —
-see step 1), so clients re-derive the new contract key and every reference keeps
-pointing at the right place.
+A routine WASM or stdlib bump is **low-risk and mechanical when you designed for it at v1**. It does not mean recreating
+everything and killing invites. The contract key moves on any WASM change, but durable references anchored to a **stable
+identifier that does not move with the WASM** (River anchors rooms on the owner's verifying key) let clients re-derive the
+new key, so every reference keeps pointing at the right place. River's 0.6 to 0.8 stdlib re-key worked this way: every room
+migrated on the next refresh and every invite kept working.
 
 The whole procedure, start to finish:
 
@@ -48,32 +37,14 @@ The whole procedure, start to finish:
    - an **index/registry contract** mapping a stable name → the current contract
      key — a level of indirection. (The index contract itself needs this same
      treatment: its own address must be reachable via a stable anchor.)
-   - an **ecosystem-standard pointer contract** — a shared, frozen "pointer"
-     WASM at a derivable address `(author_vk, app_id)`, whose state is an
-     author-signed `{version, code_hash, sig}` naming the current code hash of
-     *some other* contract or delegate. The record format is settled
-     (freenet-core#5194; governance questions — author-key rotation and
-     recovery, whether adoption is mandatory — are still open), and the contract
-     is merged as an in-repo crate (freenet-migrate#9, deliberately unpublished
-     *as a crate*; the frozen, CI-hash-checked WASM artifact is the
-     deliverable). A client resolver ships in `freenet-migrate` 0.6.0
-     (`freenet_migrate::pointer`) — earlier revisions of this file said no
-     resolver existed, and that is out of date. Adoption is a separate question
-     from availability, and it is thin: publishing a pointer is worth doing for
-     your integrators, but do not assume the apps *you* depend on have one.
-
-     Two things to keep straight. It solves **addressing only**: it says nothing
-     about whether state or secrets held under the old key survived, and
-     assuming they did produces a bug shaped like "this user has no data". And
-     it is a different mechanism from the in-state `OptionalUpgrade` pointer in
-     `contract-patterns.md`, which is per-instance and only findable by clients
-     that already hold a reference to *that* contract; the pointer contract is
-     for a third party with no prior reference at all.
-
-     Publishing one is the author-side half. The consumer-side half — resolving
-     a pointer for an app you do **not** own, and the three things integrators
-     get wrong — is `building-on-other-apps.md`. Check freenet-core#2776 for
-     live adoption status.
+   - an **ecosystem-standard pointer contract**: a shared, frozen contract at a derivable address `(author_vk, app_id)`
+     whose author-signed state `{version, code_hash, sig}` names the current code hash of another contract or delegate. A
+     client resolver ships in `freenet-migrate` (`freenet_migrate::pointer`). It solves **addressing only**: it says nothing
+     about whether state or secrets under the old key survived, and assuming they did produces a bug shaped like "this user
+     has no data". It is a different mechanism from the in-state `OptionalUpgrade` pointer in `contract-patterns.md`, which
+     only clients already holding a reference to that contract can find. Adoption is thin: publish one for your integrators,
+     but do not assume the apps you depend on have one. Resolving a pointer for an app you do not own is
+     `building-on-other-apps.md`; status is tracked in freenet-core#2776.
 
    If v1 exposed a raw contract key as an identifier, fix *that* first — an upgrade
    cannot rescue an identifier that moves with the WASM. See
@@ -104,45 +75,21 @@ The whole procedure, start to finish:
    Your app builds the equivalent registry + guard, or gets both from
    `freenet-migrate` (next step). Order matters: register first, then rebuild.
 
-4. **Use the `freenet-migrate` crate for the carry-forward instead of hand-rolling
-   it.** The legacy-hash registry, the `build.rs` codegen, the backward probe, and
-   the preconditions-as-types are identical across every app, so `freenet-migrate`
-   packages them. It is **`freenet-migrate` 0.6.0 on crates.io** (with
-   `freenet-migrate-build` 0.2.0): `cargo add freenet-migrate` (runtime
-   carry-forward) and `cargo add --build freenet-migrate-build` (build.rs codegen +
-   CI hash-guard). This is the mechanism River's contract-migration path runs in
-   production: the browser UI and `riverctl` both drive it live, and River adopted
-   it without a rewrite, its build codegen reading the existing `[[entry]]`
-   registries and emitting view consts that match the hand-rolled shapes
-   (freenet/river#434, #436, #437). Honest caveat: the crate's field-deployed path
-   is the *contract* side. A node-level delegate-secret copy-forward was
-   designed and shipped (`RegisterDelegateWithPredecessors`, freenet-core#4908)
-   — then found forgeable and disabled as a security fix (freenet-core#5199:
-   predecessor delegate keys are publicly derivable, so there was no sound way
-   to verify a client's claim to own a predecessor's secrets), and the wire
-   variant was removed from freenet-stdlib `main` (freenet-stdlib#91, version
-   bumped to 0.9.0, **unreleased as of 2026-08-09** — crates.io's latest is
-   0.8.5, which still carries the variant; nodes are protected by #5199's
-   disable, not the removal). **There is no core mechanism for delegate secret
-   migration and there will not be one**: three trust-model designs have been
-   tried and rejected, and the settled standing policy (freenet-core#2776,
-   2026-08-09) is that delegate secret migration happens at the app level
-   permanently, not as an interim measure. That does not mean bespoke per app:
-   `freenet-migrate` ships the delegate-side entry points
-   (`migrate_delegate_secrets`, `register_delegate_with_migration`, unchanged
-   since 0.5.0), and River, Delta and ghostkeys all drive them on `main` at
-   0.5.0. **A delegate migration is forward-only**: the successor asks, and only
-   a predecessor whose already-deployed WASM answers (in practice, one that
-   shipped `handle_export_request`, or an app protocol general enough to
-   enumerate its own secret namespace) can be recovered from. Every release
-   shipped without that handler adds one permanently unrecoverable generation,
-   which makes "we have no migration to do yet" the argument for adopting
-   sooner, not later. See `delegate-patterns.md` → "A delegate migration is
-   forward-only" for what the handler must get right and the limits no handler
-   fixes, and → "Delegate secret migration: no core mechanism, and why" for the
-   full history. See `contract-patterns.md` for the contract-side
-   mechanics. For the procedure of swapping an existing hand-rolled sweep over
-   to the crate, see the `freenet-migrate-adoption` skill.
+4. **Use the `freenet-migrate` crate for the carry-forward instead of hand-rolling it.** The legacy-hash registry, the
+   `build.rs` codegen, the backward probe and the preconditions-as-types are identical across apps. `cargo add
+   freenet-migrate` (runtime) and `cargo add --build freenet-migrate-build` (codegen and CI hash-guard). The build codegen
+   reads River-style `[[entry]]` registries, so an existing hand-rolled registry needs no rewrite. Take the
+   `freenet-migrate` release matching your stdlib (table in `build-system.md`); moving between stdlib lines is a re-key.
+
+   Contract state is the field-proven half (River, Delta and others run it). There is no node-level mechanism for
+   delegate secrets today. Do not wait for one: migrate at the app level, using the crate's entry points
+   (`migrate_delegate_secrets`, `register_delegate_with_migration`). Status is tracked in freenet-core#2776. **A delegate
+   migration is forward-only**: the successor asks, and only a predecessor whose already-deployed WASM answers (in practice
+   one that shipped `handle_export_request`, or a protocol general enough to enumerate its own secret namespace) can be
+   recovered from. Every release shipped without that handler adds one unrecoverable generation, so "we have no migration
+   to do yet" is the argument for adopting sooner. Mechanics: `delegate-migration.md` ("A delegate migration is
+   forward-only", "Delegate secret migration is app-level") and `contract-patterns.md`. The `freenet-migrate` README covers
+   swapping an existing hand-rolled sweep for the crate.
 
 5. **Publish the new version, then let clients migrate themselves.** Publish the
    new WASM to the shared production key **from `main` only**, after review and
@@ -166,16 +113,6 @@ The whole procedure, start to finish:
    fresh references — is **only** for a deliberate change of the app's *identity
    anchor* itself (e.g. rotating a compromised owner key, or standing up a genuinely
    separate instance), never for a contract or stdlib bump.
-
-**What makes it painless is two things holding together:** (1) a stable identity
-anchor independent of the WASM (step 1) so references survive the re-key, and
-(2) state the successor can carry forward on its own. The second means either **self-authorizing + backward-compatible state**
-(so any client can re-PUT it and the new `validate_state` accepts it), OR a
-**written carry-forward** via `freenet-migrate` / the backward probe. With those in
-place the steps above are mechanical. Without them an upgrade is genuinely risky —
-so the fix is to add them, not to recreate everything. The honest caveats stand:
-migration is per-client on next load, and a fresh device has no local state to
-carry forward.
 
 ## A New Version Must Accept Old State
 
@@ -209,15 +146,9 @@ So **a derivation change is a breaking change to users' data, not an internal
 refactor.** It does not read like one — a few lines in one function, nothing in
 the type system moving, every test green — which is exactly why it needs saying.
 
-What that costs when it lands unnoticed, from the case that produced this
-section: a listing id stopped covering the price (a real defect — one seller
-could sign two listings under one id, and under first-writer-wins that diverges
-permanently). The fix made every existing listing unverifiable; the migration
-fold returned on the first refusal and so discarded the predecessor **in full**
-— listings, orders, and the store's own name and certificate with them; it
-reported that in a browser console line; and then it **sealed**, making the loss
-permanent. It passed fmt, clippy on both targets, the full suite, and a review
-round.
+The case that produced this section: a listing id stopped covering the price (one seller could sign two listings under one
+id). The fix made every existing listing unverifiable, the migration fold returned on the first refusal and discarded the
+whole predecessor, and then sealed. It passed fmt, clippy, the full suite and a review round.
 
 ### Accepting the old format in `verify` is not the answer
 
@@ -267,13 +198,8 @@ If the change makes previously-published records unverifiable:
    the app**, in language saying the loss was expected as part of an upgrade
    rather than that something broke.
 
-Spend deliberate effort on this *before* launch — on what each id covers, on
-parameter structs (they are hashed into the address; see the parameter-change
-section below), and on state shapes. Afterwards there is often no good option
-left: in the case above, after a launch the correct fix destroys every seller's
-shop, the escape hatch reaches only sellers still holding their identity, and
-accepting the old format reopens the defect. There is no fourth option, so **the
-defect would simply have been carried indefinitely.**
+Settle this before launch: what each id covers, what goes in parameter structs (they are hashed into the address), and the
+state shapes. Afterwards there is often no good option left, and the defect is carried indefinitely.
 
 ## The one truth that shapes everything
 
@@ -313,10 +239,9 @@ bytes**, and `contract::predecessor_ids(params, lineage)` maps *one* `params`
 — the current build's — over every entry. So after a parameter edit the probe
 walks a list of addresses that never existed, takes `NotFound` at each, and
 reports a clean "nothing to migrate". **Green tests, green CI, no runtime
-symptom, and every instance ever published is orphaned.** Harvest came within
-one commit of shipping that: removing two fields took `StoreParameters` from 109
-CBOR bytes to 56, which would have silently written off five generations of a
-seller's entire store.
+symptom, and every instance ever published is orphaned.** A real near-miss:
+removing two fields shrank a parameter struct from 109 to 56 CBOR bytes, which
+would have silently written off five generations of every seller's store.
 
 The remedy is to freeze a **generation boundary** and derive each predecessor
 under the encoding it was actually published with:
@@ -351,9 +276,7 @@ let mut by_generation: Vec<(u32, ContractInstanceId)> = lineage
 by_generation.sort_by_key(|(generation, _)| core::cmp::Reverse(*generation));
 ```
 
-Harvest's `ui/src/migrate.rs` (`store_candidate_ids`,
-`legacy_store_params_cbor`) and `legacy/README.md` are the worked shape,
-including a test that pins the boundary.
+Pin the boundary with a test.
 
 **A generation boundary only works while each historical encoding maps onto a
 distinct code hash.** If the *same* WASM was ever published under two parameter
@@ -365,8 +288,7 @@ to keep the historical `(code_hash, parameter_bytes)` **pairs** and derive a
 candidate id from each, rather than a boundary over a code-hash-only lineage.
 The crate supports it: `NewestFirst::assume_ordered` takes a candidate list the
 app derived itself, which `ProbeDriver::new` accepts in place of
-`NewestFirst::from_lineage`. (Harvest wraps that as its own
-`ProbeSession::start_with_candidates`; the crate has no such constructor.) A
+`NewestFirst::from_lineage`. A
 boundary constant is the simple case of deriving your own candidates, not a
 substitute for it.
 
@@ -391,8 +313,8 @@ Practical rules:
 - **Treat a parameter-struct edit as a re-key event** and put it through the same
   procedure as a WASM change: record the outgoing generation before rebuilding.
 - **Prefer moving the field elsewhere.** Parameters are the address; state is
-  not. Harvest's two fields moved onto `Order` (state) rather than staying in
-  parameters, which is the change that caused this. A state field can then be
+  not. In the near-miss above the two fields moved onto the order record (state)
+  rather than staying in parameters, which is the change that caused this. A state field can then be
   *extended* without re-keying anything — subject to architecture invariant 2
   below, which still forbids removing, renaming or repurposing one.
 - **Say where the boundary falls in the registry file itself**, next to the rows
@@ -466,25 +388,26 @@ Practical rules:
    populated: that is the empty-destination gate in disguise, and any earlier
    write then makes the migration permanently unreachable.
 
+   For delegate predecessors, `freenet-migrate` offers a durable completeness journal stored in the successor, which
+   replaces a hand-rolled in-progress flag on that side; see `delegate-migration.md`. Contract-side sealing stays the app's
+   decision.
+
    **A published Freenet webapp has no browser storage, so the marker belongs in
    the delegate's secret store.** The gateway serves a webapp in an iframe whose
    `sandbox` attribute omits `allow-same-origin`
    (`freenet-core:crates/core/src/server/path_handlers/assets/shell.html`), so the
    app frame has an opaque origin and `window.localStorage` throws. A marker kept
-   there works under `dx serve` and is a silent no-op the moment it is published.
-   It is silent because it fails in the *safe* direction — unreadable reads as
-   "not migrated", so the walk repeats forever instead of being skipped — which
-   is exactly why nothing reports it. Harvest shipped that and found it only by
-   re-reading the sandbox attribute. (The *shell* is same-origin with the node and
-   does have storage, but that is the node's origin, shared by every app on it,
-   and your app frame cannot reach it — `path_handlers.rs:1672-1676`.)
+   there works under `dx serve` and is a silent no-op once published. It is silent
+   because it fails in the *safe* direction: unreadable reads as "not migrated", so
+   the walk repeats forever instead of being skipped. (The *shell* is same-origin
+   with the node and has storage, but that origin is shared by every app on the
+   node and your app frame cannot reach it.)
 
    For a **browser** app the delegate's KV store is therefore the only durable
-   client-local store left. (A non-browser client has its own filesystem and
-   should use it — the freenet-bitcoin bridge keeps its markers in SQLite,
-   `bridge/src/store.rs:145`. A per-user contract keyed on the user's own
-   verifying key is also durable and survives a delegate re-key, at the cost of a
-   network round trip on every page load.)
+   client-local store left. A non-browser client has its own filesystem and should
+   use it. A per-user contract keyed on the user's own verifying key is also
+   durable and survives a delegate re-key, at the cost of a network round trip on
+   every page load.
 
    Keeping a *contract* marker in the delegate costs one extra probe when the
    **delegate** re-keys. That is not the defect it looks like **provided your fold
@@ -510,9 +433,9 @@ Practical rules:
    | The marker names… | Keep it out of the export? | Why |
    |---|---|---|
    | a predecessor **delegate** (River) | **Yes** | When the current delegate later becomes a predecessor itself, its store holds these keys; copying them forward asserts the successor already imported that predecessor. It has not — the marker would forge migration state. |
-   | a **contract** generation (Harvest) | **No** — put it inside the exported prefix on purpose | "Store contract X's predecessors were folded into it" is a fact about contracts. A delegate re-key does not change it, so carrying it forward is accurate and saves the re-probe above. |
+   | a **contract** generation | **No** — put it inside the exported prefix on purpose | "Store contract X's predecessors were folded into it" is a fact about contracts. A delegate re-key does not change it, so carrying it forward is accurate and saves the re-probe above. |
 
-   River and Harvest made opposite choices here and both are right; copy the
+   The two cases call for opposite choices and both are right; copy the
    reasoning, never the choice.
 
    **Excluding a marker is an explicit predicate, not just a placement.** River
@@ -533,12 +456,11 @@ Practical rules:
    `(artifact, instance, code_hash)` rather than letting it grow per attempt.
 
    **The client must not supply a raw storage key.** Take a marker *id* and
-   prepend the namespace inside the delegate (`harvest:migrate:` ++ id). The same
+   prepend the namespace inside the delegate (`<app>:migrate:` ++ id). The same
    secret store holds private keys, so a request that accepted a raw key would let
-   a migration note overwrite `harvest:rsa_sk:*` — a general hazard for any
-   delegate whose secret namespace is shared. Harvest pins it with a test that
-   sends the marker id `"harvest:rsa_sk:fp1"` and asserts the private key survives
-   (`delegates/harvest-delegate/src/markers.rs`).
+   a migration note overwrite a private-key secret, a general hazard for any
+   delegate whose secret namespace is shared. Pin it with a test that sends a
+   marker id naming an existing private-key secret and asserts the key survives.
 
    **Key it by `(artifact, instance, current_code_hash)`, mint the ids as hex, and
    require ASCII at the delegate boundary.** Raw bytes in a storage key alias under
@@ -551,11 +473,9 @@ Practical rules:
 
    **An unreadable store, a refused write and a malformed id all report "not
    migrated."** The probe then repeats, which is wasteful and safe; reading any of
-   them as "already done" skips the migration entirely. Harvest's
-   `ui/src/migrate.rs` (`probe_gate`, a pure function over a three-valued
-   `MarkerLookup` so silence is distinguishable from a definite absence at the
-   type level) and `delegates/harvest-delegate/src/markers.rs` are the worked
-   shape.
+   them as "already done" skips the migration entirely. A pure function over a
+   three-valued lookup, so silence is distinguishable from a definite absence at
+   the type level, is the worked shape.
 
 3. **Non-destructive.** Never delete the source until the destination is
    confirmed complete. Keep the old blob/keys as a rollback fallback so an old or
@@ -571,7 +491,7 @@ Practical rules:
    merge rather than replace, and seed the probe from the client's own snapshot so a
    stale source can only ever add. What #253 does **not** license is gating the
    *first* run on "destination is empty" — that is the shape that lost River's rooms
-   in #621; see the `freenet-app-migration` skill for the rule.
+   in #621; see "Probe before you write to the new key" below.
 5. **Observable.** Emit migration telemetry — started / completed / recovered /
    failed counts. River found #352 only because a user reported a vanished room;
    there was no signal that real migrations were failing. A "publish succeeded"
@@ -597,12 +517,10 @@ qualifying for the PUT was by construction one that suppressed the probe. Same
 predicate, same bytes, unreachable since it shipped, across seven room-contract
 re-keys.
 
-The trigger rule this discipline serves — probe unconditionally per
-`(instance, current_code_hash)`, gate only the repeat on a durable marker, never gate
-the first run on the successor being empty — belongs to the `freenet-app-migration`
-skill, along with the River #621 post-mortem and the reference implementation. Read
-it before designing the trigger; this file covers what the migration must do once
-it fires.
+**Trigger rule.** Probe unconditionally per `(instance, current_code_hash)`, gate only
+the repeat on a durable marker, and never gate the first run on the successor being
+empty. This file covers what the migration must do once it fires; the `freenet-migrate`
+README covers the probe's outcomes and which of them may seal a marker.
 
 ## Enumerate dynamic key families
 
@@ -664,7 +582,7 @@ The canonical shape is the wildcard arm of a `match` over a `#[non_exhaustive]`
 enum: while every variant defined today is named explicitly, the wildcard is
 unreachable, so inverting it to the unsafe default leaves every behavioural test
 green. It is protecting against a variant a *future* release adds, which no input
-you can construct today reaches. Harvest hit this in `seal_decision`: inverting
+you can construct today reaches. One app hit this in its seal decision: inverting
 `_ => Seal::Retry` to `Seal::Seal` broke nothing. The remedy is not a better
 behavioural test — it is a test that reads the source and asserts the arm exists
 and returns the safe value, kept **alongside** the behavioural test rather than
@@ -672,29 +590,22 @@ instead of it, with a comment saying why this one guard is pinned that way.
 Otherwise the earlier rule (a source pin is a false positive waiting to happen)
 gets applied to the one case where it is correct, and the pin is deleted.
 
-**A source scrape only knows what it read, so assert on that too.** One written
-to check every production site truncated the file at the first `#[cfg(test)]`
-and passed over 40 lines of 1,138 — reporting success about the 3% it had seen.
-Have the scrape assert a floor on how much it examined, or check the file it
-opened is the one you meant.
+**A source scrape only knows what it read, so assert on that too.** One written to
+check every production site stopped at the first `#[cfg(test)]` and examined 3% of
+the file while reporting success. Assert a floor on how much it examined.
 
 **Three questions worth asking of any migration change in review.** Each names a
-failure a green test suite let through.
+failure a green suite let through.
 
-1. **Does the guard at a seam check BOTH sides of the seam?** A guard that can
-   only see the side it lives on is not a guard. `freenet-migrate`'s newest-wins
-   guarantee is the canonical shape: the crate offers predecessors newest-first,
-   but only the app's writer can see whether the successor already holds a key, so
-   an overwriting writer inverts the guarantee and neither side reports it. When
-   you find a check at a boundary, name what the other side would have to do to
-   defeat it, then confirm something checks that too.
-2. **Is the test double above or below the bug you care about?** A double placed
-   above the layer that can fail proves only that the layers above it agree with
-   each other. `freenet-migrate`'s own tests all drive mocked I/O, with no
-   integration test against a real node or a real WASM delegate, which is why
-   ghostkeys and Delta each gated adoption on a differential test against their
-   prior hand-rolled sweep rather than on the crate's green suite. Put the double
-   below the code under test, or test against the real thing.
+1. **Does the guard at a seam check both sides of it?** `freenet-migrate` offers
+   predecessors newest-first, but only the app's writer can see whether the
+   successor already holds a key, so an overwriting writer inverts newest-wins and
+   neither side reports it. Name what the other side would have to do to defeat the
+   check, then confirm something checks that.
+2. **Is the test double above or below the bug?** A double above the layer that can
+   fail proves only that the layers above agree with each other. The crate's own
+   tests drive mocked I/O, which is why adopters gate on a differential test
+   against their prior hand-rolled sweep.
 3. **Is the operation idempotent with respect to the UI as well as to stored
    data?** These are separate properties, and the second is the one that gets
    missed. Delta's editor bug (freenet/delta#62, fixed in #64) is the shape: the
@@ -707,16 +618,9 @@ failure a green test suite let through.
 
 ## Staged, reversible rollout
 
-1. Publish the new version to an **isolated key** (a throwaway contract/params)
-   first; validate against a test node.
-2. Publish to the **shared production key from `main` only**, after review and
-   green CI on the exact commit. Every production publish hits the same shared
-   address — a feature-branch publish silently ships stale or unreviewed code.
-3. Keep the previous artifact for **rollback**, and expect **old and new clients
-   to coexist** for an unbounded window (clients refresh lazily), unless the
-   dApp reloads open tabs as described in the next section. Versioned
-   coexistence is the normal state during a rollout, not an edge case. An
-   already-open tab never refreshes on its own; see the next section.
+Publish first to an **isolated key** (a throwaway contract or params) and validate
+against a test node, then to the shared production key from `main` only (step 5).
+Keep the previous artifact for rollback.
 
 ## An open tab cannot upgrade itself: detect the re-key and reload
 
@@ -734,11 +638,9 @@ which for a tab left open can be days.
   entries the new build has never seen (River's "top-up"), changes to entries
   it already holds are stranded.
 
-So a dApp that re-keys needs the open tab to notice and reload. River does this
-in `ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#580,
-implemented in freenet/river#792). Copy its shape rather than reinventing it:
-most of the failure modes below were found in that PR's reviews and end-to-end
-runs.
+So a dApp that re-keys needs the open tab to notice and reload. River does this in
+`ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#792); copy
+its shape rather than reinventing it.
 
 **Signal: your pointer records, not your web container.** Publish one pointer
 record per re-keying artifact (`freenet-migrate`'s `pointer` module; see
@@ -805,15 +707,15 @@ from the iframe's stale `location.hash`.
 
 **Loop guards: a reload is only as good as what it loads.** The UI archive is
 far larger than the pointer, so a node can learn of the re-key before it holds
-the new UI, and the reloaded page sees the same newer pointer again. River
-measured this over seven publishes: the ~1.2 MB container reached a median
-peer in ~20 s, 80% within 5 min, p90 ~10 min, with a tail out to ~2 h (which
-looked like peers reconnecting); the pointer arrives in under 0.5 s.
+the new UI, and the reloaded page sees the same newer pointer again. The pointer
+arrives in under a second; a multi-MB container reaches a typical peer in seconds
+to minutes, with a tail of hours.
 
 - Keep the cap state in a URL parameter, not storage. Storage in the sandboxed
   iframe is unreliable, and a cap that silently resets fails open.
-- Allow a few tries per target with backoff sized to that propagation (River:
-  5 tries over ~67 min), then stop.
+- Allow a few tries per target with backoff sized to that propagation (River: 5
+  tries over about an hour), then stop and show a banner with a manual Reload and
+  nothing automatic. Add an hourly ceiling across all targets.
 - Compare targets per artifact. Two pointers answer milliseconds apart, so a
   page briefly knows only one of them; a target that is no newer in any
   artifact than the one being retried must count as the same target, or
@@ -821,11 +723,9 @@ looked like peers reconnecting); the pointer arrives in under 0.5 s.
 - Re-plan on every target move, never shortening a wait.
 - One reload per page: once a reload is issued, never issue another. A driver
   that keeps ticking re-navigates every second and each attempt aborts the last.
-- Add an hourly ceiling across all targets as a backstop. Past any cap, show a
-  banner with a manual Reload and nothing automatic.
 - Do not reload a page younger than the node's bundle-refresh window plus a
-  margin (River: 35 s against freenet-core's 30 s): within it the node serves
-  the bundle this page came from.
+  margin (30 s in the node; River uses 35 s): within it the node serves the
+  bundle this page came from.
 
 **Never lose the user's work.** No automatic reload while the user is busy:
 unsent text in a composer, an edit in progress, any open dialog (River treats
@@ -869,66 +769,25 @@ a couple of minutes, which clears the fast majority of peers. The pointer
 publish is now the step that reloads your users' open tabs, so it is not
 optional after a re-key, and nothing in CI will notice if you skip it.
 
-## Hash + artifact hygiene (cheap mistakes that lost rooms)
+## Do not let a stray rebuild shift the key
 
-- Key derivation is **BLAKE3, not SHA256** (River lost rooms to a SHA256
-  migration entry). `code_hash = BLAKE3(wasm)`, `key = BLAKE3(code_hash ||
-  params)`.
-- WASM builds are **non-reproducible** — treat a committed WASM as a frozen
-  artifact. Never `git add -A`/`-u`/`.` in a repo that commits WASM; a stray
-  rebuilt binary shifts the key and orphans user data. Add files by name.
-- Make it **impossible to ship a key change silently**: a CI check that fails
-  when the built WASM's hash isn't recorded in your `legacy_*.toml` registry
-  (River's `check-delegate-migration` / `check-room-contract-migration`).
+WASM builds are not byte-reproducible, so treat a committed WASM as a frozen
+artifact. Never `git add -A`, `-u` or `.` in a repo that commits WASM; a stray
+rebuilt binary shifts the key and orphans user data. Add files by name. Key
+derivation is BLAKE3 (River lost rooms to a SHA256 migration entry).
 
 ## References
 
-- `references/web-container-contract.md` — the *other* upgrade path: shipping a
-  new UI is an in-place state update at a permanent URL, with no re-key and no
-  migration. Read it before assuming a release rotates anything.
-- `references/contract-patterns.md` — contract upgrade mechanics: the shipped
-  backward-probe baseline (reconstruct old keys from a committed
-  `legacy_contracts.toml` registry, GET old state, re-PUT under the current key),
-  the optional in-state `OptionalUpgrade` straggler pointer, and the preconditions.
-- `references/delegate-patterns.md` — delegate migration mechanics: the backward
-  probe that re-runs the old delegate's WASM via `DelegateRequest::ApplicationMessages`
-  (there is **no `ExportSecrets` request in the stdlib wire protocol**, so the
-  predecessor answers with whatever handler it shipped with — see "A delegate
-  migration is forward-only" there), `legacy_delegates.toml`, the fragility
-  when an stdlib/ABI bump strands old WASM, and the double-hashing bug.
-- `references/build-system.md` — byte-reproducibility (commit `Cargo.lock`, pin the
-  toolchain, build `--locked`; and the `wasm-opt`/`dx`/path-embedding and
-  build-command caveats that the lockfile alone doesn't cover).
-- `references/state-authorization-patterns.md` — self-authorizing state, the
-  precondition for permissionless migration.
-- The reusable `freenet/freenet-migrate` crate packages the registry, the
-  build-time codegen, the backward probe, and the preconditions (`freenet-migrate`
-  0.6.0 / `freenet-migrate-build` 0.2.0 on crates.io; `cargo add freenet-migrate` /
-  `cargo add --build freenet-migrate-build`). River's contract-migration path (UI
-  and `riverctl`) runs it in production, and existing apps adopt it without a
-  rewrite via the `[[entry]]`-registry build codegen (freenet/river#434, #436, #437).
-- The `freenet-app-migration` skill owns the migration *doctrine* — when to probe,
-  which probe outcomes may seal a completion marker, and the failure modes that lose
-  data with a green build. It is a separate skill and may not be installed alongside
-  this plugin; everything you need to act is reproduced here and in
-  `contract-patterns.md`, so treat it as the deeper reference rather than a
-  prerequisite.
-- The `freenet-migrate-adoption` skill: the procedure for swapping an app's
-  existing hand-rolled sweep over to the crate (call-site swap, dual-running,
-  the parity test, what rollback cannot undo).
-- **Harvest citations point at a repository that is not public yet.** Several
-  rules here name `harvest-bitcoin` paths (`ui/src/migrate.rs`,
-  `delegates/harvest-delegate/src/markers.rs`, `legacy/README.md`) because that
-  is where they were found and pinned. The reasoning and the code sketches are
-  reproduced inline so nothing here depends on reading it; treat the paths as
-  provenance rather than a link to follow.
-- River as worked reference: freenet/river#345 (per-entity CAS keys), #352
-  (resumable/interrupted-migration recovery), #253 (regression-gated legacy probe),
-  #204 (old delegate WASM unrunnable after an stdlib bump), #393 (gitignored
-  `Cargo.lock` silently re-keying contracts).
-- [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) is
-  the live-maintained home base for all three migration problems (addressing /
-  pointer contract, contract-state migration, delegate-secret migration) across
-  every app the team manages. Check it before assuming anything in this
-  document is current — it is the canonical source and will outlive any status
-  claim written here.
+- `web-container-contract.md`: shipping a new UI is an in-place state update, with no
+  re-key and no migration.
+- `contract-patterns.md`: contract upgrade mechanics. `delegate-migration.md`: delegate
+  secret migration.
+- `build-system.md`: byte-reproducibility (`Cargo.lock`, toolchain pin, `--locked`, path
+  embedding) and the `freenet-migrate` / stdlib compatibility table.
+- `state-authorization-patterns.md`: self-authorizing state, the precondition for
+  permissionless migration.
+- The `freenet-migrate` README: the probe's outcomes, which of them may seal a marker, and
+  how to swap an existing hand-rolled sweep for the crate.
+- [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) is the live
+  home base for addressing, contract-state and delegate-secret migration status. Check it
+  before trusting any status claim here.
