@@ -418,8 +418,8 @@ automatic for a check confined to the bytes in front of it — `balance >= 0`, "
 entry carries a valid signature", "the counter never goes backwards" are all fine,
 and a balance being *spendable* does not make it unusable as a well-formedness
 check. (A bytes-confined check can still be one your own `update_state` is able
-to violate, which freezes the contract; that is a separate hazard, under "Prune
-in `update_state`".) The hazard here is narrower and easy to miss: **an already-accepted item whose
+to violate, which freezes the contract; that is a separate hazard, under "Bound It
+In `update_state`".) The hazard here is narrower and easy to miss: **an already-accepted item whose
 validity depends on a quantity that can later shrink.** Two shapes do it.
 
 1. **A value read live from another contract** (the `RelatedContracts` mechanism
