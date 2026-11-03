@@ -11,13 +11,13 @@ let aggregator = ctx.aggregate_events().await?;
 let events = aggregator.get_all_events().await?;
 
 // Inspect specific transaction flow
-let flow = aggregator.transaction_flow(&tx_id).await?;
+let flow = aggregator.get_transaction_flow(&tx_id).await?;
 
 // Get routing path a transaction took
-let path = aggregator.routing_path(&tx_id).await?;
+let path = aggregator.get_routing_path(&tx_id).await?;
 
 // Export Mermaid diagram of event flow
-let diagram = aggregator.mermaid_graph(&tx_id).await?;
+let diagram = aggregator.export_mermaid_graph(&tx_id).await?;
 ```
 
 Set `aggregate_events = "always"` to see events on success too. Failure reports are written to `/tmp/freenet-test-*` with per-peer timelines and Mermaid sequence diagrams.

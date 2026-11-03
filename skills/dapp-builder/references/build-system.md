@@ -102,6 +102,7 @@ The `version` field still matters for a different failure. The container's `upda
 - Commit `published-contract/<contract>.wasm` and `published-contract/*.parameters`. Those two files *are* your address; `contract-id.txt` is a convenience copy derived from them, worth committing so a mistake is visible in review.
 - CI should enforce byte-equality on the committed **WASM**, which is the check that actually catches an unintended re-key. Recomputing the ID from the committed WASM + parameters is a valid second check.
 - A second developer can redo a publish from a clean checkout and reach the same ID, provided they use the committed WASM and parameters rather than rebuilding the contract.
+- A pinned-vector test that passes in a tree with a cached `target/` is weaker evidence than it looks, since the cache can supply the bytes the test expects. Run it from a fresh build (see "Byte-reproducibility").
 - `rust-toolchain.toml` must be committed and mirrored in any CI workflow that rebuilds the contract. Rustc is not the only cause of a mismatch, though; see "Byte-reproducibility" before concluding it is the compiler.
 
 ## Byte-reproducibility: the lockfile is necessary but NOT sufficient
@@ -118,10 +119,10 @@ A contract's key is `BLAKE3(BLAKE3(wasm) || params)`, so a rebuild that changes 
 
 - **`wasm-opt` / binaryen version.** If your build runs `wasm-opt` (directly or via `dx`), its version changes the output. Pin it (or build in a pinned container).
 - **The UI toolchain (`dx`) version.** For a UI compiled to WASM, the Dioxus CLI version affects the bytes just like rustc does. Pin it.
-- **`cargo fmt`.** Panic locations embed `file:line`, so reformatting a contract crate moves the panic metadata and therefore the WASM bytes and the contract address, with no semantic change and nothing in the diff that looks like a re-key. This re-keyed the contracts of the freenet-bitcoin bridge and the successor came up with zero claims. Either treat a contract crate's formatting as frozen between deliberate re-keys, or run `cargo fmt` and re-key on purpose, registering the outgoing hash first.
-- **Absolute build-path embedding, and remapping your own source path is not enough.** Release binaries embed panic locations as `file:line`, and for dependencies cargo passes **absolute** paths, so the registry root lands in the bytes. Measured in a real contract: `/home/ian/.cargo/registry/.../blake3-1.8.7/` and thirteen other crate roots, 21 occurrences in one WASM. Because the address is `BLAKE3(BLAKE3(wasm) ‖ params)`, **every contract that project had built was bound to the machine that built it**: a GitHub runner and the dev box produced different contracts from one commit, so nobody could reproduce what was deployed. A developer who remaps only the repo root will still ship a machine-specific contract and see nothing wrong.
+- **`cargo fmt`.** Panic locations embed `file:line`, so reformatting a contract crate moves the panic metadata and therefore the WASM bytes and the contract address, with no semantic change and nothing in the diff that looks like a re-key. Either treat a contract crate's formatting as frozen between deliberate re-keys, or run `cargo fmt` and re-key on purpose, registering the outgoing hash first.
+- **Absolute build-path embedding, and remapping your own source path is not enough.** Release binaries embed panic locations as `file:line`, and for dependencies cargo passes **absolute** paths, so the registry root lands in the bytes. A dependency's source path inside the cargo registry, such as `<cargo home>/registry/src/.../blake3-<version>/`, appears in the bytes. Because the address is `BLAKE3(BLAKE3(wasm) ‖ params)`, **a contract built this way is bound to the machine that built it**: a CI runner and a dev box produce different contracts from one commit, so nobody can reproduce what was deployed. A developer who remaps only the repo root will still ship a machine-specific contract and see nothing wrong.
 
-  Remap all three varying roots (`CARGO_HOME`, `RUSTUP_HOME`, and the repo) or build in a pinned container. **`--remap-path-prefix` is the option that works.** Cargo's `trim-paths = "all"` profile setting is still unstable on stable Cargo (checked on 1.98.1: "the package requires the Cargo feature called `trim-paths`, but that feature is not stabilized"), and there is no `-Ctrim-paths` codegen flag, so check stabilization again before reaching for it. The working example is `freenet-bitcoin/scripts/build-contracts.sh`:
+  Remap all three varying roots (`CARGO_HOME`, `RUSTUP_HOME`, and the repo) or build in a pinned container. **`--remap-path-prefix` is the option that works.** Cargo's `trim-paths = "all"` profile setting is still unstable on stable Cargo, and there is no `-Ctrim-paths` codegen flag, so check stabilization again before reaching for it. The working example is `freenet-bitcoin/scripts/build-contracts.sh`:
 
   ```bash
   CARGO_DIR="${CARGO_HOME:-$HOME/.cargo}"
@@ -241,8 +242,7 @@ Put every crate in an app on one stdlib line. A WASM cannot link two stdlibs
 | 0.7.x and older | 0.8.x |
 
 A new app starts on the newest of both; check crates.io. On a live app a stdlib bump is
-a re-key, so follow `upgrade-and-migration.md`. River is on stdlib 0.8.5 with
-`freenet-migrate` 0.7, which is the path for an app not yet ready to re-key.
+a re-key, so follow `upgrade-and-migration.md`. River is on stdlib 0.8.5, which is the path for an app not yet ready to re-key.
 
 Below stdlib 0.11.0 a delegate crate exposes `DelegateCtx` write and subscribe methods
 no node implements: calling one compiles, publishes, and fails at module instantiation.
@@ -252,7 +252,7 @@ Manifest lifecycle events need 0.12.0 and `wakeups` need 0.12.1.
 there is no `delegate` feature. The UI adds `net`, which pulls in `WebApi`. The
 `#[contract]` and `#[delegate]` macros gate their WASM exports on a feature of your own
 crate, `freenet-main-contract` or `freenet-main-delegate`. Declare it and enable it by
-default: a plain `cargo build` without it succeeds and the WASM exports nothing, and
+default: a plain `cargo build` without it succeeds and the WASM exports none of the contract functions (three runtime symbols remain), and
 `fdev build` passes the feature, which cargo refuses if the crate does not declare it.
 
 ```toml
@@ -294,7 +294,7 @@ on a 0.x version pins the minor, so an older range never reaches the 0.4.0 behav
 
 `--code` and `--parameters` go before the `contract`/`delegate` subcommand; contract flags such as `--state` and `--webapp-archive` go after it.
 
-To get a contract key without publishing, use `fdev get-contract-id --code ... --parameters ...`; `fdev inspect <packaged file> key` prints `code key: <key>` for empty parameters. Derive a delegate's key and `code_hash` offline from the built WASM (a delegate key is `BLAKE3(code_hash || parameters)`, the same rule as a contract key) rather than scraping `fdev publish` output; see freenet/raven's `Makefile.toml` (`build-identity-delegate`).
+To get a contract key without publishing, use `fdev get-contract-id --code ... --parameters ...`; `fdev inspect <packaged file> key` prints `code key: <key>` for empty parameters. Derive a delegate's key and `code_hash` offline from the built WASM (a delegate key is `BLAKE3(code_hash || parameters)`, the same rule as a contract key) rather than scraping `fdev publish` output; see freenet/raven's `Makefile.toml` (`build-identity`).
 
 ## Contract WASM optimization
 

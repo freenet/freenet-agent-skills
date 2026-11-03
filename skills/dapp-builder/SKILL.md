@@ -28,7 +28,7 @@ An app has three kinds of component, and most real apps have several contracts a
 A key is `BLAKE3(BLAKE3(wasm) ‖ params)`. Any WASM change, including a dependency or compiler
 bump, moves the key. Most of the rules below follow from that.
 
-"Native app" means desktop: Freenet has no supported full node on mobile. Do not generate a
+Freenet has no supported full node on mobile, so "native app" means desktop. Do not generate a
 production mobile wrapper without warning about bandwidth, battery, thermal, CPU and
 background-execution problems. Treat it as experimental, require resource measurements, and do
 not present it as an official Freenet client without the Freenet Project's approval.
@@ -59,8 +59,8 @@ not present it as an official Freenet client without the Freenet Project's appro
 7. `validate_state` must reach the same verdict on the same bytes forever. Reading another
    contract is safe only for immutable or once-true-always-true facts; gating validity on
    mutable state makes peers disagree permanently.
-8. Keep each instance well under 4 MB (the hard cap is 50 MiB): a GET transfers all of it before
-   the UI can render. Shard unbounded data by the unit of write concurrency.
+8. Keep each data contract instance well under 4 MB (the hard cap is 50 MiB): a GET transfers all
+   of it before the UI can render. Shard unbounded data by the unit of write concurrency.
 
 **Keys and upgrades**
 
@@ -74,17 +74,19 @@ not present it as an official Freenet client without the Freenet Project's appro
     changing how a record's id is derived is a breaking change to their data.
 11. A delegate migration is forward-only. There is no node-level mechanism today. Do not wait
     for one: migrate at the app level. Status is tracked in freenet-core#2776. A predecessor's
-    secrets are recoverable only if its deployed WASM answers an export request
-    (`freenet_migrate::handle_export_request`). Every release shipped without that answer is a
-    permanently unrecoverable generation. Ship it from v1.
+    secrets are recoverable only if its deployed WASM answers an export request, in practice
+    `freenet_migrate::handle_export_request`, or a protocol general enough to enumerate its
+    secrets. Every release shipped without that answer is a permanently unrecoverable
+    generation. Ship it from v1.
 12. Build WASM through one canonical script that remaps `CARGO_HOME`, `RUSTUP_HOME` and the repo
     root and refuses a build that leaks a machine path, and isolate contract lockfiles so
     `cargo update` cannot re-key anything. The WASM bytes are the address.
 13. Never hardcode the key of a contract or delegate you do not own, including one from a crate
     you pinned. It moves on every re-key of theirs. A stale delegate key returns a typed
     missing-delegate error, or reads as empty if the old delegate is still registered, and
-    either is easy to misread as "this user has nothing stored". Fetch the key at runtime. On an
-    existing app, grep for such constants first.
+    either is easy to misread as "this user has nothing stored". Fetch the key at runtime. The
+    one exception is a pointer that resolves to `NeverPublished`, which permits a baked-in key
+    (`building-on-other-apps.md`). On an existing app, grep for such constants first.
 
 **Publishing and the UI**
 
@@ -107,9 +109,9 @@ not present it as an official Freenet client without the Freenet Project's appro
     `state-authorization-patterns.md` → "Removing Illegal Material".
 19. Anti-flood: if strangers can write, gate a service that spends resources per request on
     ghost keys. An action that must stay free, such as reporting, offers a slow proof-of-work as
-    the fallback, shown after the ghost-key option. Tell the developer before wiring this in:
-    ghost keys cost users money, that money goes to Freenet, and the mint is centralized. See
-    `sybil-resistance.md` → "Cryptographic CAPTCHA".
+    the fallback, shown after the ghost-key option. Tell the developer that ghost keys cost users
+    money, that money goes to Freenet, and that the mint is centralized, then ask and wait for the
+    developer's decision before wiring it in. See `sybil-resistance.md` → "Cryptographic CAPTCHA".
 
 ## Where to read
 
@@ -118,8 +120,8 @@ All paths are under `references/`.
 | Task | Read |
 |---|---|
 | Design contract state; `ContractInterface`, composable state, summaries, deltas, record identity | `contract-patterns.md` |
-| Make a merge lawful by construction; caps, removals, work bounds | `merge-law-compliance.md` |
-| Signatures, replay protection, time, related contracts, tombstones, removal, state size, wire-format stability | `state-authorization-patterns.md` |
+| Make a merge lawful by construction; caps, removals, work bounds, summary distinctness | `merge-law-compliance.md` |
+| Signatures, replay protection, time, related contracts, tombstones, removal, caps, state size, wire-format stability | `state-authorization-patterns.md` |
 | User-facing identifiers | `identity-and-addressing.md` |
 | Stopping floods of keys: ghost keys and proof-of-work | `sybil-resistance.md` |
 | Write a delegate: messages, secrets, permissions, background runs | `delegate-patterns.md` |

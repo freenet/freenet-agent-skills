@@ -68,7 +68,7 @@ A gateway needs both `--public-network-address` and `--public-network-port`; wit
 
 Give every test node its own `--config-dir` and `--data-dir`. `fdev` defaults to port 7509 and will silently target whichever node owns that port, often your system service, so pass `fdev --port 7510 ...` for a test node. Details, a gateway plus peer on one host, and phone testing: `references/node-isolation-and-debugging.md`.
 
-**WARNING:** Do NOT use `--id` for local dev. It creates ephemeral temp directories that get wiped on restart, destroying delegate secrets (signing keys, app data). Use `--data-dir` for persistent isolation instead.
+**WARNING:** Do NOT use `--id` for local dev. It creates ephemeral temp directories that get wiped on restart, destroying delegate secrets (signing keys, app data). A debug build does the same without `--id` when you pass no config or data dir: it uses and wipes a temp dir. Use `--data-dir` for persistent isolation instead.
 
 ### Delegates need network mode
 
@@ -112,7 +112,7 @@ ws://127.0.0.1:7509/v1/contract/command?encodingProtocol=native
 ```
 
 - **Encoding:** `native` (bincode) or `flatbuffers` (the default when the parameter is omitted).
-- **Auth:** the node issues a token when it serves a contract's shell page, in memory, so it is invalid after a node restart (`AUTH_TOKEN_INVALID`). A webapp inside that page gets it from the shell. A standalone client may connect with no token, as `fdev` does.
+- **Auth:** the node issues a token when it serves a contract's shell page, in memory, so it is invalid after a node restart (the node closes the WebSocket with code 4401). A webapp inside that page gets it from the shell. A standalone client may connect with no token, as `fdev` does.
 
 Request and response types are in `freenet_stdlib::client_api` (`ClientRequest`, `NodeQuery`, `NodeDiagnosticsConfig`).
 

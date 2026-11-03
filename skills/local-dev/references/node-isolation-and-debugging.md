@@ -46,7 +46,7 @@ anywhere; derive it from `<gateway data dir>/secrets/transport_keypair` (the pri
 ```bash
 priv=$(cat ~/freenet-test-node/data/secrets/transport_keypair)
 { printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x6e\x04\x22\x04\x20'; echo -n "$priv" | xxd -r -p; } \
-  | openssl pkey -inform DER -pubout -outform DER 2>/dev/null | xxd -p -c 64 | tail -1 | sed 's/^.*032100//'
+  | openssl pkey -inform DER -pubout -outform DER 2>/dev/null | xxd -p -c 64 | tr -d '\n' | tail -c 64; echo
 ```
 
 ```bash
@@ -109,6 +109,6 @@ A flow that works there but not on a phone usually points at WebSocket suspensio
 | "Connection reset by peer" | Browser killed the WebSocket | Check for a background tab |
 | Contract not found | Not published to this node | Publish with `fdev --port {PORT}` |
 | "Signature verification failed" on a fresh publish | `fdev` hit the system node on 7509 | Pass `fdev --port {TEST_PORT}` |
-| Test node joins the public network | Peer has no `--gateway` and reads the on-disk `gateways.toml` | See "Isolation rules" |
+| Test node joins the public network | Peer lacks `--skip-load-from-network`, or has it with no `--gateway` and reads the on-disk `gateways.toml` | See "Isolation rules" |
 | Blank page after republish | Browser cached old WASM | Clear cache or force-close the browser |
 | A delegate's contract GET/PUT/UPDATE/SUBSCRIBE does nothing, lifecycle events or wake-ups never arrive | Node started with `freenet local` | Use `freenet network` (see `SKILL.md`) |

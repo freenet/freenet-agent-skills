@@ -10,7 +10,7 @@ ghost keys.
 ### Proof-of-work
 
 The client grinds a hash to a difficulty target bound to the new identity, and the
-contract checks it in `update_state`. No server, money or account, and no issuer or
+contract checks it in `validate_state`. No server, money or account, and no issuer or
 trust root. Its limits:
 
 1. **The asymmetry runs backwards.** A rented GPU outruns a phone browser by orders
@@ -32,8 +32,8 @@ A [ghost key](https://freenet.org/ghostkey/) is an Ed25519 keypair blind-signed
 donation. The certificate proves a donation of $X on date Y and cannot be linked to
 the payment or the payer.
 
-- **Monetary cost cannot be beaten with hardware.** Tiers are $1 / $5 / $20 / $50 /
-  $100, so ten thousand identities cost at least ten thousand dollars.
+- **Monetary cost cannot be beaten with hardware.** Keys cost from $1 (see
+  freenet.org), so ten thousand identities cost at least ten thousand dollars.
 - **The cost is transferred, not burned.**
 - **It is graduated.** The certificate carries amount and date, so you can accept
   any key for posting and require a $20 or six-month-old key for moderation.
@@ -62,13 +62,17 @@ rules that matter:
   tab, so a cached "no key" answer goes stale while the user buys one.
 - `GetDefaultKey` returning `None` means you hold no `Sign` grant, not that the user
   has no key.
-- Bind the challenge to your contract instance, as described under cross-context
-  binding in `state-authorization-patterns.md`.
+- Bind the challenge to a stable anchor of your contract, never a
+  `ContractInstanceId`, as described under cross-context binding in
+  `state-authorization-patterns.md`.
 - Send a buyer to `freenet.org/ghostkey/create/?return_to=<contract instance id>` so
   the vault can offer a way back.
-- Verify once at admission in `update_state`, then record a signed membership entry.
-  `validate_state` runs far more often, so one certificate check per member there
-  scales badly.
+- Keep the proof with the record and verify it in `validate_state`. A PUT runs
+  validation only, so a proof checked only in `update_state` is skipped. Filter in
+  `update_state` as well, so a bad record is skipped rather than refusing the update.
+  If certificate cost matters, cap the record count. A cheap one-signature entry is
+  allowed only when an authority key in the parameters signs it, as River's inviter
+  chain does.
 
 ### Which to use
 
@@ -93,6 +97,9 @@ What the fallback buys:
 - **Nobody is priced out.** The free path always completes, so payment and the
   centralized mint cannot exclude a user from that action.
 
+**Where strangers write to a contract and neither case applies, default to
+proof-of-work alone.** Offer a ghost key as the way to skip the wait.
+
 Contract side, accept either proof against the same challenge:
 
 ```rust
@@ -109,7 +116,7 @@ enum AdmissionProof {
 ```
 
 Both bind to the same challenge, so the new identity is committed either way and
-`update_state` verifies whichever turned up.
+`validate_state` verifies whichever turned up.
 
 Three things to get right:
 

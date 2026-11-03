@@ -5,6 +5,15 @@
 This happened to Delta in April 2026 and to River several times. Design the
 registry and the successor-side probe in from v1.
 
+## Preconditions
+
+Carrying secrets forward only works if:
+- **Identity is key-derived, never a delegate or contract key.** The user-facing
+  handle (a room's owner key, an address) must survive the key rotation. See
+  `identity-and-addressing.md`.
+- **You keep an authoritative, append-only registry** of past delegate keys
+  (below), and the old WASM is still registered on the node.
+
 ## How migration works: re-run the old delegate
 
 There is no `ExportSecrets` request in the wire protocol and no node-level
@@ -23,9 +32,7 @@ with answers. Your UI owns both ends of the round trip and presents the
 An old delegate can answer only what it already handled. River needs no special
 handler because its delegate already served general `GetRequest` and `ListRequest`.
 A typed protocol is enough if it exposes every key and the key set is fixed. A
-dynamic, unguessable key family needs an enumeration or export handler, which you
-cannot add retroactively. Read "A delegate migration is forward-only" before you
-plan a migration.
+dynamic, unguessable key family needs an enumeration or export handler (see below).
 
 **The re-run depends on the old WASM still running.** After a stdlib or ABI bump a
 frozen delegate can fail to deserialize what the runtime sends, and data under that
@@ -98,17 +105,9 @@ pure function so each arm can be mutated red in a test.
 
 A definitive answer is necessary to seal, not sufficient. If anything can still write
 to a predecessor, a durable marker strands what arrives later. River seals because
-its legacy delegates are frozen; ghostkeys keeps markers in page memory because
-sealing can strand late data. Work out which case is yours.
-
-## Preconditions
-
-The carry-forward above only works if:
-- **Identity is key-derived, never a delegate or contract key.** The user-facing
-  handle (a room's owner key, an address) must survive the key rotation. See
-  `identity-and-addressing.md`.
-- **You keep an authoritative, append-only registry** of past delegate keys
-  (below), and the old WASM is still registered on the node.
+its legacy delegates are frozen, apart from an old tab writing to the newest one
+during a rollout, which a top-up after the walk covers. ghostkeys keeps markers in
+page memory because sealing can strand late data. Work out which case is yours.
 
 ## Pre-Publish Safety Check
 
@@ -124,7 +123,7 @@ version = "V1"
 description = "Initial release"
 date = "2026-03-28"
 code_hash = "abc123..."    # BLAKE3 of old WASM bytes
-delegate_key = "def456..."  # BLAKE3 of code_hash bytes
+delegate_key = "def456..."  # BLAKE3(code_hash || params)
 ```
 
 The UI's `build.rs` generates a Rust constant array from this file, which the
@@ -135,57 +134,51 @@ migration code probes at startup. This is River's exact pattern:
 ## Reusable tooling: `freenet-migrate`
 
 Rather than hand-roll the registry, the `build.rs` codegen and the backward
-probe, use `freenet/freenet-migrate`, which packages all of it: the legacy-key
-registry, build-time codegen, the backward probe, the delegate carry-forward, and
-the preconditions as enforced types.
+probe, use `freenet/freenet-migrate`. Its API is in the README.
 
 Take the `freenet-migrate` release matching your stdlib (table in
 `build-system.md`). Moving between stdlib lines re-keys every contract and delegate
-you build, so treat it as a migration.
-
-Adopting the build codegen is not a rewrite: `freenet-migrate-build` reads the
-River-style `[[entry]]` registry above (`entry_registry`) and emits byte-array
-*view* consts matching your hand-rolled `LEGACY_DELEGATES` shape
-(`delegate_pair_view` gives `&[([u8; 32], [u8; 32])]` in `(delegate_key, code_hash)`
-order), with no runtime dependency in views-only mode. Every build re-derives
-`delegate_key == blake3(code_hash || params)` and flags a row that predates that
-derivation with `irregular_key = true` (River adopted the build codegen this way in
-freenet/river#434).
-
-The delegate half has adopters. `migrate_delegate_secrets` and
-`register_delegate_with_migration` (the `delegate_migrate` module) are the
-app-facing entry points.
+you build, so treat it as a migration. Adopting the build codegen is not a rewrite:
+`freenet-migrate-build` reads the River-style `[[entry]]` registry above.
 
 An opt-in **completeness journal** tells the app on every load whether every
 predecessor was dealt with. Call `begin_migration_journal` on every load (an `Err`
 means write nothing migrated this load) and `migrate_delegate_secrets_journaled` for
 the walk. If the app writes migrated data itself, `note_app_import_started` returns
-an `AppImport`: `Flagged` means write; `AlreadyImported` means write again only if
-your merge cannot resurrect a deleted key; any other variant means do not write;
+an `AppImport`: `Flagged` means write; `AlreadyImported` means write again if your
+merge cannot resurrect a deleted key or the app tolerates a resurrected one; any
+other variant means do not write;
 **any `Err`: skip, retry on a later load**. While `interrupted_import()` is true the
 successor may not hold everything the user had. Adopt it only if `fetch_secrets`
 fails loudly and your predecessors are frozen (README "Knowing when the migration is
 done").
 
-**Adopting them is not retroactive.** See "A delegate migration is forward-only".
-
-For the call-site swap in an app that already hand-rolls a sweep, see the
-`freenet-migrate` README.
+For an app that already hand-rolls a sweep, see "Delegate secret migration is
+app-level" below.
 
 ## Delegate secret migration is app-level
 
 There is no node-level mechanism today. Do not wait for one: migrate at the app
-level. Status is tracked in freenet-core#2776.
+level. Status is tracked in freenet-core#2776. Copy-forward from a claimed predecessor
+is closed pending a user-entitlement design: #5199 disabled it because a delegate key
+carries no author identity, so do not propose it again.
 
 App-level does not mean bespoke: use `freenet-migrate` rather than hand-rolling
 another copy of the same sweep.
 
 - **`freenet-migrate` packages the probe.** `migrate_delegate_secrets` and
-  `register_delegate_with_migration` run over two adapters you implement:
-  `PredecessorSecretsIo` reads predecessors and `SuccessorSecretsIo` writes the
-  successor. An app with a hand-rolled sweep should run the crate's walk alongside
+  `register_delegate_with_migration` are the entry points. They run over two
+  adapters you implement: `PredecessorSecretsIo` reads predecessors and
+  `SuccessorSecretsIo` writes the successor. An app with a hand-rolled sweep should run the crate's walk alongside
   it until the walk field-validates. ghostkeys is the shape to copy: the crate owns
-  the walk, and the adapter owns every app-specific judgement.
+  the walk, and the adapter owns every app-specific judgement. Three rules for that
+  period:
+  - The parity oracle must be a transcription of the old code, never a call into
+    the new code, which would only prove the new code agrees with itself.
+  - Prove the harness is armed before trusting it: patch a `panic!` into the
+    crate's entry point and confirm the scenario tests go red.
+  - A durable "done" marker is the one adoption step that cannot be reverted, so
+    write it last.
 - **Route the successor write through your app's own import handler.** Copying raw
   `(key, value)` pairs is wrong for any app whose items have cross-entry invariants,
   and it fails silently: a recovered credential lands in the store while the index

@@ -8,9 +8,9 @@ catches what the others catch.
 | Tier | What it runs | What it catches | What it misses |
 |---|---|---|---|
 | **rust** | `cargo test --workspace` (incl. `cargo test -p <contract> --features contract` for host-side contract tests) | State logic, commutative-monoid invariants, serialization round-trips, signature verification, validation rules. | Anything involving a live node or the gateway. |
-| **offline** | UI build with `--features example-data,no-sync --no-default-features`, served via `dx serve`, driven by Playwright. | UI flows that don't depend on a node: identity creation against mock data, render correctness, navigation, form validation. | Real WebSocket bridge, real contract PUT/GET/UPDATE, real delegate calls, real AFT, gateway behavior. |
-| **iso** (isolated multi-node E2E) | Spin up a 2-node Freenet network on `127.0.0.1` (see the `local-dev` skill, isolated test node), publish the webapp, drive the UI via Playwright. | Real round-trip behavior: identity creation persisted to the delegate, contract PUTs landing, AFT burns, cross-node propagation, decrypt-on-receive. Catches the bugs that only appear with a real node. | Production gateway specifics (production has different deployments, NAT, real peer counts). Cost: 5–10 min per run; gate to tags / nightly. |
-| **liveness** | `production-liveness.spec.ts` against the **deployed gateway URL** post-release. | Publish-pipeline bugs: corrupted tar.xz, wrong signature, stale `contract-id.txt`, routing misconfig, gateway CSP regression, iframe-shell regression, vendored asset 404s. **Intentionally minimal** — gateway serves webapp, WASM loads, Dioxus mounts, "create new identity" link renders. | Real round-trip. The deployed gateway has no test fixtures and the test runs as a real user with no identity — it can't verify message delivery, AFT, contract migration, or anything past first render. |
+| **offline** | UI build with its mock-data and no-network features enabled (River uses `--features example-data,no-sync --no-default-features`), served from the dev server and driven by Playwright. | UI flows that don't depend on a node: mock-data flows, render correctness, navigation, form validation. | Real WebSocket bridge, real contract PUT/GET/UPDATE, real delegate calls, any real token or payment flow, gateway behavior. |
+| **iso** (isolated multi-node E2E) | Spin up a 2-node Freenet network on `127.0.0.1` (see the `local-dev` skill, isolated test node), publish the webapp, drive the UI via Playwright. | Real round-trip behavior: state persisted to the delegate, contract PUTs landing, flows that spend or verify a token, cross-node propagation, decrypt-on-receive. Catches the bugs that only appear with a real node. | Production gateway specifics (production has different deployments, NAT, real peer counts). Cost: 5–10 min per run; gate to tags / nightly. |
+| **liveness** | `production-liveness.spec.ts` against the **deployed gateway URL** post-release. | Publish-pipeline bugs: corrupted tar.xz, wrong signature, stale `contract-id.txt`, routing misconfig, gateway CSP regression, iframe-shell regression, vendored asset 404s. **Intentionally minimal** — gateway serves webapp, WASM loads, the UI mounts, a first-screen element renders. | Real round-trip. The deployed gateway has no test fixtures and the test runs as a real user with no identity — it can't verify message delivery, token flows, contract migration, or anything past first render. |
 
 **The shape of a healthy release:**
 
@@ -65,9 +65,9 @@ every webapp in an iframe shell**, so standard `page.locator(...)` and
 
 `GET /v1/contract/web/<id>/` returns a small shell page, not your webapp. Its
 inline bridge script assigns `<iframe id="app">`'s `src` from `data-src`
-(`.../?__sandbox=1`), and your webapp runs inside that sandboxed frame. The shell
-holds the real WebSocket and the auth token and proxies `postMessage`
-(`ui-patterns.md` "Two Connection Models").
+(`.../?__sandbox=1`), and your webapp runs inside that sandboxed frame. What the
+shell does for the socket and the CSP it applies are described once, in
+`ui-patterns.md` ("Two Connection Models", "Gateway CSP").
 
 ### Practical Consequences for E2E Tests
 

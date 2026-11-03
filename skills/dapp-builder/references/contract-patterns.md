@@ -20,10 +20,8 @@ impl ContractInterface for MyContract {
         related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError>;
 
-    /// Update state with new data.
-    /// MUST be associative, commutative and idempotent — see "Merge Law
-    /// Requirements" below. Merging IS this function: core applies an incoming
-    /// full state as `update_state(current, [UpdateData::State(incoming)])`.
+    /// Update state with new data. This is the merge: see "Merge Law
+    /// Requirements" below.
     fn update_state(
         parameters: Parameters<'static>,
         state: State<'static>,
@@ -31,15 +29,13 @@ impl ContractInterface for MyContract {
     ) -> Result<UpdateModification<'static>, ContractError>;
 
     /// Generate concise state summary for delta computation
-    /// (MUST be much smaller than the state)
     fn summarize_state(
         parameters: Parameters<'static>,
         state: State<'static>,
     ) -> Result<StateSummary<'static>, ContractError>;
 
     /// Generate state delta from summary (what the requester is missing).
-    /// MUST NOT return the state, or anything near its size, when the summary
-    /// already matches this state; SHOULD return zero bytes.
+    /// See "The Delta to an Up-to-Date Peer" below.
     fn get_state_delta(
         parameters: Parameters<'static>,
         state: State<'static>,
@@ -134,43 +130,46 @@ arrive in. An empty state `I` with `merge(A, I) == A` is a design convenience th
 network does not check, and it does not imply idempotence: a merge that appends
 rather than unions passes it and fails `merge(A, A) == A`.
 
-Delivery is at-least-once, so re-delivery is the case you cannot avoid: a merge that
-changes the state on re-application produces an endless stream of "new" states to
-gossip.
-
 `merge-law-compliance.md` states the laws as the network checks them, including what
 a cap or eviction may do, and the tests to write. Every contract should have them.
 Common causes of a commutativity failure: random or clock-read tie-breakers, `Vec`
 where order matters, and keeping only "newer" items without a conflict rule.
 
 **Canonical encoding is a requirement.** Peers decide they have converged by
-comparing bytes, and the laws are checked on exact bytes, so two peers holding the
-same logical state in a different byte order heal forever. A `HashMap` or `HashSet`
-serializes in iteration order, which differs across peers. Use `BTreeMap`/`BTreeSet`,
-or sort before serializing, in state and in summaries. A contract that merges
-correctly but encodes non-canonically is reported under commutativity, and the
-finding says so when both results hold the same bytes in a different order. To
-check, see `merge-law-compliance.md` → "Testing".
+comparing bytes, so two peers holding the same logical state in a different byte
+order heal forever. A `HashMap` or `HashSet` serializes in iteration order, which
+differs across peers. Use `BTreeMap`/`BTreeSet`, or sort before serializing, in state
+and in summaries. A contract that merges correctly but encodes non-canonically is
+reported under commutativity, and the finding says so when both results hold the
+same bytes in a different order.
 
 ## Commutativity Strategies
 
 ### 1. Set-Based Operations
 
 ```rust
-// Members stored as a set: adding is commutative. BTreeMap, not HashMap, so the
-// encoding does not depend on iteration order.
+// Members stored as a set: adding is commutative.
 pub struct MembersV1 {
     members: BTreeMap<VerifyingKey, SignedMember>,
 }
 
 impl MembersV1 {
-    fn merge(&mut self, other: &MembersV1) {
-        // Union of members, keep if valid signature
+    fn merge(&mut self, other: &MembersV1, params: &RoomParameters) {
         for (key, member) in &other.members {
-            if self.verify_member(member).is_ok() {
-                self.members.insert(*key, member.clone());
+            // Verify from the record and parameters, never from held state:
+            // what is held depends on what arrived first.
+            if member.verify(params).is_err() {
+                continue;
+            }
+            // Two records under one key: a rule over their own bytes picks the
+            // same one on every peer. A bare `insert` lets arrival order pick.
+            match self.members.get(key) {
+                Some(held) if held.signature.to_bytes() >= member.signature.to_bytes() => {}
+                _ => { self.members.insert(*key, member.clone()); }
             }
         }
+        // Caps and any other removal run here, after the union.
+        self.cleanup(params);
     }
 }
 ```
@@ -265,9 +264,12 @@ fn signing_bytes_v1(id: u64, title: &str, content: &str) -> Vec<u8> {
     buf
 }
 
-// V2 signing bytes: a different prefix, so a v1 signature can never verify as v2.
-fn signing_bytes_v2(id: u64, title: &str, content: &str, order: u32) -> Vec<u8> {
-    let mut buf = b"myapp:item:v2:".to_vec();
+// V2 signing bytes. The tags must be prefix-free: `myapp:item:` is a prefix of
+// `myapp:item:v2:`, so a crafted v1 could equal a v2. V2 also binds a stable
+// anchor, here the owner key, which a re-key does not move.
+fn signing_bytes_v2(owner: &VerifyingKey, id: u64, title: &str, content: &str, order: u32) -> Vec<u8> {
+    let mut buf = b"myapp:item2:".to_vec();
+    buf.extend_from_slice(owner.as_bytes());
     buf.extend_from_slice(&id.to_le_bytes());
     push_field(&mut buf, title.as_bytes());
     push_field(&mut buf, content.as_bytes());
@@ -276,7 +278,7 @@ fn signing_bytes_v2(id: u64, title: &str, content: &str, order: u32) -> Vec<u8> 
 }
 
 fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
-    let v2 = signing_bytes_v2(id, &self.title, &self.content, self.order);
+    let v2 = signing_bytes_v2(owner, id, &self.title, &self.content, self.order);
     if owner.verify(&v2, &self.signature).is_ok() {
         return Ok(());
     }
@@ -289,6 +291,8 @@ fn verify(&self, id: u64, owner: &VerifyingKey) -> Result<(), String> {
         .map_err(|e| format!("invalid signature: {e}"))
 }
 ```
+
+Both forms stay valid, so the merge ranks v2 above v1 for one id, whichever arrives first.
 
 **Write a test for every signed field** that verifies tampering with it causes verification to fail.
 

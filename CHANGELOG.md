@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.40.0 (2026-11-03)
+## 1.40.0 (2026-11-02)
 
 **Audit of the whole plugin: remove redundancy, drop what an agent can infer,
 correct advice that no longer matches the code.**
@@ -52,8 +52,17 @@ mechanism.
   `systematic-debugging`: simulation commands name a real test target and enable
   the required features. `module-debugging.md` no longer describes the retired
   operations mediator.
-- Resource-spending services lead with ghost keys, and a slow proof-of-work is
-  the fallback for actions that must stay free.
+- The tombstone, sybil-proof and signing guidance is tightened after review:
+  removal tombstones are never evicted, a proof that only `update_state` checks
+  is skipped by a PUT, and signatures bind a stable anchor rather than a contract
+  instance id, which moves on every re-key.
+
+**Policy change, not a correction:** the anti-flood recommendation changes. It
+was proof-of-work by default with a ghost key to skip the wait. A service that
+spends resources per request now leads with ghost keys, and a slow proof-of-work
+is the fallback for actions that must stay free. Other open write paths keep
+proof-of-work with a ghost key as the way to skip it. Ghost keys fund Freenet, so
+agents must ask the developer and wait for the decision before wiring one in.
 
 **Structure:**
 

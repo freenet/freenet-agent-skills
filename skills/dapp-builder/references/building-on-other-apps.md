@@ -274,9 +274,7 @@ user has no data".
 **It solves addressing only.** It says where the artifact is now, and nothing about
 whether state or secrets under the previous key survived. Delegate secrets move only
 when the app's own UI has run on that user's node, so you can resolve perfectly,
-derive the right key and still find an empty namespace. Host-side secret enumeration
-is also best-effort (`delegate-migration.md`, "A delegate migration is forward-only"),
-so a handover can report success and deliver a subset.
+derive the right key and still find an empty namespace. See `delegate-migration.md`.
 
 **Treat "the data arrived" as a separate claim needing its own evidence.** Never
 infer it from a successful resolve or from the mover reporting success. Say "could

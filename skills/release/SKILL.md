@@ -13,7 +13,7 @@ This is the **single entry point** for cutting a freenet-core release. The order
 2. Steps 1-5: version, trigger, watch (including the ship-vs-soak check **before** the tag is pushed), verify artifacts, River smoke test.
 3. **Step 6: post-cut telemetry monitoring** through the 0-4h auto-update stagger.
 
-**Do not dispatch a live `release.yml` run or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only things you may run beforehand are `scripts/release.sh --dry-run` and `gh workflow run release.yml --field dry_run=true` from a ref that contains the #5936 guard (current `main`). A dry run pushes no branch, opens no PR and tags nothing, so `main` does not move. It exercises only the bump and the packaging check, not the token check, the merge queue, the tag, Gate A or the publish, so a green dry run is not a gate. Dispatched from an older ref, `dry_run` still pushes and auto-merges the bump PR.
+**Do not dispatch a live `release.yml` run or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only things you may run beforehand are `scripts/release.sh --dry-run` and `gh workflow run release.yml --field dry_run=true` from a ref that contains the guard from #5939 (current `main`; the bug it fixes is #5936). A dry run pushes no branch, opens no PR and tags nothing, so `main` does not move. It exercises only the bump and the packaging check, not the token check, the merge queue, the tag, Gate A or the publish, so a green dry run is not a gate. Dispatched from an older ref, `dry_run` still pushes and auto-merges the bump PR.
 
 The release pipeline runs entirely in GitHub Actions: version-bump PR, merge-queue CI gate, `cargo publish --dry-run`, tag and draft GitHub release, cross-compiled binaries, Gate A, crates.io publish, then un-draft. The `release.published` event then auto-triggers `gateway-update.yml` (which HMAC-POSTs each gateway's release-agent) and `release-announce.yml` (Matrix and River posts). CI does **not** exercise a real NATed peer, and it does not exercise the shipping binary's own updater. That is why the preconditions exist.
 
@@ -179,7 +179,7 @@ gh workflow run release.yml --repo freenet/freenet-core --field version="$VER"
 Inputs (see `gh workflow view release.yml --yaml`):
 
 - `version`: **always set it explicitly** to the version confirmed in Step 1. Never leave it blank: blank auto-bumps from the latest crates.io release, not from `Cargo.toml` (see Arguments).
-- `dry_run`: rehearses the cut and mutates nothing when run from a ref with the #5936 guard. Never use it from an older ref.
+- `dry_run`: rehearses the cut and mutates nothing when run from a ref with the #5939 guard. Never use it from an older ref.
 
 Get the id of the run you just started. `gh run list --limit 1` right after the trigger often still returns the previous run, so filter by `T0`:
 

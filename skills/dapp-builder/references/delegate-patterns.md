@@ -330,12 +330,33 @@ fn process(
     origin: Option<MessageOrigin>,
     message: InboundDelegateMsg,
 ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
+    // The node delivers these itself, with no origin. Name them here, because
+    // the gate below refuses `None`.
+    if matches!(
+        message,
+        InboundDelegateMsg::Lifecycle(_)
+            | InboundDelegateMsg::WakeupFired { .. }
+            | InboundDelegateMsg::ContractNotification(_)
+    ) {
+        return handle_background(ctx, message);
+    }
     // One gate, ahead of the match. A request family added later cannot
     // route around it without deleting this line.
     authorize(origin.as_ref())?;
-    match message { /* ... */ }
+    match message {
+        InboundDelegateMsg::ApplicationMessage(msg) => handle_request(ctx, msg),
+        // Each user or contract response the delegate asks for gets an arm here.
+        // Refuse the rest: a variant nobody placed must not read as success.
+        other => Err(DelegateError::Other(format!("refused message: {other:?}"))),
+    }
 }
 ```
+
+Treat `new_state` in a `ContractNotification` as a hint, and re-read the contract
+before acting on it. A contract response carries the origin of the run that asked, so the response to a
+background run's request has none and this gate refuses it. A delegate that reads
+contracts in the background needs a separate path for that case, doing only what a
+background run may.
 
 `freenet-migrate` exposes the policy type rather than making you hand-roll the
 comparison: `OriginPolicy::SameWebApp(ContractInstanceId)` /
@@ -392,7 +413,7 @@ code *asks* for removal, not that the node performed it.
 ## Worked patterns
 
 ```rust
-const SIGN_PROMPT: u32 = 1;
+const PENDING_PROMPT: &[u8] = b"pending_prompt";
 
 // A delegate serving several apps needs the caller's id, so it matches the
 // origin itself. A delegate serving one app uses `authorize` above.
@@ -409,9 +430,18 @@ fn process(
     origin: Option<MessageOrigin>,
     message: InboundDelegateMsg,
 ) -> Result<Vec<OutboundDelegateMsg>, DelegateError> {
+    // No origin: the node delivered these itself.
+    if matches!(
+        message,
+        InboundDelegateMsg::Lifecycle(_)
+            | InboundDelegateMsg::WakeupFired { .. }
+            | InboundDelegateMsg::ContractNotification(_)
+    ) {
+        return Ok(vec![]); // ...background work...
+    }
+    let app = app_of(origin.as_ref())?;
     match message {
         InboundDelegateMsg::ApplicationMessage(msg) => {
-            let app = app_of(origin.as_ref())?;
             // A delegate's secret namespace is shared by every app using it.
             // Prefix keys with the origin to isolate apps.
             let key = format!("{app}:user_data");
@@ -421,7 +451,12 @@ fn process(
             let reply = ApplicationMessage::new(b"stored".to_vec()).processed(true);
             Ok(vec![OutboundDelegateMsg::ApplicationMessage(reply)])
         }
-        InboundDelegateMsg::UserResponse(r) if r.request_id == SIGN_PROMPT => {
+        InboundDelegateMsg::UserResponse(r) => {
+            // Answer only the prompt this delegate raised.
+            if ctx.get_secret(PENDING_PROMPT).as_deref() != Some(&r.request_id.to_le_bytes()[..]) {
+                return Err(DelegateError::Other("response to an unknown prompt".into()));
+            }
+            ctx.remove_secret(PENDING_PROMPT);
             let allowed = &*r.response == b"Allow".as_slice();
             // ...sign, or refuse...
             Ok(vec![])
@@ -431,22 +466,29 @@ fn process(
             // ...r.state is Option<WrappedState>...
             Ok(vec![])
         }
-        _ => Ok(vec![]), // InboundDelegateMsg is #[non_exhaustive]
+        // InboundDelegateMsg is #[non_exhaustive]. Refuse what nothing above placed.
+        other => Err(DelegateError::Other(format!("refused message: {other:?}"))),
     }
 }
 
-// Ask the user. Unanswered prompts auto-deny after 60 s.
-fn ask() -> OutboundDelegateMsg {
+// Ask the user. Unanswered prompts auto-deny after 60 s. A fixed id lets any app
+// answer a prompt it did not raise, so each prompt gets a random id, kept in
+// secrets because a run gets a fresh WASM instance. The host RNG can return zeroes.
+fn ask(ctx: &mut DelegateCtx) -> Result<OutboundDelegateMsg, DelegateError> {
+    let id = freenet_stdlib::rand::rand_bytes(4);
+    if id == [0u8; 4] || !ctx.set_secret(PENDING_PROMPT, &id) {
+        return Err(DelegateError::Other("could not allocate a prompt id".into()));
+    }
     let message = NotificationMessage::try_from(&serde_json::json!("Allow this app to sign?"))
         .expect("a JSON string always encodes");
-    OutboundDelegateMsg::RequestUserInput(UserInputRequest {
-        request_id: SIGN_PROMPT,
+    Ok(OutboundDelegateMsg::RequestUserInput(UserInputRequest {
+        request_id: u32::from_le_bytes(id.as_slice().try_into().expect("4 bytes")),
         message,
         responses: vec![
             ClientResponse::new(b"Allow".to_vec()),
             ClientResponse::new(b"Deny".to_vec()),
         ],
-    })
+    }))
 }
 
 // A request carries its own continuation.
@@ -499,8 +541,8 @@ If you pass `keyBytes` for both fields (or `codeHashBytes` for both), the node w
 ### Pre-Publishing Checklist
 
 1. Compute `code_hash` with `b3sum` on the raw WASM
-2. Capture the full `key` from `fdev publish` output (strip ANSI: `sed 's/\x1b\[[0-9;]*m//g'`)
-3. Pre-decode both to byte arrays for the UI (base58 → JSON for key, hex → JSON for code_hash)
+2. Derive the full `key` offline from `code_hash` and the parameters (`build-system.md`)
+3. Encode both as byte arrays for the UI
 4. Verify both are injected separately in your build config
 
 ## Depending on Someone Else's Delegate
@@ -515,7 +557,8 @@ hosted. An app that cannot afford that can keep a copy in its delegate, as
 [Delta](https://github.com/freenet/delta) does in
 `ui/src/freenet_api/delegate.rs`: store the state as a secret after each GET or
 UPDATE response, and when a GET times out or returns `NotFound`, read the copy
-back and PUT it to restore the contract.
+back and PUT it to restore the contract. GET timeouts arrive as WebSocket errors,
+not `NotFound`, so handle both.
 
 - A re-PUT must still pass the contract's `validate_state`. A backup carries no
   extra authority, and a copy the contract now rejects restores nothing.

@@ -52,16 +52,15 @@ needs the heal-guarded form of associativity.
    when the record was created, with no removals, never readmits a record it
    dropped, however much more is merged in. How: keep the top N by creation
    timestamp, with a fixed rule for equal timestamps. A field the author can
-   raise later and that merges by max, such as `last_active`, also passed as a
-   ranking key in a small exhaustive model. This applies to caps on removal
+   raise later and that merges by max, such as `last_active`, may also work as
+   a ranking key, but that is unchecked. This applies to caps on removal
    records too: rank and admit a ban by the ban record alone (its issuer, its
    time, its signature), never by whether its target or its issuer is present
    in the state. Check the issuer's authority from records kept with the ban
    rather than from whether the issuer's member record is held: unlike the
    author of a message, a ban's issuer can itself be removed by another ban,
    and if that removal changed which bans count, the cap's answer would change
-   with it (in a small model this gave absorption failures and cycles;
-   carrying the proof with the ban made every case heal).
+   with it.
    Separately, to stop one author crowding out the others, cap per author so
    each author's records compete only with each other. A creation timestamp is
    the author's claim, so an author can future-date records to hold top slots;
@@ -70,12 +69,18 @@ needs the heal-guarded form of associativity.
    author take slots from others by future-dating (see
    `state-authorization-patterns.md` → "A Value One Party Supplies…"). A
    per-author cap bounds total size only if the number of authors is bounded
-   too.
+   too. Where the bound is enforced is a separate rule
+   (`state-authorization-patterns.md` → "Bound It In `update_state`, Never Only
+   In `validate_state`"), and a capped collection needs a retention horizon in
+   its summary (`contract-patterns.md` → "Keep summaries small").
 5. **Do not prune by local judgement.** Peers pruning over different sets
    disagree. If you need pruning beyond per-record caps, it must be an
-   authority's signed act that every peer applies the same way. No published
-   contract does this yet, and the idea has been checked only in a small
-   exhaustive model.
+   authority's signed act that every peer applies the same way: the owner (or
+   another key the parameters name) signs a checkpoint stating the cut, for
+   example "drop records older than T". The merge keeps the checkpoint with the
+   latest cutoff, equal cutoffs broken by the larger signature bytes, and drops
+   the record with its dependents. No published contract does this yet, and the
+   idea is unchecked.
 6. **Make every stored record's signature and authorization a fixed
    function of its own bytes, the parameters, and the records it depends on.**
    Why: a check whose answer can change while its inputs stay present gives
@@ -104,15 +109,15 @@ needs the heal-guarded form of associativity.
      removal that must not come back needs a tombstone (see the inactivity
      example below).
    - When `update_state` applies a delta, a record whose dependency is absent
-     is skipped, never a reason to return `Err`. `validate_state` rejects a
-     whole state that still holds such a record, because the cleanup would
-     change it (rule 7), and the merge may refuse such an incoming whole state
-     (see "A validly signed record never makes a merge fail").
+     is skipped, never a reason to return `Err`. A whole state that still
+     holds such a record falls under rule 7 (see "Applying a delta: decide
+     what one bad entry does").
    - Verify stored records by the same rule as arriving ones.
 7. **Accept only states your merge produces.** Why: a valid state that
-   `merge(S, S)` rewrites is reported under state idempotence. How: have
-   `validate_state` reject any state that the merge's cleanup would change.
-   If an upgrade path forces you to accept states already held on the
+   `merge(S, S)` rewrites is reported under state idempotence, and a valid state
+   a merge would `Err` on can block every later merge. How: have
+   `validate_state` reject any state that the merge's cleanup would change or
+   that a merge would `Err` on. If an upgrade path forces you to accept states already held on the
    network, every such state stays a reported violation that anyone can submit, so
    treat that as temporary and close it at the next re-key. The check runs the
    cleanup, so count it against the work bounds below.
@@ -166,20 +171,19 @@ removal; and dropping an author is not a tombstone, so an author who signs a
 newer `last_active` comes back with any posts a peer still holds. A removal that
 must stick needs a tombstone (`state-authorization-patterns.md` → "Tombstones").
 
-**Design choices this file does not settle.** Where a choice below was checked,
-the check was a small exhaustive model using the verifier's heal rule, not a
-deployed contract.
+**Design choices this file does not settle.** None of these has been checked on
+a deployed contract, so treat the outcomes reported below as unchecked.
 
 - **A capped ban list is not a lasting removal.** Admitting one more ban evicts
   a held one, and the evicted ban's target can return from any peer that still
   holds the target's record. A removal that must last needs a record no cap
   evicts, and then that cap does not bound the state's size. The bounded
   tombstone list in `state-authorization-patterns.md` → "Tombstones" has the
-  same limit.
+  same limit, so it suits suppression you can afford to lose, never a removal.
 - **Removing an inviter.** Under rule 6 a member record depends on its
   inviter's, so pruning or banning an inviter drops every member they invited.
-  The alternative, carrying the signed invite chain in the member record, was
-  not modelled.
+  The alternative, carrying the signed invite chain in the member record, is
+  unchecked.
 - **Order of caps across layers.** Cap the members, drop messages whose author
   is no longer a member, then cap the messages left. This gave no absorption
   failures and every associativity failure healed. It is not strictly
@@ -292,9 +296,7 @@ Rules that follow from it:
   records over a cap, records whose dependencies are gone. Run the same
   cleanup over held state on every apply, so every state a merge produces is a
   fixpoint of `merge(S, S)`. Normalizing held state does not make a valid
-  non-fixpoint state acceptable: it is still reported under state idempotence
-  when anyone submits it, so `validate_state` must also reject states cleanup
-  would change (rule 7).
+  non-fixpoint state acceptable: rule 7 still applies.
 
 ## Summaries must tell different content apart
 
@@ -313,8 +315,8 @@ bound placed wrongly breaks the laws itself.
 
 - **Refuse before cryptography, over the incoming state's own caps.** Count
   records first and refuse a whole state holding more than its own
-  configuration allows, before checking any signature. Make `validate_state`
-  enforce the same caps, so a state it accepts is never refused by merge.
+  configuration allows, before checking any signature. `validate_state`
+  enforces the same caps (rule 7).
 - **Do not trim whole-state merges.** A trim chooses records before the merged
   state's own removals and caps run, so the two directions of one exchange
   differ. Apply every incoming record and let the canonical procedure decide.
@@ -330,8 +332,8 @@ bound placed wrongly breaks the laws itself.
 
 ## Applying a delta: decide what one bad entry does
 
-A loop that mutates `self` and returns `Err` on the first bad entry is neither
-safe design. Pick one:
+A loop that mutates `self` and returns `Err` on the first bad entry leaves a
+partial mutation behind. Pick one:
 
 - **Atomic.** Validate every entry first and commit only if all pass, or apply
   into a clone and swap. Right when the entries are one indivisible update from
@@ -368,23 +370,19 @@ Whichever you pick:
   record (`contract-patterns.md` → "Record Identity"). Otherwise two different
   entries share an id and arrival order picks one.
 
-## A validly signed record never makes a merge fail
-
-For records signed independently by different parties, return `Err` from a
-merge only for an exceeded work bound or an incoming whole state that
-`validate_state` rejects (for example one holding a signature that does not
-verify, or a record whose dependency is absent). Inside a delta, skip a record
-whose signature does not verify or whose dependency is absent, and apply the
-rest: refusing the whole delta also refuses every valid record that travels
-with it (see above). A record that is validly signed but that this state does
-not admit (over a cap, referencing something unknown, disallowed by the current
-configuration) is skipped on arrival and dropped where held, by the same rule in
-both places. An `Err` for such a record fails every merge with any peer holding
-it, in one direction only, permanently, and only the record's author can repair
-it. The verifier also reports a contract that refuses to merge two valid states
-in the associativity heal step as a violation. Also make sure `validate_state`
-rejects anything a merge would `Err` on, or a state that validation accepted can
-block every later merge.
+**A validly signed record never makes a merge fail.** For records signed
+independently by different parties, return `Err` from a merge only for an
+exceeded work bound or an incoming whole state that `validate_state` rejects
+(for example one holding a signature that does not verify, or a record whose
+dependency is absent). Inside a delta, skip a record whose signature does not
+verify or whose dependency is absent, and apply the rest. A record that is
+validly signed but that this state does not admit (over a cap, referencing
+something unknown, disallowed by the current configuration) is skipped on
+arrival and dropped where held, by the same rule in both places. An `Err` for
+such a record fails every merge with any peer holding it, in one direction only,
+permanently, and only the record's author can repair it. The verifier also
+reports a contract that refuses to merge two valid states in the associativity
+heal step as a violation.
 
 ## Testing
 
@@ -423,8 +421,8 @@ Write these before trusting the merge, and run them on every change to it:
   fuzzer that stays green under those changes does not cover them.
 - **Measure whether the generated states reach every branch, then mutate.** A
   passing fuzzer does not show that its crafted states hit the cap path or a
-  given filter arm. Run it under branch coverage (`cargo llvm-cov --branch`) on
-  the host build of the entry points and the filters, caps and pruning they
+  given filter arm. Run it under branch coverage (`cargo llvm-cov --branch`,
+  currently nightly-only) on the host build of the entry points and the filters, caps and pruning they
   call, and run `cargo-mutants` on the same functions, reading every missed
   mutant. Coverage shows a branch was reached, not that its result was checked.
   These tools mostly replace function bodies and flip operators, so keep

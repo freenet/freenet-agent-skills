@@ -21,7 +21,7 @@ pub struct InboxMessage {
     pub timestamp: u64,
     pub ciphertext: Vec<u8>,
     pub signature: Signature,  // sender signs canonical bytes of the message
-    pub room_context: ContractInstanceId,
+    pub room_owner: MemberId,  // stable anchor, survives a re-key
 }
 ```
 
@@ -105,7 +105,7 @@ Counter goes in the bytes covered by the signature, so signatures are bound to a
 
 ### Tombstones
 
-For "forgotten but must not return" state. River bans persist as tombstones: while the ban is held, a banned member's record is dropped on every merge, including after a re-invitation. A mailbox's purged list works the same way: explicitly-purged messages can't be re-submitted.
+For "forgotten but must not return" state. River bans persist as tombstones: while the ban is held, a banned member's record is dropped on every merge, including after a re-invitation. A mailbox's purged list works the same way: while the entry is held, a purged message can't be re-submitted.
 
 ```rust
 pub struct RecipientState {
@@ -116,14 +116,20 @@ pub struct RecipientState {
 }
 ```
 
-Bound the tombstone list. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full.
+A list suppressing something you can afford to see again, like this one, can be bounded. The recipient (or party authorizing tombstones) is responsible for FIFO eviction when full.
 
 That eviction is arrival-ordered, which is legal here only because no peer
 re-derives the order: `RecipientState` is a single-writer envelope the recipient
 re-signs in full, and the merge is last-writer-wins on the whole envelope, so
-peers copy the recipient's list. If the merge unions `purged` instead, every
-evicted tombstone returns from any peer holding an older copy, and the list is
-unbounded in practice.
+peers copy the recipient's list. Losing the suppression is what a successful
+eviction costs, and that is the risk this design accepts deliberately. If the
+merge unions `purged` instead, every evicted tombstone returns from any peer
+holding an older copy, and the list is unbounded in practice.
+
+**A removal tombstone must never be evicted, whichever merge the list uses.** In
+a last-writer-wins envelope, eviction lets the removed item return from a peer
+holding older state. In a unioned list, the evicted tombstone itself returns and
+the list never shrinks. Size the state to hold every removal, or shard.
 
 ### Removing Illegal Material
 
@@ -144,16 +150,12 @@ strangers publish media needs this working before launch.
   worse than none, because users believe they have told someone.
 
 **Removing it.** Where the moderator's key can write to the contract holding the content, it
-tombstones the item: keep the id (a content hash, so the same bytes cannot return under a new
-id), drop the bytes, and drop the item on any later merge. If the item is simply deleted, the
-next merge with a peer holding older state brings it back. Design this in from v1: adding it
-after launch means a contract upgrade.
-
-The two tombstone rules cover different cases. "Bound the tombstone list" under "Tombstones"
-applies to a single-writer, last-writer-wins envelope, where peers copy the writer's list and
-eviction cannot resurrect anything. Removal tombstones in a merge-unioned list are the other
-case: never bound them by evicting old entries, because an evicted tombstone lets the item
-return from a peer holding older state.
+tombstones the item: keep a hash of the media bytes, drop the bytes, and drop any item with that
+hash on every later merge. The tombstone hashes the media bytes alone, unlike a Record Identity
+id (`contract-patterns.md`), which covers every term of the record, so the same bytes cannot
+return inside a new record. If the item is simply deleted, the next merge with a peer holding
+older state brings it back. Never evict a removal tombstone (see "Tombstones"). Design this in
+from v1: adding it after launch means a contract upgrade.
 
 Where the moderator cannot write there (content in user-owned contracts, an open index, or a
 separate asset contract), publish an author-signed denylist contract the UI reads, and filter
@@ -166,20 +168,23 @@ it, but does not erase copies peers already hold. Say "removed", not "deleted fr
 are a cheap way to take down legitimate content. A ghost-key signature on each report makes
 volume cost money that better hardware does not reduce, keeps the reporter anonymous, and lets
 the moderator weigh reports by donation amount and key age and ignore a key that has filed
-reports in bad faith. Verify it in `update_state`, so unsigned reports never enter state. This
-is a suggestion: reporting illegal material should not cost money, so offer slow proof-of-work
-as the free fallback (`sybil-resistance.md` → "Cryptographic CAPTCHA") and relay the caveats
-there.
+reports in bad faith. Keep the signature with the report and verify it in `validate_state`,
+because a PUT skips `update_state`, and filter in `update_state` so a bad report is skipped, not
+refused (`sybil-resistance.md` → "Integration sketch"). This is a suggestion: reporting illegal
+material should not cost money, so offer slow proof-of-work as the free fallback
+(`sybil-resistance.md` → "Cryptographic CAPTCHA") and relay the caveats there.
 
 ### Cross-Context Binding
 
-Include the contract identity (or recipient/room) in bytes covered by every signature. Without this, a signed payload valid for inbox-A can be replayed against inbox-B if both share enough state structure.
+Bind a stable anchor in the bytes covered by every signature: an owner key, a recipient key, or an app-chosen id in the parameters. Without this, a signed payload valid for inbox-A can be replayed against inbox-B if both share enough state structure.
+
+Never bind a `ContractInstanceId`. It moves on every re-key, so every record would fail verification under the successor. River binds `room_owner: MemberId`.
 
 ```rust
 pub fn build_signed_payload_bytes(
     sender: MemberId,
-    recipient_vk: &VerifyingKey,        // <-- binds to this inbox
-    room_context: &ContractInstanceId,  // <-- binds to membership claim
+    recipient_vk: &VerifyingKey,  // <-- binds to this inbox
+    room_owner: MemberId,         // <-- binds to membership claim
     timestamp: u64,
     ciphertext: &[u8],
 ) -> Vec<u8> {
@@ -251,7 +256,7 @@ pub fn build_signed_payload_bytes(...) -> Vec<u8> {
     let mut out = Vec::with_capacity(...);
     out.extend_from_slice(&sender.to_le_bytes());        // fixed-length
     out.extend_from_slice(recipient_vk.as_bytes());       // 32 bytes
-    out.extend_from_slice(room_context.as_bytes());       // 32 bytes
+    out.extend_from_slice(&room_owner.to_le_bytes());     // fixed-length
     out.extend_from_slice(&timestamp.to_le_bytes());      // 8 bytes
     out.extend_from_slice(&ct_len.to_le_bytes());         // 4 bytes
     out.extend_from_slice(ciphertext);                    // variable, length-prefixed
@@ -272,8 +277,8 @@ records. Always `len_le_u32 || bytes`.
 The signed bytes should commit to:
 
 - **Sender identity** (cryptographically redundant with using sender's VK to verify, but explicit binding removes ambiguity and matches River's other signed structs).
-- **Recipient/inbox/contract identity** (prevents cross-instance replay).
-- **Logical scope** (e.g., room_context — prevents membership-claim swap).
+- **Recipient or inbox identity**, as a stable anchor and never a `ContractInstanceId` (prevents cross-instance replay).
+- **Logical scope** (e.g., `room_owner`, which prevents membership-claim swap).
 - **Timestamp** (replay window for new admissions).
 - **Content** (the actual payload).
 
@@ -340,7 +345,9 @@ validating. Peers refuse it and every change to it fails, because
 `validate_state` also gates the state `update_state` returns. An update that
 drops the message lands, but the next-oldest crosses the window soon after, so
 the freeze re-arms. Every peer's copy aged the same way, so no valid donor state
-exists, and a node may replace a locally-invalid state wholesale.
+exists. Worse, when a merge fails on a locally-invalid state, the node replaces it
+with any valid full state it is sent (freenet-core#3109), so the state can be taken
+away.
 
 Replay protection for old messages uses signature-based dedup and tombstones,
 never a time window in `validate_state`.
@@ -362,7 +369,7 @@ fn validate_state(
     state: State<'static>,
     related: RelatedContracts<'static>,
 ) -> Result<ValidateResult, ContractError> {
-    // First pass: if room_context isn't in `related`, request it:
+    // First pass: if the room's contract isn't in `related`, request it:
     if let Some(missing_id) = self.find_missing_related(&state, &related) {
         return Ok(ValidateResult::RequestRelated(vec![missing_id]));
     }

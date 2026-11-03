@@ -27,7 +27,8 @@ Two limits, both load-bearing:
   the web container and the facade halves what you have to back up, but a
   compromise then takes the facade with it, and your escape hatch is gone exactly
   when you need it. If you are adopting a facade *in order to* survive key
-  rotation, give it a separate key, stored separately. Choose one of these two
+  rotation, give it a separate key, stored separately. Use one key for both only
+  if the facade exists for a container-WASM migration. Choose between these two
   postures deliberately; they are mutually exclusive.
 
 The reference implementation is freenet/mail (`contracts/facade`,
@@ -103,10 +104,9 @@ with a fresh browser load of the facade URL.
 
 Custody rules are those in `web-container-contract.md` ("Losing the signing key
 is unrecoverable"). One addition: the facade's verifying key is in its
-`parameters`, so rotating it rotates the facade ID, which defeats the point. Use
-one key for both the web container and the facade only if the facade exists for a
-container-WASM migration. If the facade is your answer to a compromised key, give
-it a separate key, stored separately.
+`parameters`, so rotating it rotates the facade ID, which defeats the point. For
+whether the facade shares the container's key, see the two postures under "When
+this pattern is actually justified".
 
 ## Cross-references
 

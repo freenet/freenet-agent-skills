@@ -74,23 +74,18 @@ The whole procedure, start to finish:
    `build.rs` codegen, the backward probe and the preconditions-as-types are identical across apps. `cargo add
    freenet-migrate` (runtime) and `cargo add --build freenet-migrate-build` (codegen and CI hash-guard). The build codegen
    reads River-style `[[entry]]` registries, so an existing hand-rolled registry needs no rewrite. Take the
-   `freenet-migrate` release matching your stdlib (table in `build-system.md`); moving between stdlib lines is a re-key.
+   `freenet-migrate` release matching your stdlib (table in `build-system.md`); moving between stdlib lines is a re-key
+   (`build-system.md`, "Moving up from an older stdlib"). Before you do, run the hardcoded-key check in
+   `building-on-other-apps.md`, "Check an existing app first".
 
-   Contract state is the field-proven half (River, Delta and others run it). There is no node-level mechanism for
-   delegate secrets today. Do not wait for one: migrate at the app level, using the crate's entry points
-   (`migrate_delegate_secrets`, `register_delegate_with_migration`). Status is tracked in freenet-core#2776. **A delegate
-   migration is forward-only**: the successor asks, and only a predecessor whose already-deployed WASM answers (in practice
-   one that shipped `handle_export_request`, or a protocol general enough to enumerate its own secret namespace) can be
-   recovered from. Every release shipped without that handler adds one unrecoverable generation, so "we have no migration
-   to do yet" is the argument for adopting sooner. Mechanics: `delegate-migration.md` ("A delegate migration is
-   forward-only", "Delegate secret migration is app-level") and "Contract mechanics" below. The `freenet-migrate` README covers
-   swapping an existing hand-rolled sweep for the crate.
+   Contract state is the field-proven half (River, Delta and others run it); see "Contract mechanics" below. A delegate
+   migration is forward-only and has no node-level mechanism: see `delegate-migration.md`.
 
 5. **Publish the new version, then let clients migrate themselves.** Publish the
    new WASM to the shared production key **from `main` only**, after review and
    green CI (every publish hits the same shared address). Each client, on its
    **next load**, computes old-key vs new-key, GETs the old state, and re-PUTs it
-   under the new key — the successor's `validate_state` re-verifies every byte, so
+   with subscribe under the new key. The successor's `validate_state` re-verifies every byte, so
    *any* client can carry the state forward and the owner need not be online.
    Migration is **per-client, lazily, on next load**; old and new clients coexist
    for an unbounded rollout window. A **fresh device has no local state to
@@ -114,7 +109,7 @@ The whole procedure, start to finish:
 **Once your app has users, a new contract version must be migratable from every
 version that has ever held their data.** That is a constraint on which changes
 you may make, not a step in the release procedure, and it is what decides later
-which bugs are fixable at all. The default to protect, in Ian Clarke's framing:
+which bugs are fixable at all. The default to protect:
 
 > Any UI should be able to upgrade a contract, because the state just needs to
 > be transferred from old to new — the assumption being that new contracts
@@ -332,6 +327,8 @@ Practical rules:
    `state-authorization-patterns.md` → Wire-Format Stability), never
    remove/rename/repurpose a field, version-tag when you must break, and pin the
    wire format with round-trip tests against hand-written bytes of the old shape.
+   Records a delegate stores follow the same rule: `#[serde(default)]` on every new
+   field, so old UIs can read them.
 3. **Shard mutable storage by unit-of-concurrent-change, and use compare-and-swap,
    never blind overwrite.** River #345 stored the whole room list as one blob
    overwritten last-writer-wins; two browser tabs clobbered each other. The fix
@@ -377,16 +374,17 @@ old state, or the merge does not converge, and migration silently fails.
    if flag_set("migration_in_progress") {
        run_migration();                    // partial set -> re-run (idempotent) to fill gaps
    } else if !migration_done(instance, current_code_hash) {
-       run_migration();                    // UNCONDITIONAL. Not gated on whether the
-                                           // destination already holds data -- see
-                                           // property 4 and the trigger rule below.
+       run_migration();                    // See the trigger rule below.
    }
    ```
 
    `mark_migration_done()` is reached only from the success path above, on a
-   definitive probe outcome. Never seal it because the destination *looks*
-   populated: that is the empty-destination gate in disguise, and any earlier
-   write then makes the migration permanently unreachable.
+   complete `Recovered` ("Silence is not absence"). Never seal it because the
+   destination *looks* populated: that is the empty-destination gate in disguise,
+   and any earlier write then makes the migration permanently unreachable.
+   Contract and delegate sealing differ: a predecessor delegate that answers, even
+   with nothing, can seal (`delegate-migration.md`), while a contract `NotFound` is
+   unauthenticated and never does.
 
    For delegate predecessors, `freenet-migrate` offers a durable completeness journal stored in the successor, which
    replaces a hand-rolled in-progress flag on that side; see `delegate-migration.md`. Contract-side sealing stays the app's
@@ -418,8 +416,9 @@ old state, or the merge does not converge, and migration silently fails.
    **Before making it durable at all, ask whether the predecessor store is
    genuinely frozen after the re-key.** A durable marker is what makes a wrong
    "nothing there" verdict permanent, so it is only safe when nothing can write
-   to a predecessor after you have declared it done. River's legacy delegates are
-   frozen — only the current delegate is ever written — so it seals. ghostkeys
+   to a predecessor after you have declared it done. River seals because only its
+   current delegate is ever written, apart from an old tab during a rollout, which a
+   top-up after the walk covers. ghostkeys
    **bans** durable markers for the opposite reason: a contrast test showed one
    there resurrects a data-loss scenario verbatim. Decide per app, write down
    which way and why, and never port one app's answer to another.
@@ -490,8 +489,8 @@ old state, or the merge does not converge, and migration silently fails.
    rest of the fix is in the *resolution*, not the trigger: make conflict resolution
    merge rather than replace, and seed the probe from the client's own snapshot so a
    stale source can only ever add. What #253 does **not** license is gating the
-   *first* run on "destination is empty" — that is the shape that lost River's rooms
-   in #621; see "Probe before you write to the new key" below.
+   *first* run on the destination: see the trigger rule under "Probe before you write
+   to the new key".
 5. **Observable.** Emit migration telemetry — started / completed / recovered /
    failed counts. River found #352 only because a user reported a vanished room;
    there was no signal that real migrations were failing. A "publish succeeded"
@@ -528,7 +527,7 @@ Contract state moves by a backward probe over a committed, append-only registry 
 every past code hash, walked newest first. Reconstruct each predecessor's key from
 `BLAKE3(BLAKE3(old_wasm) || params)`, where `params` are the bytes that generation was
 published under ("A parameter-struct change is a migration too"), GET the old state,
-fold it forward, and re-PUT it under the current key. The current hash is never in the
+fold it forward, and re-PUT it with subscribe under the current key. The current hash is never in the
 registry. For per-user state with no shared owner the probe is the only option.
 
 ### Where the registry lives
@@ -604,14 +603,19 @@ nothing, retry next load). Both `ProbeAnswer` and `Outcome` are `#[non_exhaustiv
 so a `match` needs a wildcard arm.
 
 **Only a complete `Recovered` may record the migration as finished.** A `NotFound` is
-unauthenticated, and a contract that exists can answer it while momentarily
-unfindable. An undecodable answer is a miss too, so a schema break across a whole
+unauthenticated, and a contract that exists can answer it while unfindable, which is
+common rather than momentary. An undecodable answer is a miss too, so a schema break across a whole
 lineage lands on `SeedLocal` with every generation intact. Read `SeedLocal` as "asked
 everyone, found nothing this time": seeding your local snapshot forward on it is fine,
 and sealing on it is not. Only `Recovered` with no unresolved candidates and no
 truncated fold may seal. Name that case explicitly and let the wildcard arm fall
 through to "retry next run": a wildcard that defaults to "done" writes a permanent
 marker wrongly, today and for every variant added later.
+
+**Never let a single all-`Absent` walk trigger an irreversible act**, such as creating
+a fresh identity or telling a user they have nothing. Require the same answer across
+separate attempts, plus a connectivity witness: a GET for something you know exists
+succeeding in the same window.
 
 `SelectionPolicy::NewestFirstWins` is the default and is safe for delete-by-absence
 states. `SelectionPolicy::FoldAll` folds every real generation and is sound only for
@@ -743,7 +747,8 @@ which for a tab left open can be days.
 
 So a dApp that re-keys needs the open tab to notice and reload. River does this in
 `ui/src/components/app/freenet_api/generation_watch.rs` (freenet/river#792); copy
-its shape rather than reinventing it.
+its shape rather than reinventing it. The timings and caps below are River's choices,
+not node requirements.
 
 **Signal: your pointer records, not your web container.** Publish one pointer
 record per re-keying artifact (`freenet-migrate`'s `pointer` module; see
@@ -755,14 +760,12 @@ publishes that strand nobody.
 **Transport: GET + subscribe on every (re)connect, plus a slow GET backstop**
 (River's: every 15 minutes, ±20% jitter).
 A client subscription does not survive a WebSocket reconnect (the client gets a
-new id), so re-subscribe each time. Do not rely on polling GETs alone. River
-found that once the
+new id), so re-subscribe each time. Do not rely on polling GETs alone: once the
 node is subscribed to the contract or otherwise interested in it (which a tab
 watching it makes it), a client GET is answered from the node's local copy, so
 a poll never forces a network check. Handle `UpdateData::State`, `Delta` and
-`StateAndDelta`; the pointer contract's delta is the whole record. River also
-found that `freenet local` ignores `subscribe` on a GET, so test the push path against a
-network-mode node.
+`StateAndDelta`; the pointer contract's delta is the whole record. `freenet local`
+ignores `subscribe` on a GET, so test the push path against a network-mode node.
 
 **Judgement: seed the resolver with the build's own record.** Bake the build's
 pointer `version` and `code_hash` in at build time from the same records file
@@ -859,8 +862,7 @@ the click.
 response-to-plan routing) and unit-test them, then mutate each guard and
 confirm a test goes red. Then run it end to end: a throwaway pointer key, a
 test build pointed at test records, an isolated network-mode node, and a
-browser driver. Check the node's client count is unchanged after a reload. That
-is how River found the socket leak and the partial-target reset. Refuse to
+browser driver. Check the node's client count is unchanged after a reload. Refuse to
 publish a UI built against test records, by checking the built archive (not
 the publishing shell's environment) before anything irreversible, such as a
 version-counter bump.
@@ -888,8 +890,7 @@ derivation is BLAKE3 (River lost rooms to a SHA256 migration entry).
   embedding) and the `freenet-migrate` / stdlib compatibility table.
 - `state-authorization-patterns.md`: self-authorizing state, the precondition for
   permissionless migration.
-- The `freenet-migrate` README: the crate's API, and how to swap an existing hand-rolled
-  sweep for it.
+- The `freenet-migrate` README: the crate's API.
 - [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776) is the live
   home base for addressing, contract-state and delegate-secret migration status. Check it
   before trusting any status claim here.

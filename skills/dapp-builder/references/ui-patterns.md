@@ -4,7 +4,7 @@ The UI is the interaction layer that connects to the Freenet Kernel via WebSocke
 
 ## Architecture Overview
 
-The UI runs as WASM in the browser and talks to the local Freenet node over a WebSocket; contracts and delegates run in the node. A published webapp is served by the node's gateway inside a sandboxed iframe.
+The UI runs in the browser (compiled to WASM for Dioxus, JavaScript for the TypeScript option) and talks to the local Freenet node over a WebSocket; contracts and delegates run in the node. A published webapp is served by the node's gateway inside a sandboxed iframe.
 
 ## Gateway CSP: Vendor Your Assets
 
@@ -100,31 +100,18 @@ The correct choice depends on **how the client loads**, not on what it wants to 
 
 | Client load path | Connection model | What to do |
 |------------------|------------------|-----------|
-| Loaded as a **webapp via `/v1/contract/web/{key}/`** (runs inside the gateway's sandboxed iframe) | **Shell-managed WebSocket.** The gateway's outer page owns the real socket and injects the auth token. Your WASM calls `WebSocket::new(url)` and a shimmed `window.WebSocket` transparently forwards messages via `postMessage`. | Derive the URL from `window.location` (see below). **Do NOT call `Authenticate`; the shell injects it.** Use `freenet-stdlib::WebApi::start()`. |
+| Loaded as a **webapp via `/v1/contract/web/{key}/`** (runs inside the gateway's sandboxed iframe) | **Shell-managed WebSocket** (explained below). | Derive the URL from `window.location` (see below). **Do NOT call `Authenticate`; the shell injects it.** Use `freenet-stdlib::WebApi::start()`. |
 | Loaded **outside the gateway** (native CLI, Playwright page served from a dev port like `python3 -m http.server`, a Node script, or any page that did not come from `/v1/contract/web/...`) | **Raw WebSocket.** There is no shell; you talk directly to the node's WS API. | **For a browser page, prefer removing this case** — see "Dev servers: proxy instead of hardcoding" below — so the URL derivation still applies. For a CLI or script, configure the address (flag or env var); hardcode only as the default behind that override. The node accepts a connection with no token, as `fdev` does. See the `local-dev` skill for details. |
 
-In short: **inside an iframe served by `/v1/contract/web/...` the shell manages the socket and the token, so do not authenticate yourself.** Everywhere else, connect directly. A stale token (after a node restart) is reported as `AUTH_TOKEN_INVALID`; reload the page.
+In short: **inside an iframe served by `/v1/contract/web/...` the shell manages the socket and the token, so do not authenticate yourself.** Everywhere else, connect directly. A stale token (after a node restart) makes the node close the socket with code 4401; reload the page.
 
 See also `production-smoke-testing.md` for the shell HTML structure and the
 Playwright idioms (`frameLocator` / absolute-URL `goto`) needed to reach
 into the iframe from E2E tests.
 
-### CRITICAL: How WebSocket Works in the Gateway (Shell-Managed Model)
+### How the shell-managed WebSocket works
 
-Freenet serves web apps inside **sandboxed iframes** for origin isolation.
-The app does NOT create a raw WebSocket directly. Instead:
-
-1. The **shell page** (outer frame) holds the auth token and manages the real WebSocket
-2. The **sandboxed iframe** (where your WASM app runs) has `window.WebSocket` replaced
-   with a postMessage-based shim (`FreenetWebSocket`)
-3. When your code calls `WebSocket::new(url)`, the shim intercepts it and routes
-   through postMessage to the shell page, which creates the real connection
-
-This means:
-- Your app calls `WebSocket::new()` normally (or uses `freenet-stdlib`'s `WebApi::start()`)
-- The **URL must use the correct path**: `/v1/contract/command?encodingProtocol=native`
-- The **URL must be derived from `window.location`**, not hardcoded, so it works on any host/port
-- The shell page automatically injects the auth token -- your app does NOT need to handle auth
+The gateway serves a webapp inside a sandboxed iframe for origin isolation (the shell and its test idioms are in `production-smoke-testing.md`). The shell page (outer frame) holds the auth token and the real WebSocket. Inside the iframe, `window.WebSocket` is replaced by a postMessage shim, so your code calls `WebSocket::new(url)` or `WebApi::start()` as usual and the shell makes the real connection and injects the token. The URL path must be `/v1/contract/command?encodingProtocol=native`, derived from `window.location` so it works on any host and port.
 
 ### WebSocket URL (IMPORTANT)
 
@@ -357,143 +344,36 @@ For teams more comfortable with TypeScript, Vite provides fast iteration with HM
 
 ### Vite Configuration
 
-The key trick: inject contract hashes and delegate key bytes as compile-time constants via Vite `define`. These are computed during `make build` and written to JSON/text files.
+Inject contract hashes and delegate key bytes as compile-time constants through Vite `define`, computed during the build and written to small files. Declare them in `src/vite-env.d.ts` (`declare const __MODEL_CONTRACT__: string;`, `number[]` for the byte arrays).
 
 ```typescript
-// vite.config.ts
-import { defineConfig } from "vite";
-import { readFileSync, existsSync } from "fs";
-import { resolve } from "path";
-
-function readFileOrDefault(filename: string, fallback: string): string {
-  const filePath = resolve(__dirname, filename);
-  return existsSync(filePath) ? readFileSync(filePath, "utf-8").trim() : fallback;
-}
-
-export default defineConfig({
-  // If using a local freenet-stdlib checkout (common during development):
-  resolve: {
-    alias: {
-      "@freenetorg/freenet-stdlib/client-request": resolve(
-        __dirname, "../../freenet-stdlib/typescript/src/client-request.ts"
-      ),
-      "@freenetorg/freenet-stdlib/common": resolve(
-        __dirname, "../../freenet-stdlib/typescript/src/common.ts"
-      ),
-      "@freenetorg/freenet-stdlib": resolve(
-        __dirname, "../../freenet-stdlib/typescript/src/index.ts"
-      ),
-    },
-  },
-  define: {
-    // Contract key (base58 string) — written by `fdev inspect ... key`
-    __MODEL_CONTRACT__: JSON.stringify(
-      readFileOrDefault("model_code_hash.txt", "DEV_MODE_NO_CONTRACT_HASH")
-    ),
-    // Delegate key bytes (pre-decoded from base58 to number[])
-    __DELEGATE_KEY_BYTES__: readFileOrDefault("delegate_key_bytes.json", "[]"),
-    // Delegate code_hash bytes (BLAKE3 of raw WASM, as number[])
-    __DELEGATE_CODE_HASH_BYTES__: readFileOrDefault("delegate_code_hash_bytes.json", "[]"),
-  },
-  // CRITICAL: relative base path for sandboxed iframe serving
-  base: "./",
-  build: {
-    outDir: "dist",
-    emptyOutDir: true,
-  },
-});
+// vite.config.ts (excerpt)
+define: {
+  __MODEL_CONTRACT__: JSON.stringify(readFileOrDefault("model_code_hash.txt", "DEV_MODE_NO_CONTRACT_HASH")),
+  __DELEGATE_KEY_BYTES__: readFileOrDefault("delegate_key_bytes.json", "[]"),
+  __DELEGATE_CODE_HASH_BYTES__: readFileOrDefault("delegate_code_hash_bytes.json", "[]"),
+},
+// CRITICAL: relative base path for sandboxed iframe serving
+base: "./",
 ```
 
 **Why `base: "./"` is critical:** Freenet serves webapp files inside a sandboxed iframe at a path like `/v1/contract/web/{CONTRACT_ID}/`. Absolute paths (`/assets/...`) would resolve against the node root and 404. Relative paths (`./assets/...`) resolve correctly within the iframe.
 
-### TypeScript Type Declarations
-
-Declare the compile-time constants so TypeScript doesn't complain:
-
-```typescript
-// src/vite-env.d.ts
-declare const __MODEL_CONTRACT__: string;
-declare const __DELEGATE_KEY_BYTES__: number[];
-declare const __DELEGATE_CODE_HASH_BYTES__: number[];
-```
-
 ### WebSocket Connection (TypeScript)
 
-Use `FreenetWsApi` from the stdlib TypeScript package. It handles FlatBuffers serialization/deserialization automatically.
+`FreenetWsApi` from the stdlib TypeScript package handles the FlatBuffers encoding. Build the URL as in the Rust example above (derive the scheme too: a shell served over https needs `wss:`), and implement a `ResponseHandler` with the callbacks you need (`onContractGet`, `onContractUpdateNotification`, `onContractNotFound`, `onSubscribeResponse`, `onDelegateResponse`, `onErr`, `onOpen`, `onClose`).
 
 ```typescript
-import {
-  FreenetWsApi,
-  ContractKey,
-  GetRequest,
-  GetResponse,
-  UpdateRequest,
-  UpdateResponse,
-  UpdateNotification,
-  UpdateData,
-  UpdateDataType,
-  DeltaUpdate,
-  SubscribeRequest,
-  PutResponse,
-  DelegateResponse,
-  HostError,
-  ResponseHandler,
-} from "@freenetorg/freenet-stdlib";
-
-// Build WebSocket URL from current location (works in sandbox iframe).
-// Derive the scheme too, as the Rust example above does: a shell served over
-// https needs wss:, and a hardcoded ws: is a mixed-content failure there.
 const proto = location.protocol === "https:" ? "wss:" : "ws:";
 const wsUrl = new URL(`${proto}//${location.host}/v1/contract/command`);
 
-const handler: ResponseHandler = {
-  onContractPut: (response: PutResponse) => { /* fired on put completion */ },
-  onContractGet: (response: GetResponse) => {
-    // Decode state bytes → JSON → your app types
-    const decoder = new TextDecoder("utf8");
-    const json = decoder.decode(Uint8Array.from(response.state));
-    const state = JSON.parse(json);
-    // Update your UI...
-  },
-  onContractUpdate: (response: UpdateResponse) => { /* fired on update completion */ },
-  onContractUpdateNotification: (notification: UpdateNotification) => {
-    // Handle delta updates from subscriptions
-    const updateData = notification.update as UpdateData;
-    if (updateData?.updateDataType === UpdateDataType.DeltaUpdate) {
-      const delta = updateData.updateData as { delta: number[] };
-      const json = new TextDecoder().decode(Uint8Array.from(delta.delta));
-      // Parse and apply delta...
-    }
-  },
-  // Fired when a GET targets a missing contract instance
-  onContractNotFound: (instanceId) => {
-    console.warn("[freenet] Contract not found:", instanceId);
-  },
-  // Fired on SUBSCRIBE confirmation (subscribed flag = success). On stdlib TS >= 0.4.0
-  // it fires alongside the api.subscribe() promise. See "Contract Operations" below.
-  onSubscribeResponse: (key, subscribed) => {
-    console.log("[freenet] Subscribe:", key.encode(), "ok=", subscribed);
-  },
-  onDelegateResponse: (response: DelegateResponse) => { /* delegate result */ },
-  onErr: (err: HostError) => {
-    console.error("[freenet] Error:", err.cause);
-  },
-  onOpen: () => {
-    console.log("[freenet] Connected");
-    // Now safe to send GET, SUBSCRIBE, etc.
-  },
-  // WebSocket close. All pending promises will already have rejected.
-  onClose: (code, reason) => {
-    console.warn("[freenet] Disconnected:", code, reason);
-    // App layer decides reconnect strategy — SDK does NOT auto-reconnect.
-  },
-};
-
-// CRITICAL: Pass empty string as auth token.
-// In the sandbox iframe, cookie reading is blocked. The shell page handles auth
-// via the postMessage bridge. Passing "" tells FreenetWsApi to skip cookie reading.
+// CRITICAL: pass an empty string as the auth token. In the sandbox iframe cookie
+// reading is blocked and the shell injects the token; "" tells FreenetWsApi to
+// skip the cookie.
 const api = new FreenetWsApi(wsUrl, handler, "");
 ```
+
+`onOpen` is the point after which it is safe to send requests. `onClose` is a plain close: the SDK does NOT reconnect, so the app decides the reconnect strategy. A delta in `onContractUpdateNotification` arrives as `notification.update` with `updateDataType === UpdateDataType.DeltaUpdate`, and its bytes are in `updateData.delta`.
 
 ### Building ContractKey from Hash
 
@@ -513,35 +393,9 @@ const contractKey = new ContractKey(instanceBytes, instanceBytes);
 `get`, `put`, `update` and (from stdlib TS 0.4.0) `subscribe` return promises that resolve with the typed response and reject on timeout (default 30 s), connection close, or a host error that names the contract. The legacy callbacks in `ResponseHandler` still fire for the same response. Before 0.4.0, `subscribe()` resolved as soon as the request was sent and never rejected on a refused subscribe (for example the node's per-client subscription cap), so on an older version detect failure through `onSubscribeResponse` and `onErr`. `disconnect` resolves when the request is sent, in every version.
 
 ```typescript
-// GET — fetch current state (await + try/catch)
-try {
-  const getReq = new GetRequest(contractKey, true);
-  const response = await api.get(getReq);
-  const json = new TextDecoder().decode(Uint8Array.from(response.state));
-  const state = JSON.parse(json);
-  // ...use state
-} catch (err) {
-  console.error("[freenet] GET failed:", err); // timeout / not-found / closed
-}
-
-// SUBSCRIBE: receive real-time updates. From stdlib TS 0.4.0 the promise rejects
-// on a refused subscribe; on older versions use onSubscribeResponse / onErr.
-try {
-  await api.subscribe(new SubscribeRequest(contractKey, []));
-} catch (err) {
-  console.error("[freenet] SUBSCRIBE failed:", err);
-}
-
-// UPDATE — send a delta
-const encoder = new TextEncoder();
-const deltaBytes = encoder.encode(JSON.stringify(myDelta));
-const delta = new DeltaUpdate(Array.from(deltaBytes));
-const update = new UpdateData(UpdateDataType.DeltaUpdate, delta);
-try {
-  await api.update(new UpdateRequest(contractKey, update));
-} catch (err) {
-  console.error("[freenet] UPDATE failed:", err);
-}
+const response = await api.get(new GetRequest(contractKey, true));
+await api.subscribe(new SubscribeRequest(contractKey, []));
+await api.update(new UpdateRequest(contractKey, new UpdateData(UpdateDataType.DeltaUpdate, new DeltaUpdate(Array.from(deltaBytes)))));
 ```
 
 ### Large state handling
@@ -550,94 +404,31 @@ Requests over 512 KB are chunked and responses reassembled by the SDK; there is 
 
 ### Delegate Communication (TypeScript)
 
-Sending messages to delegates from TypeScript requires building FlatBuffers objects manually. The public API only exposes high-level types; you need internal `-T` types (the mutable FlatBuffers table classes) that have `pack()` methods.
-
-**Dynamic imports are required** because these internal types aren't part of the main export:
+The public API has no delegate-message builder. Sending one means building the FlatBuffers chain from the internal `-T` table types, which are not in the main export, so import them dynamically (Vite aliases resolve them to the stdlib source):
 
 ```typescript
-import { FreenetWsApi, DelegateRequest } from "@freenetorg/freenet-stdlib";
+const { ApplicationMessageT } = await import("@freenetorg/freenet-stdlib/common");
+const { ClientRequestT, ClientRequestType, ApplicationMessagesT, DelegateKeyT,
+        DelegateRequestType, InboundDelegateMsgT, InboundDelegateMsgType } =
+  await import("@freenetorg/freenet-stdlib/client-request");
 
-export async function sendDelegateMessage(
-  api: FreenetWsApi,
-  delegateKeyBytes: number[],
-  delegateCodeHash: number[],
-  message: object
-): Promise<void> {
-  const payload = Array.from(new TextEncoder().encode(JSON.stringify(message)));
-
-  // Import internal FlatBuffers table types (resolved by Vite aliases)
-  // @ts-ignore — resolved by Vite alias at build time
-  const { ApplicationMessageT } = await import("@freenetorg/freenet-stdlib/common");
-  // @ts-ignore — resolved by Vite alias at build time
-  const {
-    ClientRequestT,
-    ClientRequestType,
-    ApplicationMessagesT,
-    DelegateKeyT,
-    DelegateRequestType,
-    InboundDelegateMsgT,
-    InboundDelegateMsgType,
-  } = await import("@freenetorg/freenet-stdlib/client-request");
-
-  // Build the message chain
-  const appMsg = new ApplicationMessageT(payload, [], false);
-  const inbound = new InboundDelegateMsgT(
-    InboundDelegateMsgType.common_ApplicationMessage,
-    appMsg
-  );
-
-  // DelegateKey has TWO fields: key bytes AND code_hash bytes
-  const delegateKey = new DelegateKeyT(delegateKeyBytes, delegateCodeHash);
-
-  const appMessages = new ApplicationMessagesT(delegateKey, [], [inbound]);
-  const delegateReq = new DelegateRequest(
-    DelegateRequestType.ApplicationMessages,
-    appMessages
-  );
-  const clientReq = new ClientRequestT(
-    ClientRequestType.DelegateRequest,
-    delegateReq
-  );
-
-  // sendRequest is a private method — access via cast
-  (api as any).sendRequest(clientReq);
-}
+const appMsg = new ApplicationMessageT(payload, [], false);
+const inbound = new InboundDelegateMsgT(InboundDelegateMsgType.common_ApplicationMessage, appMsg);
+// DelegateKey has TWO fields: key bytes AND code_hash bytes
+const delegateKey = new DelegateKeyT(delegateKeyBytes, delegateCodeHash);
+const delegateReq = new DelegateRequest(DelegateRequestType.ApplicationMessages,
+  new ApplicationMessagesT(delegateKey, [], [inbound]));
+// sendRequest is a private method, so reach it with a cast
+(api as any).sendRequest(new ClientRequestT(ClientRequestType.DelegateRequest, delegateReq));
 ```
 
 > **Warning — unstable API:** `(api as any).sendRequest(...)` reaches into a private SDK method because the public delegate-request builder is not exposed by the SDK. This cast may break on any minor SDK bump. Track [freenet-stdlib](https://github.com/freenet/freenet-stdlib) for a public `api.sendDelegateMessage()` (or equivalent) before relying on this in production.
 
-### Parsing Delegate Responses
-
-```typescript
-import { DelegateResponse } from "@freenetorg/freenet-stdlib";
-
-export function parseDelegateResponse(response: DelegateResponse): object[] {
-  const results: object[] = [];
-  if (!response.values) return results;
-
-  for (const outbound of response.values) {
-    // OutboundDelegateMsgType.common_ApplicationMessage = 1
-    if (outbound.inboundType !== 1) continue;
-
-    const msg = outbound.inbound as { payload?: number[] } | null;
-    if (!msg?.payload?.length) continue;
-
-    try {
-      const bytes = new Uint8Array(msg.payload);
-      const json = new TextDecoder().decode(bytes);
-      results.push(JSON.parse(json));
-    } catch (e) {
-      console.warn("Failed to parse delegate payload:", e);
-    }
-  }
-
-  return results;
-}
-```
+To read a response, iterate `DelegateResponse.values` and keep entries whose `inboundType` is `1` (`OutboundDelegateMsgType.common_ApplicationMessage`); the payload is `(entry.inbound as { payload?: number[] }).payload`.
 
 ### Pre-Decoded Key Bytes Pattern
 
-Derive the delegate key bytes and `code_hash` at build time from the built WASM (see freenet/raven's `Makefile.toml`, `build-identity-delegate`) and inject them as constants. Build the WASM through the canonical script into a throwaway target dir first (`build-system.md` → "Byte-reproducibility"), because a reused `target/` can silently change the bytes and this hash is compiled into the UI.
+Derive the delegate key bytes and `code_hash` at build time from the built WASM (see freenet/raven's `Makefile.toml`, `build-identity`) and inject them as constants. Build the WASM through the canonical script into a throwaway target dir first (`build-system.md` → "Byte-reproducibility"), because a reused `target/` can silently change the bytes and this hash is compiled into the UI.
 
 Vite injects these as `__DELEGATE_KEY_BYTES__` and `__DELEGATE_CODE_HASH_BYTES__` compile-time constants.
 
