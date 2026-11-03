@@ -87,7 +87,7 @@ CARGO_TARGET_DIR="$CRATE_DIR/target" fdev build
 '''
 ```
 
-**Deliberate rotation.** When you do want to rotate the contract ID (a contract upgrade), it is a small diff: change the dependency, rebuild, and pair the change with the migration recipe in `contract-patterns.md` (append the prior `CODE_HASH` to your `LEGACY_*_CODE_HASHES` list). The rotation is then explicit, reviewable and recoverable.
+**Deliberate rotation.** When you do want to rotate the contract ID (a contract upgrade), it is a small diff: change the dependency, rebuild, and pair the change with the migration in `upgrade-and-migration.md` → "Contract mechanics" (register the outgoing code hash in your legacy registry first). The rotation is then explicit, reviewable and recoverable.
 
 ## Contract ID reproducibility caveat
 
@@ -144,8 +144,6 @@ A contract's key is `BLAKE3(BLAKE3(wasm) || params)`, so a rebuild that changes 
   The nasty case is not a build that fails; it is a bundle built against a stale `target/` that derives perfectly self-consistent addresses for a contract nobody publishes to any more. That has happened. Cross-check the embedded bytes against the migration registry, not only against themselves.
 
 **Build-command footgun: always use the canonical build script.** Building a contract crate **alone** (`cargo build -p my-contract`) can produce *different* bytes than building it **co-built** with sibling crates, because cargo unifies feature flags across the crates in one invocation. River's `-p room-contract` alone and `-p room-contract -p chat-delegate` together yield different `room_contract.wasm` bytes for exactly this reason (a sibling enables an extra feature on a shared crate). Never rebuild a to-be-published contract with an ad-hoc `cargo build -p`; go through the project's canonical build script so the feature unification, and therefore the key, is stable.
-
-There is no node-level mechanism for carrying delegate secrets across a re-key today. Do not wait for one: migrate at the app level. Status is tracked in freenet-core#2776.
 
 ## Keep committed WASM and its identity together
 
@@ -360,7 +358,7 @@ Put the check in the canonical build script, so it runs on the path `publish` ac
 
 ## Testing with local mode
 
-1. **Unit tests** for state logic: no node. Commutativity tests (`contract-patterns.md`), serialization round-trips, validation.
+1. **Unit tests** for state logic: no node. Merge-law tests (`merge-law-compliance.md` → "Testing"), serialization round-trips, validation.
 2. **`freenet local`** for contract state logic and UI wiring: a standalone executor, WebSocket API at `127.0.0.1:7509`, operations complete immediately, subscribe is a no-op. **Do not use it to test a delegate's contract access.** A delegate's contract GET/PUT/UPDATE/SUBSCRIBE, notifications and wake-ups silently do nothing there; that needs `freenet network` (see the `local-dev` skill and `delegate-patterns.md`, "`freenet local` Does Not Run the Delegate Contract Loop").
 3. **`fdev test --nodes N single-process`** for network behavior: simulated nodes in one process. Flags go before `single-process`.
 
