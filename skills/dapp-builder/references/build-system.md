@@ -61,6 +61,13 @@ publish     = false
 # crate's own target/ and not the UI workspace's.
 [workspace]
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["freenet-main-contract"]
+freenet-main-contract = []
+
 [dependencies]
 freenet-stdlib = { version = "=<ver>", features = ["contract"] }
 serde          = { version = "=<ver>", features = ["derive"] }
@@ -76,7 +83,7 @@ description = "Build the inbox contract WASM (lockfile-isolated)"
 script = '''
 CRATE_DIR="${CARGO_MAKE_WORKING_DIRECTORY}/contracts/inbox"
 cd "$CRATE_DIR"
-CARGO_TARGET_DIR="$CRATE_DIR/target" fdev build --features contract
+CARGO_TARGET_DIR="$CRATE_DIR/target" fdev build
 '''
 ```
 
@@ -144,6 +151,66 @@ There is no node-level mechanism for carrying delegate secrets across a re-key t
 
 Whatever directories hold committed `.wasm` files, a change to one must travel in the same commit as the contract-id file and, for a contract or delegate that already has users, the registry entry for the outgoing hash (see `upgrade-and-migration.md`). A stray `.wasm` added elsewhere is either a forgotten build artifact or snapshot drift the author did not notice, and both cost users access to old state. Enforce this in the publish task and in CI (see "Pre-Publish Checks"); a local git hook is optional.
 
+## Project layout
+
+### Dioxus (Rust) UI
+
+```
+my-dapp/
+├── common/                    # Shared types between contract/delegate/UI
+│   └── src/
+│       ├── lib.rs
+│       └── state/            # State definitions
+├── contracts/                 # one subdirectory per contract crate
+│   ├── room-contract/
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs        # ContractInterface implementation
+│   └── profile-contract/      # add more as the app grows
+│       └── ...
+├── delegates/                 # one subdirectory per delegate crate
+│   ├── chat-delegate/
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs        # DelegateInterface implementation
+│   └── identity-delegate/     # add more as the app grows
+│       └── ...
+├── ui/
+│   ├── Cargo.toml
+│   ├── Dioxus.toml
+│   └── src/
+│       ├── main.rs
+│       └── components/
+├── Cargo.toml                # Workspace root
+└── Makefile.toml             # cargo-make build tasks
+```
+
+### TypeScript + Vite UI
+
+```
+my-dapp/
+├── contracts/
+│   └── my-contract/
+│       ├── Cargo.toml
+│       └── src/lib.rs        # ContractInterface implementation
+├── delegates/
+│   └── my-delegate/
+│       ├── Cargo.toml
+│       └── src/lib.rs        # DelegateInterface implementation
+├── web/
+│   ├── package.json
+│   ├── vite.config.ts         # Injects contract/delegate keys at build time
+│   ├── tsconfig.json
+│   ├── index.html
+│   └── src/
+│       ├── index.ts           # Entry point, connection flow
+│       ├── freenet-api.ts     # FreenetWsApi wrapper
+│       ├── delegate-api.ts    # Delegate FlatBuffers message building
+│       ├── identity.ts        # Identity management (delegate + fallback)
+│       ├── types.ts           # Shared TypeScript types
+│       └── components/        # UI components
+├── Cargo.toml                 # Workspace root (contracts + delegates)
+└── Makefile                   # Build orchestration
+```
+
 ## Project Cargo.toml (workspace root)
 
 ```toml
@@ -157,11 +224,67 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Use the versions River pins: https://github.com/freenet/river/blob/main/Cargo.toml
+# Versions: see "Dependencies" below.
 freenet-stdlib = { version = "<ver>", features = ["contract"] }
+freenet-scaffold = "<ver>"
+freenet-scaffold-macro = "<ver>"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
+
+## Dependencies
+
+Put every crate in an app on one stdlib line. A WASM cannot link two stdlibs
+(`__frnt_set_id` is an unconditional export), and `freenet-migrate` fixes the line:
+
+| `freenet-migrate` | `freenet-stdlib` |
+|---|---|
+| 0.8.x | 0.12.x |
+| 0.7.x and older | 0.8.x |
+
+A new app starts on the newest of both; check crates.io. On a live app a stdlib bump is
+a re-key, so follow `upgrade-and-migration.md`. River is on stdlib 0.8.5 with
+`freenet-migrate` 0.7, which is the path for an app not yet ready to re-key.
+
+Below stdlib 0.11.0 a delegate crate exposes `DelegateCtx` write and subscribe methods
+no node implements: calling one compiles, publishes, and fails at module instantiation.
+Manifest lifecycle events need 0.12.0 and `wakeups` need 0.12.1.
+
+**Crate features.** Contract and delegate crates both use stdlib's `contract` feature;
+there is no `delegate` feature. The UI adds `net`, which pulls in `WebApi`. The
+`#[contract]` and `#[delegate]` macros gate their WASM exports on a feature of your own
+crate, `freenet-main-contract` or `freenet-main-delegate`. Declare it and enable it by
+default: a plain `cargo build` without it succeeds and the WASM exports nothing, and
+`fdev build` passes the feature, which cargo refuses if the crate does not declare it.
+
+```toml
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["freenet-main-contract"]   # "freenet-main-delegate" in a delegate crate
+freenet-main-contract = []
+```
+
+**No `rand` or `getrandom` in a contract or delegate crate.** They leave imports the
+node cannot resolve at instantiation (freenet/river#241). A UI crate is different: it
+needs `getrandom`'s `js` feature (`ui-patterns.md`).
+
+**TypeScript UI.** Depend on `"@freenetorg/freenet-stdlib": "^0.4.0"` or newer. A caret
+on a 0.x version pins the minor, so an older range never reaches the 0.4.0 behaviour
+`ui-patterns.md` relies on.
+
+**Moving up from an older stdlib.** Read the compiler's deprecation warnings, because a
+`-D warnings` build fails on them.
+
+- 0.8.0 removed `DEFAULT_CIPHER` and `DEFAULT_NONCE`, so code naming them no longer
+  compiles. The `cipher` and `nonce` fields of `DelegateRequest::RegisterDelegate`
+  remain only for wire compatibility. The node discards them, so any fixed-size bytes
+  work, zeros included.
+- 0.6 to 0.8 (no 0.7 was published) added `#[non_exhaustive]` to wire enums, so matches
+  need wildcard arms.
+- 0.8.5 deprecated `ContractInstanceId::from_bytes` for `from_base58`, which parses
+  base58 text. For raw 32 bytes use `ContractInstanceId::new([u8; 32])`.
 
 ## `fdev publish`: contracts vs delegates
 
