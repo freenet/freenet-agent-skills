@@ -48,508 +48,76 @@ impl ContractInterface for MyContract {
 }
 ```
 
-## State Types
+## Composable State
 
-```rust
-// Contract state - arbitrary byte array
-pub struct State<'a>(Cow<'a, [u8]>)
+River builds state with `freenet-scaffold` (`use freenet_scaffold_macro::composable;`).
+`#[composable]` generates `verify`, `summarize`, `delta` and `apply_delta` from each
+field's `ComposableState` impl, and applies fields in declaration order, so a field
+that reads another during `apply_delta` must be declared after it. See River's
+`common/src/room_state.rs`.
 
-// State modification - like a diff/patch
-pub struct StateDelta<'a>(Cow<'a, [u8]>)
-
-// Compact summary for synchronization
-pub struct StateSummary<'a>(Cow<'a, [u8]>)
-
-// Configuration passed at contract creation
-pub struct Parameters<'a>(Cow<'a, [u8]>)
-```
-
-## Update Types
-
-```rust
-pub enum UpdateData<'a> {
-    State(State<'a>),                    // Full state replacement
-    Delta(StateDelta<'a>),               // Incremental update
-    StateAndDelta { state, delta },      // Both for verification
-    RelatedState { related_to, state },  // From another contract
-    RelatedDelta { related_to, delta },
-    RelatedStateAndDelta { ... },
-}
-```
-
-## Validate Results
-
-```rust
-pub enum ValidateResult {
-    Valid,
-    Invalid,
-    RequestRelated(Vec<RelatedContract>),  // Need other contract state
-}
-```
-
-## Composable State Pattern
-
-River uses `freenet-scaffold` for modular state management. The `#[composable]` macro generates boilerplate for:
-- State verification
-- Delta computation
-- Delta application
-- State summarization
-
-### Example: Room State Structure
-
-```rust
-use freenet_scaffold::composable;
-
-#[composable]
-pub struct ChatRoomStateV1 {
-    pub configuration: AuthorizedConfigurationV1,  // Room settings
-    pub bans: BansV1,                               // Banned members
-    pub members: MembersV1,                         // Member list
-    pub member_info: MemberInfoV1,                  // Nicknames, metadata
-    pub secrets: RoomSecretsV1,                     // Encrypted secrets
-    pub recent_messages: MessagesV1,                // Chat messages
-    pub upgrade: OptionalUpgradeV1,                 // Contract upgrade
-}
-```
-
-### ComposableState Trait
-
-Each field implements this trait:
-
-```rust
-pub trait ComposableState {
-    type ParentState;
-    type Summary;
-    type Delta;
-    type Parameters;
-
-    fn verify(
-        &self,
-        parent: &ParentState,
-        params: &Parameters
-    ) -> Result<(), String>;
-
-    fn summarize(
-        &self,
-        parent: &ParentState,
-        params: &Parameters
-    ) -> Summary;
-
-    fn delta(
-        &self,
-        parent: &ParentState,
-        params: &Parameters,
-        summary: &Summary
-    ) -> Option<Delta>;
-
-    fn apply_delta(
-        &mut self,
-        parent: &ParentState,
-        params: &Parameters,
-        delta: &Option<Delta>
-    ) -> Result<(), String>;
-}
-```
-
-### Decide What One Bad Entry in a Delta Does
-
-The shape that writes itself — loop over the incoming entries, mutate `self` as
-you go, `return Err(..)` on the first one that fails — is neither of the two
-safe designs, and it was wrong in **three of three** composable state types in
-one app.
-
-Pick one deliberately:
-
-- **Atomic.** Validate every entry first, commit only if all pass (or apply into
-  a clone and swap on success). Right when the entries are one indivisible
-  update from one author.
-- **Filtering.** Drop the entries that do not authorize and apply the rest.
-  Right when entries are independently signed by *different* parties — which is
-  the common case for a mailbox, a member list, or a message log.
-
-**For independently-signed entries, atomic is a denial vector.** One crafted
-entry refuses every legitimate entry travelling with it, and if that entry ever
-lands in state, every subsequent apply fails against it and the instance stops
-accepting updates for good. That is how a single write with no key permanently
-killed a mailbox in the app above. The same trap sits in any *fold* over
-generations: returning on the first refused record discards everything else the
-predecessor held (see `upgrade-and-migration.md` → "A New Version Must Accept
-Old State", where exactly that cost a seller their whole store).
-
-Four details that ride along with the same loop:
-
-- **Do not leave a partial mutation behind.** `freenet-scaffold`'s derive
-  propagates an `Err` and stdlib's `inner_update_state` returns without
-  serializing, so the mutated value is dropped there — but that is a property of
-  *that caller*. A client-side fold, a migration merge, or a hand-rolled
-  `update_state` that logs the error and carries on commits whatever the loop
-  left half-done.
-- **Do not snapshot the "already held" set before the loop.** Build it from the
-  state as it grows, or two entries in the *same* delta that collide on the
-  dedup key both pass — the check answers against a state that no longer exists
-  by the time the second entry is applied.
-- **`apply_delta` is a merge, so it must be idempotent and order-independent
-  like every other merge path.** A delta that appends, or that mutates a
-  counter, breaks the laws just as surely inside `apply_delta` as inside a
-  whole-state merge. Note the constraint this puts on the "filtering" choice:
-  what must be order-independent is the loop's **result**, not each predicate's
-  answer. A filter that reads only the entry is trivially safe; one that reads
-  how full the state has got is not. The one that catches people out is
-  authorization, because it usually reads state: "is this author a member?"
-  answers differently depending on whether *add member M* has been applied yet,
-  and not only within one delta, since the two facts can arrive in separate
-  deltas in either order. Three shapes converge:
-
-  - **Depend on the record closer to the authority, inside the one canonical
-    cleanup.** Let the message depend on its author's member record, drop it
-    when that record is absent, and decide that in the cleanup that runs over
-    the whole merged state, so a whole-state merge is a function of the union of
-    the two states. Every delta must then carry the records its entries
-    depend on, including a delta a client builds for an UPDATE, or a node that
-    applies it before the member record drops the message. In freenet-core
-    today the node the client is connected to applies the client's delta, and
-    what travels on to other peers is the merged state or a delta your
-    `get_state_delta` computed against the receiving peer's summary. See
-    `merge-law-compliance.md`, rule 6 and "A trimmed network delta must make
-    progress every round".
-  - **Carry the authorization proof in the entry** (a signed invite chain rooted
-    in the contract's parameters), which turns the predicate back into one that
-    reads only the entry.
-  - **Keep the entry and authorize at read time**, so the merge is a plain union
-    and the question "is this author a member?" is answered by a view over the
-    merged state rather than by whether the loop had got to *add M* yet.
-
-  Making membership add-only is worth doing but does **not** by itself fix this.
-  It makes *acceptance* stable (once a message is in, it stays in), so a peer
-  that dropped it can pick it up again through anti-entropy. A delta that drops
-  the message because its author's record has not arrived yet still gives a
-  different result in one order than in the other.
-- **Dedup-as-you-go is the same shape with a happier ending.** Its answers *are*
-  order-dependent, yet the result is not — **provided the id covers every term of
-  the record** (see "Record Identity"), because two entries sharing an id are
-  then byte-for-byte the same entry and which one survives cannot matter. Note
-  how much work "every term" is doing: an id hashing only *some* of the record is
-  content-derived and still leaves two different entries under one id, so the
-  result depends on order again. A writer-supplied id fails the same way.
+One crafted entry must not refuse a whole delta. See `merge-law-compliance.md` →
+"Applying a delta: decide what one bad entry does".
 
 ## The Delta to an Up-to-Date Peer
 
-When a peer's summary shows it already holds everything your state has, the delta
-you owe it carries no information, and its size has to reflect that. Three tiers:
+When a peer's summary shows it already holds everything you have, the delta carries
+no information.
 
-- **MUST NOT** return a delta that contains the state, or whose size approaches
-  the state's. This is the real defect.
-- **SHOULD** return a literally empty `StateDelta` (`vec![]`, zero bytes). It is
-  the unambiguous "converged" answer, and it is what `freenet-scaffold` gives you
-  for free.
-- **Acceptable:** a small fixed amount of encoding framing, the tens of bytes you
-  get from serializing a delta struct whose fields are all empty. Prefer zero,
-  but this is not a bug and the network will not penalise it.
+- **MUST NOT** return the state, or anything near its size. Read the `summary`
+  argument.
+- **SHOULD** return a literally empty `StateDelta` (`vec![]`). Core treats a zero-byte
+  result as converged even when the summary bytes differ; anything else reads as "this
+  peer is stale" and gets sent. `freenet-scaffold`'s `#[composable]` collapses an
+  all-`None` delta to `None`. A hand-rolled delta struct serializes to framing bytes,
+  so collapse it to `vec![]` before encoding.
+- **Acceptable:** tens of bytes of framing. What matters is delta size relative to
+  state size.
 
-What matters is delta size **relative to state size**, not the exact byte count.
-Twenty bytes against a 500 KB state is fine. A state-sized delta is not. Those
-are five orders of magnitude apart, and no encoding choice moves a contract
-across that gap.
+`summarize_state(S)` must be far smaller than `S`. A contract that ignores the summary
+and returns its whole state, with a summary that copies the state, re-ships everything
+on every reconciliation (freenet-core#5056). `fdev verify-merge` reports
+`self_delta_empty` and `whole_state_self_delta` as diagnostics, which never fail the
+command.
 
-Peers reconcile by exchanging summaries and asking each other for deltas. Core's
-converged test has two steps: byte-identical summaries count as converged
-outright, and when the summary bytes differ, core runs your `get_state_delta`
-against that peer's summary and treats a zero-byte result as converged. Your
-contract answers the second question.
-
-That is what the three tiers are measuring. A delta that is empty in meaning but
-not in bytes still fails the second check, so core reads "this peer is stale" and
-sends it; at a few tens of bytes that is cheap, which is why it is tolerable. A
-state-sized delta fails the same check while costing the entire state, on every
-reconciliation, forever.
-
-### Aim for zero bytes
-
-Zero is worth aiming for because it is the only result that passes core's second
-check. Note that "empty" here means zero bytes rather than "a struct whose fields
-are all empty": serializing an all-`None` delta struct still costs about a byte
-per field with bincode, and tens of bytes with CBOR, because ciborium writes the
-field names.
-
-```rust
-// Returns bytes even with nothing to send, so this never gives the converged signal.
-let delta = MyStateDelta {
-    members: None,
-    messages: None,
-    config: None,
-};
-let mut delta_bytes = vec![];
-into_writer(&delta, &mut delta_bytes)?;   // 28 bytes of CBOR framing, not 0
-Ok(StateDelta::from(delta_bytes))
-```
-
-```rust
-// Better: collapse "no changes" to zero bytes before serializing.
-match my_state.delta(&my_state, &parameters, &summary) {
-    Some(d) => {
-        let mut delta_bytes = vec![];
-        into_writer(&d, &mut delta_bytes)?;
-        Ok(StateDelta::from(delta_bytes))
-    }
-    None => Ok(StateDelta::from(vec![])),
-}
-```
-
-**Whether you get the first shape or the second depends on how you built your
-state.** With `freenet-scaffold`, the `#[composable]` derive does the collapse for
-you: the generated `delta()` checks whether every field's delta is `None` and
-returns `None` for the whole struct if so, which is what makes the `match` above
-work. That is why River returns zero bytes. If you hand-roll `get_state_delta`,
-or compose state without the derive, your delta type is probably a plain struct
-that is never `None`, so you get the framing bytes unless you add the collapse
-yourself. That is tolerable rather than broken, but the collapse is two lines, so
-add it.
-
-Two related rules:
-
-- **Read the `summary` argument.** A `get_state_delta` that ignores it and
-  returns the whole state is the MUST NOT case.
-- **`summarize_state(S)` must be far smaller than `S`.** A summary the size of
-  the state defeats delta computation entirely, and a summary that is a copy of
-  the state is always a bug.
-
-Pin all of this with a test. Assert the size bound, which is the requirement, and
-tighten to `== 0` only if your contract collapses to an empty delta:
-
-```rust
-#[test]
-fn delta_to_an_up_to_date_peer_is_negligible() {
-    let state = /* a populated state */;
-    let summary = MyContract::summarize_state(params.clone(), state.clone()).unwrap();
-    let delta = MyContract::get_state_delta(params, state.clone(), summary.clone()).unwrap();
-
-    // The requirement: no state, nothing close to state-sized. 256 bytes leaves
-    // room for encoding framing on a wide struct and is still orders of
-    // magnitude below any real state.
-    assert!(
-        delta.size() < 256,
-        "delta to an up-to-date peer was {} bytes against a {} byte state",
-        delta.size(),
-        state.as_ref().len()
-    );
-    assert!(
-        summary.size() < state.as_ref().len() / 4,
-        "summary must be much smaller than state"
-    );
-}
-```
-
-Getting the MUST NOT wrong is expensive for the whole network, not only for your
-app. One contract live on Freenet today never reads the summary and returns its
-whole state as the delta, 25,403 bytes against a 24,832-byte state, and its
-`summarize_state` returns a full copy of the state as well, so every comparison
-mismatches and every reconciliation re-ships everything. It accounts for 55.6% of
-all broadcast sends on the network, from a static page that has not changed since
-February ([freenet/freenet-core#5056](https://github.com/freenet/freenet-core/issues/5056)).
-Core is adding a probe for this, so a contract that ships state to peers that
-already have it will end up suppressed rather than merely slow.
+Pin it with a test: for a populated state, assert that
+`get_state_delta(state, summarize_state(state))` is negligible (under 256 bytes, or
+`== 0` if you collapse) and that the summary is well under the state's size.
 
 ## Merge Law Requirements
 
-Aim for contract state that forms a **join-semilattice** under the merge
-operation: a commutative monoid that is also **idempotent**. This means:
+`update_state` is the merge: core applies an incoming full state as
+`update_state(current, [UpdateData::State(incoming)])`. Aim for a join-semilattice:
+associative, commutative and idempotent, so peers converge whatever order updates
+arrive in. An empty state `I` with `merge(A, I) == A` is a design convenience the
+network does not check, and it does not imply idempotence: a merge that appends
+rather than unions passes it and fails `merge(A, A) == A`.
 
-1. **Associativity:** `merge(merge(A, B), C) == merge(A, merge(B, C))`
-2. **Commutativity:** `merge(A, B) == merge(B, A)`
-3. **Idempotence:** `merge(A, A) == A`
-4. **Identity:** There exists an empty/initial state `I` where `merge(A, I) == A`
-   (a design convenience; the network does not check it)
+Delivery is at-least-once, so re-delivery is the case you cannot avoid: a merge that
+changes the state on re-application produces an endless stream of "new" states to
+gossip.
 
-This ensures that regardless of the order peers receive and apply updates, they all converge to the same final state.
+`merge-law-compliance.md` states the laws as the network checks them, including what
+a cap or eviction may do, and the tests to write. Every contract should have them.
+Common causes of a commutativity failure: random or clock-read tie-breakers, `Vec`
+where order matters, and keeping only "newer" items without a conflict rule.
 
-A contract whose cap or eviction can free a slot (through a removal or a raised cap) may not be strictly associative; the network accepts that only when the two groupings converge (freenet-core#5924). Test absorption, `merge(merge(A, B), B) == merge(A, B)`, directly as well: the network checks it only inside that convergence step. See `merge-law-compliance.md` for the exact rules and for how caps, removals, work bounds and summaries break them.
-
-**Idempotence and absorption are the ones the network gives you no way to
-avoid.** Delivery is at-least-once: the same state or delta legitimately
-arrives more than once, after a retry, a re-subscribe, or anti-entropy healing a
-divergence. A merge that changes the state when re-applied therefore never
-settles — each redelivery mutates it again, which produces an endless stream of
-"new" states to gossip and a contract that cannot converge no matter how healthy
-the network is.
-
-This is not hypothetical. Freenet telemetry attributed the largest single source
-of network traffic to contracts whose merges do not converge (freenet-core
-#5153); the deployed contracts it examined had last-write-wins and mutually
-rejecting merges, which break commutativity. Note that identity
-(`merge(A, I) == A`) does *not* imply idempotence (`merge(A, A) == A`): a merge
-that appends rather than unions satisfies the first and fails the second.
-
-### Testing Commutativity
-
-**Every contract should have unit tests verifying these properties.** Use property-based testing for thorough coverage:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-
-    // Generate arbitrary valid states for testing
-    fn arb_state() -> impl Strategy<Value = MyState> {
-        // Define how to generate random valid states
-        (any::<u64>(), any::<String>()).prop_map(|(id, data)| {
-            MyState { id, data }
-        })
-    }
-
-    proptest! {
-        /// Merging in any order produces the same result
-        #[test]
-        fn merge_is_commutative(a in arb_state(), b in arb_state()) {
-            let ab = a.clone().merge(&b);
-            let ba = b.clone().merge(&a);
-            prop_assert_eq!(ab, ba);
-        }
-
-        /// Grouping doesn't matter: (A merge B) merge C == A merge (B merge C).
-        /// Expect strict equality only when no cap can free a slot through a
-        /// removal or a raised cap. For a merge with such a cap, the network
-        /// checks the heal-guarded form in `merge-law-compliance.md`; run
-        /// `fdev verify-merge` on your states to check it.
-        #[test]
-        fn merge_is_associative(a in arb_state(), b in arb_state(), c in arb_state()) {
-            let ab_c = a.clone().merge(&b).merge(&c);
-            let a_bc = a.clone().merge(&b.clone().merge(&c));
-            prop_assert_eq!(ab_c, a_bc);
-        }
-
-        /// Merging a state with itself changes nothing.
-        #[test]
-        fn merge_is_idempotent(a in arb_state()) {
-            prop_assert_eq!(a.clone().merge(&a), a);
-        }
-
-        /// Re-delivering the same state changes nothing (absorption).
-        ///
-        /// Delivery is at-least-once, so this WILL happen in production. Merge
-        /// twice as well as once: a merge that only settles after one application
-        /// passes a naive test and still fails here.
-        #[test]
-        fn merge_absorbs_redelivery(a in arb_state(), b in arb_state()) {
-            let once = a.clone().merge(&b);
-            let twice = once.clone().merge(&b);
-            prop_assert_eq!(once, twice);
-        }
-
-        /// Merging with empty state returns original
-        #[test]
-        fn merge_identity(a in arb_state()) {
-            let empty = MyState::default();
-            let merged = a.clone().merge(&empty);
-            prop_assert_eq!(merged, a);
-        }
-    }
-
-    /// Test with specific edge cases
-    #[test]
-    fn merge_concurrent_updates() {
-        let base = MyState::new();
-
-        // Simulate two peers making different updates
-        let mut peer_a = base.clone();
-        peer_a.add_item(Item { id: 1, value: "from A" });
-
-        let mut peer_b = base.clone();
-        peer_b.add_item(Item { id: 2, value: "from B" });
-
-        // Both merge orders should produce identical results
-        let a_then_b = peer_a.clone().merge(&peer_b);
-        let b_then_a = peer_b.clone().merge(&peer_a);
-
-        assert_eq!(a_then_b, b_then_a);
-        assert!(a_then_b.has_item(1));
-        assert!(a_then_b.has_item(2));
-    }
-
-    /// Test delta round-trip
-    #[test]
-    fn delta_summary_roundtrip() {
-        let state_a = /* ... */;
-        let state_b = /* state_a with some updates */;
-
-        let summary_a = state_a.summarize();
-        let delta = state_b.delta(&summary_a);
-
-        let mut reconstructed = state_a.clone();
-        reconstructed.apply_delta(&delta);
-
-        assert_eq!(reconstructed, state_b);
-    }
-}
-```
-
-### Common Commutativity Bugs
-
-1. **Non-deterministic tie-breakers:** Using random values, or a timestamp read
-   from the host clock at merge time. Reading the clock inside a merge is
-   deprecated outright as of freenet-core v0.2.132 — see "WASM Environment
-   Utilities" below and `state-authorization-patterns.md` → "Time Handling".
-2. **Order-dependent collections:** Using `Vec` where order matters instead of `BTreeMap`/`BTreeSet` (not `HashMap`; see below)
-3. **Mutation during iteration:** Modifying state while iterating can produce different results
-4. **Missing items in merge:** Only keeping "newer" items without proper conflict resolution
-
-> **The same rule applies to your STATE, and it is a requirement rather than a
-> tip.** Freenet peers decide whether they have converged by comparing state
-> *bytes*, so two peers holding the same logical state in a different byte order
-> never recognise each other as converged and heal forever. A `HashMap` (or
-> `HashSet`) anywhere in your state type serializes in iteration order, which
-> depends on insertion history, which depends on the order updates happened to
-> arrive — so the same merge on two peers yields different bytes. **Use
-> `BTreeMap`/`BTreeSet`, or sort before serializing, everywhere in state and
-> summaries alike.**
->
-> This is why the merge laws above are checked on exact bytes: canonical encoding
-> is a platform requirement (freenet-core #5320), not a nicety. A contract that
-> merges correctly but encodes non-canonically will be reported as breaking
-> commutativity, and the conformance checker will tell you which of the two it is —
-> the finding says so explicitly when both results hold the same bytes in a
-> different order.
->
-> The checker is `fdev verify-merge`, and it is worth running before you believe
-> any of the claims in this section about your own contract:
->
-> ```bash
-> fdev verify-merge --wasm your_contract.wasm --params params.bin \
->   --state s1.bin --state s2.bin
-> ```
->
-> Pass the contract's parameters with `--params`: without it fdev uses empty
-> parameters, a contract whose parameters do not decode from empty bytes, or
-> fail its checks, rejects or fails on every state, every case comes back
-> inconclusive, and the command still exits 0.
->
-> Give it a corpus (`--state` samples, `--transition BASE RESULT` pairs, or a
-> `--bundle`) and it exercises the laws against real states. It also emits
-> **code diagnostics** that need no corpus at all — `host_clock_import` is the one
-> to watch for, reported when the module imports the host clock (see "WASM
-> Environment Utilities"). A code diagnostic never changes the exit status: it
-> describes the code, it is not a failing law.
-
-> **Determinism matters in your `Summary` type too, for the same reason.** A
-> `HashMap` inside a `Summary` (or anything `summarize` returns) serializes in
-> nondeterministic order, so two identical states can produce different summary
-> bytes. Core compares summaries byte-for-byte to decide whether two peers have
-> converged, so nondeterministic bytes make that check misfire (spurious or
-> missed heals). Use `BTreeMap` in Summaries. This interacts with a current-core
-> propagation limitation where an update to a rarely-changing field can lag
-> between peers (freenet/freenet-core#4857); see "Known limitation: a
-> rarely-changing field can lag between peers" in `SKILL.md`.
+**Canonical encoding is a requirement.** Peers decide they have converged by
+comparing bytes, and the laws are checked on exact bytes, so two peers holding the
+same logical state in a different byte order heal forever. A `HashMap` or `HashSet`
+serializes in iteration order, which differs across peers. Use `BTreeMap`/`BTreeSet`,
+or sort before serializing, in state and in summaries. A contract that merges
+correctly but encodes non-canonically is reported under commutativity, and the
+finding says so when both results hold the same bytes in a different order. To
+check, see `merge-law-compliance.md` → "Testing".
 
 ## Commutativity Strategies
 
 ### 1. Set-Based Operations
 
 ```rust
-// Members stored as a set - adding/removing is commutative.
-// BTreeMap, not HashMap: state is compared byte-for-byte across peers, and a
-// HashMap serializes in insertion order, so two peers that received the same
-// members in a different order would encode the same set differently and never
-// converge.
+// Members stored as a set: adding is commutative. BTreeMap, not HashMap, so the
+// encoding does not depend on iteration order.
 pub struct MembersV1 {
     members: BTreeMap<VerifyingKey, SignedMember>,
 }
@@ -582,8 +150,9 @@ pub struct MessageId {
 ```
 
 The timestamp here comes from the **author's signed payload**, carried in the
-state — never from `freenet_stdlib::time::now()` inside the merge. It orders and
-ranks; it is an untrusted hint, so don't build eviction or expiry on it.
+state, never from `freenet_stdlib::time::now()` inside the merge. It is an untrusted
+hint: it may rank an author's own records, and must not decide whose records are
+evicted.
 
 **Note what `MessageId` above does and does not bind.** It identifies a message
 by its author and position, not by its content, so the same author can sign two
@@ -735,7 +304,7 @@ pub struct RoomParameters {
     pub room_id: [u8; 32],
 }
 
-// Contract key = hash(wasm_code || parameters)
+// Contract key = BLAKE3(BLAKE3(wasm) || parameters)
 // Different parameters = different contract instance
 ```
 
@@ -758,35 +327,13 @@ shareable "address", store only a short hash of the key in parameters and put
 the full key in state, with `validate_state` checking that the key hashes to the
 parameter. See `identity-and-addressing.md` for the full pattern.
 
-## WASM Environment Utilities
+## WASM Environment
 
-```rust
-// Logging (links to host)
-freenet_stdlib::log::info(&format!("Processing update: {:?}", data));
-
-// Random numbers
-let bytes = freenet_stdlib::rand::rand_bytes(32);
-
-// Current time — DELEGATES ONLY.
-// Deprecated for contracts as of freenet-core v0.2.132, and staged to trap.
-let now: DateTime<Utc> = freenet_stdlib::time::now();
-```
-
-**A contract must not call `freenet_stdlib::time::now()`.** `update_state` has to
-be a function of its inputs or replicas cannot be guaranteed to converge, so a
-merge that reads the wall clock isn't merely breaking the merge laws — they stop
-being well-formed statements about it. As of freenet-core v0.2.132 a node warns
-when it loads a contract importing the clock and `fdev verify-merge` reports a
-`host_clock_import` diagnostic; nothing traps *yet*, but the call is staged to
-**trap** (freenet-core#5465). Carry a client-signed timestamp in state and
-enforce only monotonicity instead. Delegates are unaffected — private per-node
-state, never replicated, no merge laws. Full treatment, including what the swap
-costs you, is in `state-authorization-patterns.md` → "Time Handling".
-
-The same determinism requirement applies to `rand_bytes` even though it is not
-deprecated: randomness drawn inside `update_state`, `summarize_state` or
-`get_state_delta` makes the result depend on which peer evaluated it. Use it for
-key generation and nonces on the client side, not inside a merge.
+A contract must not read the host clock (`state-authorization-patterns.md` → "Time
+Handling"). The same requirement applies to `freenet_stdlib::rand::rand_bytes`, though
+it is not deprecated: randomness drawn inside `update_state`, `summarize_state` or
+`get_state_delta` makes the result depend on which peer evaluated it. Use it on the
+client side for key generation and nonces, not inside a merge.
 
 ## Contract WASM Upgrade & State Migration
 
@@ -1247,71 +794,6 @@ underneath is still app-side, with the app carrying the export across
 `delegate-patterns.md` → "Delegate secret migration: no core mechanism, and
 why" for the full history and current guidance). Tracked live under
 [freenet-core#2776](https://github.com/freenet/freenet-core/issues/2776).
-
-## Tests That Would Have Caught It
-
-A green suite says nothing about how many of its tests *could* have gone red.
-Three habits, each of which caught something a full suite and a review round had
-already passed.
-
-- **Deletion is the weakest mutation; substitute a wrong-but-plausible
-  implementation instead.** Deleting a check usually fails something. Replacing
-  it with the check a careful person would have written by mistake — comparing
-  the wrong field, taking the first match instead of the only match, ordering by
-  the wrong key — usually does not, and that is the version that ships.
-  Automated mutation tools mostly replace whole function bodies and flip
-  operators, a crude kind of mutation, so they supplement
-  these hand-written mutants rather than replace them; for merge code, see
-  `merge-law-compliance.md` → "Testing", which also covers branch coverage of
-  the fuzzer.
-- **Test a guard against a *simulated future change*, not against the bug you
-  already fixed.** The two are different inputs, and only the first exercises
-  what the guard is for. `upgrade-and-migration.md` → "Test the upgrade path, not just the new version"
-  has the canonical case, a derivation pin, where getting this backwards
-  produces a test that fires on nothing.
-- **A comment asserting a safety property is a claim, not evidence.** Twelve
-  comments in one review round asserted properties the code did not have. How it
-  happens, in one author's words: *"the comment was a conclusion, not a check"* —
-  true of the thing they were reasoning about, never turned around and asked what
-  else in the function could break it. Each such sentence is a test you have not
-  written, or a claim to delete.
-
-### A worked example, from this document
-
-The shape that costs the most is not a claim that is obviously shaky. It is one
-whose **premise is true, whose wording is confident, and whose inference does not
-follow** — because nothing about reading it suggests checking.
-
-This file's own guidance on capping state took six adversarial passes, and five
-of them found that the previous round's fix had introduced a new error of exactly
-that shape. Two are worth keeping:
-
-- *"The host commits the output of `update_state` without re-validating it."*
-  Produced by grepping for the literal `validate_state` in the executor, finding
-  two call sites, and concluding there were only two. The real call is routed
-  through a helper. **When the claim is about platform behaviour, read the call
-  graph, not the string** — and note that a *confident correction* is trusted
-  more than the thing it corrects, so getting one wrong costs more than the
-  original error did.
-- *"A merge is a join, so it never shrinks the state, and nothing can repair it."*
-  The premise is true and the conclusion is false: a join is monotone in the
-  **lattice** order, not in item count, and adding a tombstone is a perfectly
-  lawful join that shrinks the materialised set. The counterexample was two
-  hundred lines up in the same file the sentence was written into.
-
-Both read as rigorous. Neither would have been caught by any test of the code
-they described, because they were claims *about* code rather than claims in it —
-which is the whole reason the bullets above ask you to state what input would
-turn each one red.
-
-There is a cheaper defence than getting such claims right, and it is the one
-this file now applies to itself: **a rule does not expire; a claim about
-mechanism does.** "Bound it in `update_state`" holds for as long as contracts
-have that function. Every sentence describing which internal function calls which,
-in what order, is true only until the platform changes — and nobody re-reads a
-document to check. So write the rule, write the shortest reason that makes it
-stick, and point at the source for the rest. Both errors above were in the part
-that should have been a pointer.
 
 ## River Contract Reference
 
