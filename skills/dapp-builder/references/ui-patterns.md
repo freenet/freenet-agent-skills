@@ -68,6 +68,23 @@ even though it names a different contract than the one serving the page:
 
 A contract used purely as an asset store doesn't need an `index.html`; it can just be a bundle of static files addressed by key.
 
+## Author Contact and Source
+
+Show every user a way to reach the author and find the source, in a footer or About page, from
+the first release. Many people only ever see that version. Without it nobody can report a bug
+or audit what the app does with their data. Any one of these is enough:
+
+- **Source repository:** if open source, the exact repo the published WASM was built from.
+- **Email:** a pseudonymous address is fine.
+- **River member ID,** with the full verifying key from River's member info panel. The short ID
+  is a 40-bit truncation two members can share, so alone it can be impersonated.
+
+A pseudonymous channel counts: the aim is a channel to the author, not their identity.
+
+Make each web link a plain `<a href>`, which the gateway opens in a new tab. Do not navigate by
+assigning `window.location`: the shell's `frame-src 'self'` refuses it and the click silently
+does nothing.
+
 ## Dioxus
 
 River's `ui/Cargo.toml` and `ui/Dioxus.toml` are the template; copy them rather than writing your own. Two things are not obvious. `dx` must equal the `dioxus` crate version in `Cargo.lock`. And a webapp served under `/v1/contract/web/<key>/` needs `base_path` set at build time so asset URLs resolve inside the iframe (River keeps the line commented in `Dioxus.toml` and uncomments it during the build; the Vite equivalent is `base: "./"`). Keep the `WebApi` handle in a `GlobalSignal` so any component can send requests.
