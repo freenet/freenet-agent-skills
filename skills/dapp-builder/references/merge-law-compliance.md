@@ -1,10 +1,8 @@
 # Merge-Law Compliance
 
 How to build a contract merge that passes the laws freenet-core checks
-(freenet-core#5320) and keeps passing them as the contract grows caps,
-removals and work bounds. Read `contract-patterns.md` → "Merge Law
-Requirements" first for the basic laws and property tests; this file covers
-what goes wrong once a merge is more than a plain union.
+(freenet-core#5320) and keeps passing them as the contract grows caps, removals
+and work bounds. This file is the canonical statement of the laws.
 
 ## Design state so the merge is lawful by construction
 
@@ -13,31 +11,22 @@ first, because most violations come from how the state is shaped. They do not
 remove the need for the checks below: a cap combined with any removal still
 needs the heal-guarded form of associativity.
 
-1. **Treat everything `validate_state` accepts as input to your merge.** Why:
-   freenet-core's verifier checks each law over every state `validate_state`
-   accepts, not only over states your clients produce. A PUT to a peer that
-   does not yet hold the contract stores the state after validation only,
-   without running your merge, and anyone can build valid states offline,
-   without any key, by replaying and recombining your contract's public
-   records: subsets and unions of records from different histories,
-   duplicates, older signed versions of a record. A law failure on such a
-   state is a real convergence failure, because the same state can be put on
-   the network and honest peers then disagree. Today the verifier runs in
-   `fdev verify-merge` and on peers whose operator enables conformance
-   capture, and it removes nothing. Separately, every node already runs two
-   checks with live consequences: on about one in 32 whole-state merges it
-   re-applies the same incoming state to the result (absorption, below), and
-   when an incoming state equals the stored one it re-applies it until the
-   state stops changing. If either check fails, the node flags the contract,
-   and while the flag lasts (it expires, and is persisted across restarts)
-   the node stops committing and sending that contract's state. The planned
-   enforcement (freenet-core#5320) removes a contract on the peer that
-   reproduces a violation (that peer stops hosting it), and that peer
-   remembers its id so ordinary traffic does not bring it back. "Our client
-   never produces that state" is not a defence. How: state each law over every
-   valid state, make `validate_state` reject what your merge cannot handle
-   (rule 7), and fuzz with crafted valid states as well as client-produced
-   ones (see "Testing").
+1. **Treat everything `validate_state` accepts as input to your merge.** Why: a
+   PUT to a peer that does not yet hold the contract stores the state after
+   validation only, without running your merge, and anyone can build valid
+   states offline, without any key, by replaying and recombining your
+   contract's public records: subsets and unions of records from different
+   histories, duplicates, older signed versions of a record. A law failure on
+   such a state is a real convergence failure, because the state can be put on
+   the network and honest peers then disagree. Today `fdev verify-merge`
+   reports it, and every node samples live whole-state merges and, when a merge
+   does not settle, stops committing and sending that contract's state while a
+   time-limited flag lasts. The planned enforcement (freenet-core#5320) lets a
+   peer that reproduces a removal-eligible violation stop hosting the contract
+   for good. "Our client never produces that state" is not a defence. How:
+   state each law over every valid state, make `validate_state` reject what
+   your merge cannot handle (rule 7), and fuzz with crafted valid states as
+   well as client-produced ones (see "Testing").
 2. **Dependencies point toward authority, and removal cascades down only.**
    Why: if a record is kept because records that depend on it need it, a cap
    that evicts one of the records a dependent needs also removes the reason to
@@ -82,17 +71,11 @@ needs the heal-guarded form of associativity.
    `state-authorization-patterns.md` → "A Value One Party Supplies…"). A
    per-author cap bounds total size only if the number of authors is bounded
    too.
-5. **Make further pruning an authority's signed act.** This is a design
-   sketch: no published contract uses it, and it has been checked only in a
-   small exhaustive model, where every associativity failure healed. Why: when
-   peers prune by local judgement over different sets, they disagree. How: if
-   you need to prune beyond per-record caps, have the owner (or another key
-   the parameters name) sign a checkpoint stating the cut, for example "drop
-   records older than T". The merge keeps the checkpoint with the latest
-   cutoff, so the cut only moves forward and every peer applies the same one.
-   If two checkpoints carry the same cutoff, keep the one with the larger
-   signature bytes, so the merge gives the same result whichever arrives
-   first.
+5. **Do not prune by local judgement.** Peers pruning over different sets
+   disagree. If you need pruning beyond per-record caps, it must be an
+   authority's signed act that every peer applies the same way. No published
+   contract does this yet, and the idea has been checked only in a small
+   exhaustive model.
 6. **Make every stored record's signature and authorization a fixed
    function of its own bytes, the parameters, and the records it depends on.**
    Why: a check whose answer can change while its inputs stay present gives
@@ -130,7 +113,7 @@ needs the heal-guarded form of associativity.
    `merge(S, S)` rewrites is reported under state idempotence. How: have
    `validate_state` reject any state that the merge's cleanup would change.
    If an upgrade path forces you to accept states already held on the
-   network, every such state remains a violation that anyone can submit, so
+   network, every such state stays a reported violation that anyone can submit, so
    treat that as temporary and close it at the next re-key. The check runs the
    cleanup, so count it against the work bounds below.
 8. **Judge by freenet-core's own verdicts.** Why: a test you wrote against
@@ -173,79 +156,49 @@ Merging these two results and the inputs into each other repeatedly returns to
 a state already seen, which the verifier reports as a cycle. Ranking by the
 ban record alone, newest first, makes every grouping in this example converge.
 
-**Worked example 3: inactivity pruning.**
+**Worked example 3: inactivity pruning.** Bad: keep an author only while a
+record held in the state needs them, which is worked example 1 once a member
+cap applies. Better: decide from one field of the record itself, a signed
+`last_active` merged by max, compared with an owner-signed cutoff (rule 5). That
+reads no other record and no clock. Limits: an author who future-dates
+`last_active` is never pruned this way, so the owner needs a separate signed
+removal; and dropping an author is not a tombstone, so an author who signs a
+newer `last_active` comes back with any posts a peer still holds. A removal that
+must stick needs a tombstone (`state-authorization-patterns.md` → "Tombstones").
 
-- Bad: keep an author only while a post, a direct message or another record
-  held in the state needs them. Once a member cap applies and a record needs
-  two members (a direct message), this is worked example 1.
-- Good: each author signs a `last_active` timestamp in their own record,
-  merged by max. The owner signs a checkpoint with a cutoff time (rule 5, a
-  sketch). The merge drops an author whose `last_active` is older than the
-  latest checkpoint cutoff, together with everything that depends on that
-  author, as one unit. The rule reads one field of the record and one
-  authority fact, neither of which depends on what else is present, and it
-  reads no clock.
-- Limits of the good version: `last_active` is the author's claim, so an
-  author who future-dates it is never pruned this way; the owner needs a
-  separate signed removal for that case. The cascade drop is not a
-  tombstone: an author who later signs a newer `last_active` comes back, with
-  any of their posts a peer still holds. A removal that must stick, such as a
-  moderation removal, needs a tombstone (see `state-authorization-patterns.md`
-  → "Tombstones").
+**Design choices this file does not settle.** Where a choice below was checked,
+the check was a small exhaustive model using the verifier's heal rule, not a
+deployed contract.
 
-**Design choices this file does not settle.** A chat-style contract has to
-decide each of these. Where a choice was checked, the check was a small
-exhaustive model using the verifier's heal rule, not a deployed contract.
-
-- **Who may issue a ban, and whether a ban outlives its issuer.** Rule 4 has a
-  ban carry the proof of its issuer's authority. Which members may ban which
-  (for example only the owner, or only a member above the target in the invite
-  chain), whether a ban stays in force after its issuer is removed, and how to
-  treat two members banning each other are policy choices that were not
-  modelled here.
-- **A capped ban list is not a lasting removal.** A cap keeps at most N bans,
-  so admitting one more evicts a held ban, and the evicted ban's target can
-  return from any peer that still holds the target's record. If a removal must
-  last, it needs a record that no cap evicts, and then the state's size is not
-  bounded by that cap; this file does not give a lawful way to bound it. The
-  bounded tombstone list in `state-authorization-patterns.md` → "Tombstones"
-  evicts its oldest entries, so it has the same limit. Otherwise accept that a
-  banned member can return after their ban is evicted.
-- **Whether removing an inviter removes the members they invited.** Under rule
-  6 a member record depends on its inviter's record, so pruning or banning an
-  inviter drops every member they invited, active or not. The alternatives are
-  to accept that, or to make a member record independent of its inviter's
-  stored record, for example by carrying the signed invite chain in the member
-  record itself. The second was not modelled here.
-- **The order of caps across layers.** For members kept by their own records
-  (rule 3) and messages: cap the members, drop messages whose author is no
-  longer a member, then cap the messages over the ones left. In the model this
-  order gave no absorption failures and every associativity failure healed,
-  with and without uncapped owner bans. It is not strictly associative even
-  without bans, because evicting a member frees message slots, so a fuzzer
-  must check the heal-guarded form. Capping the messages first, over every
-  held message, and then dropping orphans gave cycles and absorption failures.
-- **Which members a member cap keeps.** Keeping the earliest members refuses
-  new members once the cap is reached; keeping the newest lets new members
-  evict existing ones; ranking by `last_active` merged by max evicts the least
-  recently active member, and a member who future-dates `last_active` keeps a
-  slot, which is the cross-party ranking `state-authorization-patterns.md` →
-  "A Value One Party Supplies…" warns against: lawful, but open to that abuse.
-  In the model, ranking by a fixed creation order and ranking by
-  `last_active` both healed every associativity failure. Whether to cap
-  members per inviter, and how to bound the number of inviters, was not
-  modelled.
-- **Configuration changes.** When an owner-signed configuration sets a cap,
-  use the newest configuration, with a fixed tie-break for equal versions.
-  Lowering a cap evicts records; raising it lets records that other peers still
-  hold come back on a later merge, which is the case heal-guarded
-  associativity allows.
+- **A capped ban list is not a lasting removal.** Admitting one more ban evicts
+  a held one, and the evicted ban's target can return from any peer that still
+  holds the target's record. A removal that must last needs a record no cap
+  evicts, and then that cap does not bound the state's size. The bounded
+  tombstone list in `state-authorization-patterns.md` → "Tombstones" has the
+  same limit.
+- **Removing an inviter.** Under rule 6 a member record depends on its
+  inviter's, so pruning or banning an inviter drops every member they invited.
+  The alternative, carrying the signed invite chain in the member record, was
+  not modelled.
+- **Order of caps across layers.** Cap the members, drop messages whose author
+  is no longer a member, then cap the messages left. This gave no absorption
+  failures and every associativity failure healed. It is not strictly
+  associative, so a fuzzer must check the heal-guarded form. Capping the
+  messages first gave cycles and absorption failures.
+- **Which members a member cap keeps.** Earliest refuses new members at the cap;
+  newest lets new members evict existing ones; `last_active` evicts the least
+  recently active, and a future-dated `last_active` holds a slot (lawful, but
+  see `state-authorization-patterns.md` → "A Value One Party Supplies…").
+- **Configuration changes.** Use the newest owner-signed configuration, with a
+  fixed tie-break. Lowering a cap evicts records; raising it lets records other
+  peers hold return on a later merge, which heal-guarded associativity allows.
 
 ## The laws, as the network checks them
 
-All comparisons are on exact bytes. `fdev verify-merge` runs the same checks
-as the network's verifier; only Violation-severity laws can lead to a
-contract's removal under the planned enforcement. The state laws (idempotence,
+All comparisons are on exact bytes. `fdev verify-merge` runs the same checks as
+the network's verifier, and every Violation fails the command, report-only or
+not. Only a removal-eligible law can lead to a contract's removal under the
+planned enforcement. The state laws (idempotence,
 commutativity, associativity, emitted state validity, determinism, path
 agreement, reconciliation) must hold for every state `validate_state` accepts,
 wherever that state came from: the verifier re-runs the case itself and does
@@ -254,18 +207,19 @@ judged only on history a peer observed itself (deltas computed against the
 same base, an observed `base -> result` step).
 For valid states `A`, `B`, `C` and a delta `D`:
 
-| Law | Statement | Severity |
-|---|---|---|
-| State idempotence | `merge(A, A) == A` | Violation |
-| State commutativity | `merge(A, B) == merge(B, A)` | Violation |
-| State associativity | `merge(merge(A, B), C) == merge(A, merge(B, C))`, or the heal-guarded form below | Violation |
-| Emitted state validity | every state `update_state` emits passes `validate_state` | Violation |
-| Determinism | update, summary and delta give the same bytes for the same inputs | Violation |
-| Delta order | two deltas computed against the same base reach the same state in either order | Violation |
-| Path agreement | applying `get_state_delta(B, summarize(A))` to `A` equals merging the whole state `B` into `A`, or merging `B` into that result repairs the difference (not checked when the delta is empty or too large to send) | Violation |
-| Transition path agreement | for an observed step `base -> result`, `merge(base, result) == result`, with `result` first merged with itself until it stops changing | Violation |
-| Reconciliation | two valid divergent states reconcile through summary and delta rounds instead of cycling | Violation |
-| Delta idempotence | `apply(apply(A, D), D) == apply(A, D)` | Diagnostic |
+| Law | Statement | Severity | Removal |
+|---|---|---|---|
+| State idempotence | `merge(A, A) == A` | Violation | Eligible; report-only if the state settles after a rewrite |
+| State commutativity | `merge(A, B) == merge(B, A)` | Violation | Eligible |
+| State associativity | `merge(merge(A, B), C) == merge(A, merge(B, C))`, or the heal-guarded form below | Violation | Eligible |
+| Emitted state validity | every state `update_state` emits passes `validate_state` | Violation | Eligible |
+| Determinism | update, summary and delta give the same bytes for the same inputs | Violation | Eligible |
+| Reconciliation | two valid divergent states reconcile through summary and delta rounds instead of cycling | Violation | Eligible |
+| Delta order | two deltas computed against the same base reach the same state in either order | Violation | Report-only |
+| Path agreement | applying `get_state_delta(B, summarize(A))` to `A` equals merging the whole state `B` into `A`, or merging `B` into that result repairs the difference (not checked when the delta is empty or too large to send) | Violation | Report-only |
+| Transition path agreement | for an observed step `base -> result`, `merge(base, result) == result`, with `result` first merged with itself until it stops changing | Violation | Report-only |
+| Delta idempotence | `apply(apply(A, D), D) == apply(A, D)` | Diagnostic | Report-only |
+| Self-delta size | a delta against an exact summary of the same state is empty, and not as large as the state | Diagnostic | Report-only |
 
 Delta idempotence is reported but cannot cause removal: whether contracts may
 rely on deltas that are not idempotent (counters, append logs) is still an
@@ -275,13 +229,13 @@ delivery is at-least-once.
 
 **Absorption**, `merge(merge(A, B), B) == merge(A, B)`, follows from strict
 associativity and idempotence, and is the one most cap and cleanup designs
-break. The verifier checks it inside the associativity heal step, and every
-node already samples it on live whole-state merges and stops propagating a
-contract that fails it (rule 1). Test it directly in your own fuzzer.
+break. A failure is not always fatal: the verifier and the live node probe both
+pass a changed re-apply to the heal step below and report it only if the merge
+does not settle. Test it directly in your own fuzzer, and where a cap makes it
+fail, check the heal-guarded form instead of accepting the failure.
 
-**Heal-guarded associativity** (freenet-core#5924, in freenet-core v0.2.147
-and later; fdev 0.3.309 requires that release, and an fdev built against an
-earlier freenet release checks strict associativity). A contract whose cap or
+**Heal-guarded associativity** (freenet-core#5924, in v0.2.147 and later; an
+older fdev checks strict associativity). A contract whose cap or
 eviction can free a slot, through a removal or a raised cap, may not be
 strictly associative: only one grouping refills the freed slot. That is
 allowed if the groupings converge. With `L = merge(merge(A, B), C)`,
@@ -342,13 +296,6 @@ Rules that follow from it:
   when anyone submits it, so `validate_state` must also reject states cleanup
   would change (rule 7).
 
-## Deduplicate within one delta
-
-Two byte-identical copies of a record in the *same* delta both pass a check
-made against held state, and the state ends up holding both. Deduplicate
-incoming records among themselves as well as against held state (see
-`contract-patterns.md` → "Decide What One Bad Entry in a Delta Does").
-
 ## Summaries must tell different content apart
 
 If two peers hold different records under the same key (the same version
@@ -381,6 +328,46 @@ bound placed wrongly breaks the laws itself.
   dependencies fits, or that record never arrives. Test that a large backlog
   converges within a bounded number of rounds.
 
+## Applying a delta: decide what one bad entry does
+
+A loop that mutates `self` and returns `Err` on the first bad entry is neither
+safe design. Pick one:
+
+- **Atomic.** Validate every entry first and commit only if all pass, or apply
+  into a clone and swap. Right when the entries are one indivisible update from
+  one author.
+- **Filtering.** Skip the entries that do not authorize and apply the rest.
+  Required when entries are independently signed by different parties. Under
+  atomic, one crafted entry refuses every valid entry travelling with it, and
+  once such an entry lands in state every later apply fails against it. A fold
+  over generations has the same trap (`upgrade-and-migration.md` → "A New
+  Version Must Accept Old State").
+
+Whichever you pick:
+
+- Do not leave a partial mutation for a caller that logs the error and carries
+  on.
+- Build the "already held" set as the state grows, or two entries in one delta
+  that collide on the dedup key both pass.
+- `apply_delta` is a merge. What must be order-independent is the loop's result,
+  not each predicate's answer. A filter that reads only the entry is safe; one
+  that reads how full the state is, or whether an author's member record has
+  arrived yet, is not. Three shapes converge:
+  - Depend on the record closer to the authority and decide it in the one
+    canonical cleanup (rule 6). Every delta must then carry the records its
+    entries depend on, including a delta a client builds for an UPDATE, or the
+    node applying it drops the entry.
+  - Carry the authorization proof in the entry (a signed invite chain rooted in
+    the parameters), so the predicate reads only the entry.
+  - Keep the entry and authorize at read time, so the merge is a plain union.
+
+  Add-only membership does not fix this on its own: a delta that drops a message
+  because its author's record has not arrived still differs from the other
+  order.
+- Dedup-as-you-go is order-independent only if the id covers every term of the
+  record (`contract-patterns.md` → "Record Identity"). Otherwise two different
+  entries share an id and arrival order picks one.
+
 ## A validly signed record never makes a merge fail
 
 For records signed independently by different parties, return `Err` from a
@@ -388,17 +375,16 @@ merge only for an exceeded work bound or an incoming whole state that
 `validate_state` rejects (for example one holding a signature that does not
 verify, or a record whose dependency is absent). Inside a delta, skip a record
 whose signature does not verify or whose dependency is absent, and apply the
-rest: refusing the whole delta also refuses every valid record that
-travels with it (see `contract-patterns.md` → "Decide What One Bad Entry in a
-Delta Does"). A record that is validly signed but that this state
-does not admit (over a cap, referencing something unknown, disallowed by the
-current configuration) is skipped on arrival and dropped where held, by the
-same rule in both places. An `Err` for such a record fails every merge with
-any peer holding it, in one direction only, permanently, and only the record's
-author can repair it. The verifier also reports a contract that refuses to
-merge two valid states in the associativity heal step as a violation. Also make sure `validate_state` rejects anything a merge
-would `Err` on, or a state that validation accepted can block every later
-merge.
+rest: refusing the whole delta also refuses every valid record that travels
+with it (see above). A record that is validly signed but that this state does
+not admit (over a cap, referencing something unknown, disallowed by the current
+configuration) is skipped on arrival and dropped where held, by the same rule in
+both places. An `Err` for such a record fails every merge with any peer holding
+it, in one direction only, permanently, and only the record's author can repair
+it. The verifier also reports a contract that refuses to merge two valid states
+in the associativity heal step as a violation. Also make sure `validate_state`
+rejects anything a merge would `Err` on, or a state that validation accepted can
+block every later merge.
 
 ## Testing
 
@@ -420,7 +406,7 @@ Write these before trusting the merge, and run them on every change to it:
   merging a merge change, because some defects appear only there.
 - **Real states as fixpoints.** Capture real states and check each is a
   fixpoint of `merge(S, S)` and that pairs commute. Run `fdev verify-merge`
-  (the same verifier the network runs, previously `fdev conformance`) on them:
+  (the same verifier the network runs) on them:
   `fdev verify-merge --wasm contract.wasm --params params.bin --state s1.bin
   --state s2.bin`. Without `--params`, fdev uses empty parameters; a contract
   whose parameters do not decode from empty bytes, or fail its checks, then
@@ -434,20 +420,15 @@ Write these before trusting the merge, and run them on every change to it:
 - **Mutation-check the fuzzer.** Move a cap ahead of cleanup, delete a
   dedup, or drop the digest from a summary, and confirm the fuzzer fails. A
   fuzzer that stays green under those changes does not cover them.
-- **Measure whether the generated states reach every branch.** A passing
-  fuzzer does not show that its crafted states ever hit the cap path, the
-  overflow rule or a given filter arm. Run the fuzzer and unit tests under
-  branch coverage (`cargo llvm-cov --branch`, currently nightly-only) on the
-  host build of `update_state`, `validate_state`, `summarize_state`,
-  `get_state_delta` and the filters, caps and pruning they call, and fail CI
-  when one of those branches is never visited, unless it is listed with a
-  reason. Coverage shows a branch was reached, not that its result was
-  checked; pair it with mutation.
-- **Add an automated mutation tool, and read what it misses.** Run
-  `cargo-mutants` on the same functions and review every missed mutant. One in
-  cfg-gated code, or in a function no test calls, says nothing about your
-  assertions; check its diff. Unviable and timed-out mutants are separate
-  outcomes, not kills. These tools mostly replace function bodies and flip
-  operators, which is the weakest kind of mutation (see `contract-patterns.md`
-  → "Tests That Would Have Caught It"), so keep the hand-written
-  wrong-but-plausible mutations as permanent tests alongside them.
+- **Measure whether the generated states reach every branch, then mutate.** A
+  passing fuzzer does not show that its crafted states hit the cap path or a
+  given filter arm. Run it under branch coverage (`cargo llvm-cov --branch`) on
+  the host build of the entry points and the filters, caps and pruning they
+  call, and run `cargo-mutants` on the same functions, reading every missed
+  mutant. Coverage shows a branch was reached, not that its result was checked.
+  These tools mostly replace function bodies and flip operators, so keep
+  hand-written mutations as permanent tests: replace a check with the one a
+  careful person would have written by mistake (the wrong field, the first match
+  instead of the only match, the wrong ordering key). Deleting a check usually
+  fails something. That substitution usually does not, and it is the version
+  that ships.
