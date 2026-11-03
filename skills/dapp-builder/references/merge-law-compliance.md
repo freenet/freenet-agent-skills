@@ -171,15 +171,17 @@ removal; and dropping an author is not a tombstone, so an author who signs a
 newer `last_active` comes back with any posts a peer still holds. A removal that
 must stick needs a tombstone (`state-authorization-patterns.md` → "Tombstones").
 
+**A capped ban list is not a lasting removal.** Admitting one more ban evicts a
+held one, and the evicted ban's target can return from any peer that still holds
+the target's record. River's bans are suppression under a cap, not removal
+tombstones. A removal that must last needs a record no cap evicts, and then that
+cap does not bound the state's size. The bounded tombstone list in
+`state-authorization-patterns.md` → "Tombstones" has the same limit, so it suits
+suppression you can afford to lose, never a removal.
+
 **Design choices this file does not settle.** None of these has been checked on
 a deployed contract, so treat the outcomes reported below as unchecked.
 
-- **A capped ban list is not a lasting removal.** Admitting one more ban evicts
-  a held one, and the evicted ban's target can return from any peer that still
-  holds the target's record. A removal that must last needs a record no cap
-  evicts, and then that cap does not bound the state's size. The bounded
-  tombstone list in `state-authorization-patterns.md` → "Tombstones" has the
-  same limit, so it suits suppression you can afford to lose, never a removal.
 - **Removing an inviter.** Under rule 6 a member record depends on its
   inviter's, so pruning or banning an inviter drops every member they invited.
   The alternative, carrying the signed invite chain in the member record, is
@@ -422,10 +424,13 @@ Write these before trusting the merge, and run them on every change to it:
 - **Measure whether the generated states reach every branch, then mutate.** A
   passing fuzzer does not show that its crafted states hit the cap path or a
   given filter arm. Run it under branch coverage (`cargo llvm-cov --branch`,
-  currently nightly-only) on the host build of the entry points and the filters, caps and pruning they
-  call, and run `cargo-mutants` on the same functions, reading every missed
-  mutant. Coverage shows a branch was reached, not that its result was checked.
-  These tools mostly replace function bodies and flip operators, so keep
+  currently nightly-only) on the host build of the entry points and the filters,
+  caps and pruning they call, and fail CI when one of those branches is never
+  visited, unless it is listed with a reason. Run `cargo-mutants` on the same
+  functions and read every missed mutant. A missed mutant in cfg-gated code or an
+  uncalled function says nothing about your assertions. Unviable and timed-out
+  mutants are separate outcomes, not kills. Coverage shows a branch was reached,
+  not that its result was checked. These tools mostly replace function bodies and flip operators, so keep
   hand-written mutations as permanent tests: replace a check with the one a
   careful person would have written by mistake (the wrong field, the first match
   instead of the only match, the wrong ordering key). Deleting a check usually

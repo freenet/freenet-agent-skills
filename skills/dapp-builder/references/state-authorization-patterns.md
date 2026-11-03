@@ -105,7 +105,7 @@ Counter goes in the bytes covered by the signature, so signatures are bound to a
 
 ### Tombstones
 
-For "forgotten but must not return" state. River bans persist as tombstones: while the ban is held, a banned member's record is dropped on every merge, including after a re-invitation. A mailbox's purged list works the same way: while the entry is held, a purged message can't be re-submitted.
+For "forgotten but must not return" state. River's bans are suppression under a cap, not removal tombstones: while the ban is held, a banned member's record is dropped on every merge, including after a re-invitation. A mailbox's purged list works the same way: while the entry is held, a purged message can't be re-submitted.
 
 ```rust
 pub struct RecipientState {
