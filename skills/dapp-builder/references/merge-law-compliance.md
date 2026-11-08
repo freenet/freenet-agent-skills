@@ -21,9 +21,11 @@ needs the heal-guarded form of associativity.
    the network and honest peers then disagree. Today `fdev verify-merge`
    reports it, and every node samples live whole-state merges and, when a merge
    does not settle, stops committing and sending that contract's state while a
-   time-limited flag lasts. The planned enforcement (freenet-core#5320) lets a
-   peer that reproduces a removal-eligible violation stop hosting the contract
-   for good. "Our client never produces that state" is not a defence. How:
+   time-limited flag lasts. Nodes do not remove a contract for breaking a law
+   (freenet-core#5906): they skip a payload they recently merged
+   (freenet-core#6125), which ends a replay loop but does not make diverged
+   peers agree, so the contract's users keep seeing different states. "Our
+   client never produces that state" is not a defence. How:
    state each law over every valid state, make `validate_state` reject what
    your merge cannot handle (rule 7), and fuzz with crafted valid states as
    well as client-produced ones (see "Testing").
@@ -202,8 +204,8 @@ a deployed contract, so treat the outcomes reported below as unchecked.
 
 All comparisons are on exact bytes. `fdev verify-merge` runs the same checks as
 the network's verifier, and every Violation fails the command, report-only or
-not. Only a removal-eligible law can lead to a contract's removal under the
-planned enforcement. The state laws (idempotence,
+not. No law leads to a contract's removal. A report-only finding is recorded
+but `fdev` writes no evidence file for it. The state laws (idempotence,
 commutativity, associativity, emitted state validity, determinism, path
 agreement, reconciliation) must hold for every state `validate_state` accepts,
 wherever that state came from: the verifier re-runs the case itself and does
@@ -212,25 +214,25 @@ judged only on history a peer observed itself (deltas computed against the
 same base, an observed `base -> result` step).
 For valid states `A`, `B`, `C` and a delta `D`:
 
-| Law | Statement | Severity | Removal |
+| Law | Statement | Severity | Report-only |
 |---|---|---|---|
-| State idempotence | `merge(A, A) == A` | Violation | Eligible; report-only if the state settles after a rewrite |
-| State commutativity | `merge(A, B) == merge(B, A)` | Violation | Eligible |
-| State associativity | `merge(merge(A, B), C) == merge(A, merge(B, C))`, or the heal-guarded form below | Violation | Eligible |
-| Emitted state validity | every state `update_state` emits passes `validate_state` | Violation | Eligible |
-| Determinism | update, summary and delta give the same bytes for the same inputs | Violation | Eligible |
-| Reconciliation | two valid divergent states reconcile through summary and delta rounds instead of cycling | Violation | Eligible |
-| Delta order | two deltas computed against the same base reach the same state in either order | Violation | Report-only |
-| Path agreement | applying `get_state_delta(B, summarize(A))` to `A` equals merging the whole state `B` into `A`, or merging `B` into that result repairs the difference (not checked when the delta is empty or too large to send) | Violation | Report-only |
-| Transition path agreement | for an observed step `base -> result`, `merge(base, result) == result`, with `result` first merged with itself until it stops changing | Violation | Report-only |
-| Delta idempotence | `apply(apply(A, D), D) == apply(A, D)` | Diagnostic | Report-only |
-| Self-delta size | a delta against an exact summary of the same state is empty, and not as large as the state | Diagnostic | Report-only |
+| State idempotence | `merge(A, A) == A` | Violation | No; yes if the state settles after a rewrite |
+| State commutativity | `merge(A, B) == merge(B, A)` | Violation | No |
+| State associativity | `merge(merge(A, B), C) == merge(A, merge(B, C))`, or the heal-guarded form below | Violation | No |
+| Emitted state validity | every state `update_state` emits passes `validate_state` | Violation | No |
+| Determinism | update, summary and delta give the same bytes for the same inputs | Violation | No |
+| Reconciliation | two valid divergent states reconcile through summary and delta rounds instead of cycling | Violation | No |
+| Delta order | two deltas computed against the same base reach the same state in either order | Violation | Yes |
+| Path agreement | applying `get_state_delta(B, summarize(A))` to `A` equals merging the whole state `B` into `A`, or merging `B` into that result repairs the difference (not checked when the delta is empty or too large to send) | Violation | Yes |
+| Transition path agreement | for an observed step `base -> result`, `merge(base, result) == result`, with `result` first merged with itself until it stops changing | Violation | Yes |
+| Delta idempotence | `apply(apply(A, D), D) == apply(A, D)` | Diagnostic | Yes |
+| Self-delta size | a delta against an exact summary of the same state is empty, and not as large as the state | Diagnostic | Yes |
 
-Delta idempotence is reported but cannot cause removal: whether contracts may
-rely on deltas that are not idempotent (counters, append logs) is still an
-open question in freenet-core, and the verifier never validates delta bytes,
-so a finding on attacker-chosen deltas must not count. Aim for it anyway:
-delivery is at-least-once.
+Deltas must be idempotent (freenet-core#5320): delivery is at-least-once, and a
+node may apply the same delta twice. The verifier reports delta idempotence as
+a diagnostic only, because it never validates delta bytes, so a finding on
+attacker-chosen deltas proves nothing about honest use. Do not design counters
+or append logs whose deltas change the state each time they are applied.
 
 **Absorption**, `merge(merge(A, B), B) == merge(A, B)`, follows from strict
 associativity and idempotence, and is the one most cap and cleanup designs
