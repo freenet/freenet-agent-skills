@@ -21,14 +21,15 @@ needs the heal-guarded form of associativity.
    the network and honest peers then disagree. Today `fdev verify-merge`
    reports it, and every node samples live whole-state merges and, when a merge
    does not settle, stops committing and sending that contract's state while a
-   time-limited flag lasts. Nodes do not remove a contract for breaking a law
-   (freenet-core#5906): they skip a payload they recently merged
-   (freenet-core#6125), which ends a replay loop but does not make diverged
-   peers agree, so the contract's users keep seeing different states. "Our
-   client never produces that state" is not a defence. How:
-   state each law over every valid state, make `validate_state` reject what
-   your merge cannot handle (rule 7), and fuzz with crafted valid states as
-   well as client-produced ones (see "Testing").
+   time-limited flag lasts. "Our client never produces that state" is not a
+   defence. How: state each law over every valid state, make `validate_state`
+   reject what your merge cannot handle (rule 7), and fuzz with crafted valid
+   states as well as client-produced ones (see "Testing").
+
+   Nodes do not remove a contract for breaking a law (freenet-core#5906). They
+   skip a payload they merged in the last 15 minutes (freenet-core#6125), which
+   ends a replay loop but does not make diverged peers agree, so the contract's
+   users keep seeing different states.
 2. **Dependencies point toward authority, and removal cascades down only.**
    Why: if a record is kept because records that depend on it need it, a cap
    that evicts one of the records a dependent needs also removes the reason to
@@ -204,8 +205,8 @@ a deployed contract, so treat the outcomes reported below as unchecked.
 
 All comparisons are on exact bytes. `fdev verify-merge` runs the same checks as
 the network's verifier, and every Violation fails the command, report-only or
-not. No law leads to a contract's removal. A report-only finding is recorded
-but `fdev` writes no evidence file for it. The state laws (idempotence,
+not. No law leads to a contract's removal. A report-only finding is counted in
+the summary, but `--evidence-out` writes no evidence file for it. The state laws (idempotence,
 commutativity, associativity, emitted state validity, determinism, path
 agreement, reconciliation) must hold for every state `validate_state` accepts,
 wherever that state came from: the verifier re-runs the case itself and does
@@ -231,7 +232,7 @@ For valid states `A`, `B`, `C` and a delta `D`:
 Deltas must be idempotent (freenet-core#5320): delivery is at-least-once, and a
 node may apply the same delta twice. The verifier reports delta idempotence as
 a diagnostic only, because it never validates delta bytes, so a finding on
-attacker-chosen deltas proves nothing about honest use. Do not design counters
+attacker-chosen deltas says nothing reliable about honest use. Do not design counters
 or append logs whose deltas change the state each time they are applied.
 
 **Absorption**, `merge(merge(A, B), B) == merge(A, B)`, follows from strict
