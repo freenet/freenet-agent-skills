@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.1 (2026-11-08)
+
+**dapp-builder: nodes do not remove contracts for breaking a merge law.**
+
+`references/merge-law-compliance.md` still described a planned enforcement in
+which a peer could stop hosting a contract for good after reproducing a
+violation. That plan was dropped on 2026-11-06 (freenet-core#5906). The file
+now says no law leads to removal, names the payload skip that replaced it
+(freenet-core#6125) and what it does not fix, renames the law table's
+"Removal" column to "Report-only", and states that deltas must be idempotent
+instead of calling that an open question.
+
 ## 1.40.0 (2026-11-02)
 
 **Audit of the whole plugin: remove redundancy, drop what an agent can infer,
