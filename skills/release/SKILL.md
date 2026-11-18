@@ -11,7 +11,7 @@ This is the **single entry point** for cutting a freenet-core release. The order
 
 1. **MANDATORY PRECONDITIONS** P0-P4 (below). Every one must pass, and you must report each result.
 2. Steps 1-5: version, trigger, watch (including the ship-vs-soak check **before** the tag is pushed), verify artifacts, River smoke test.
-3. **Step 6: post-cut telemetry monitoring** through the 0-4h auto-update stagger.
+3. **Step 6: post-cut monitoring** (telemetry and River-room user reports) through the 0-4h auto-update stagger.
 
 **Do not dispatch a live `release.yml` run or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only things you may run beforehand are `scripts/release.sh --dry-run` and `gh workflow run release.yml --field dry_run=true` from a ref that contains the guard from #5939 (current `main`; the bug it fixes is #5936). A dry run pushes no branch, opens no PR and tags nothing, so `main` does not move. It exercises only the bump and the packaging check, not the token check, the merge queue, the tag, Gate A or the publish, so a green dry run is not a gate. Dispatched from an older ref, `dry_run` still pushes and auto-merges the bump PR.
 
