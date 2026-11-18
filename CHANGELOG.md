@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.3 (2026-11-18)
+
+**release: watch the Freenet Official River room for user reports after a cut.**
+
+Step 6 now reads the room at each telemetry checkpoint and once more at +8-12 h, for anyone reporting a problem.
+
 ## 1.40.2 (2026-11-18)
 
 **pr-review: posted reviews no longer end with the AI-assisted tag.**

@@ -11,7 +11,7 @@ This is the **single entry point** for cutting a freenet-core release. The order
 
 1. **MANDATORY PRECONDITIONS** P0-P4 (below). Every one must pass, and you must report each result.
 2. Steps 1-5: version, trigger, watch (including the ship-vs-soak check **before** the tag is pushed), verify artifacts, River smoke test.
-3. **Step 6: post-cut telemetry monitoring** through the 0-4h auto-update stagger.
+3. **Step 6: post-cut monitoring** (telemetry and River-room user reports) through the 0-4h auto-update stagger.
 
 **Do not dispatch a live `release.yml` run or run `scripts/release.sh` until P0-P4 have passed.** No "quick release", "routine patch" or "CI is green" path skips them. The only things you may run beforehand are `scripts/release.sh --dry-run` and `gh workflow run release.yml --field dry_run=true` from a ref that contains the guard from #5939 (current `main`; the bug it fixes is #5936). A dry run pushes no branch, opens no PR and tags nothing, so `main` does not move. It exercises only the bump and the packaging check, not the token check, the merge queue, the tag, Gate A or the publish, so a green dry run is not a gate. Dispatched from an older ref, `dry_run` still pushes and auto-merges the bump PR.
 
@@ -325,7 +325,7 @@ cargo run -p riverctl -- member list "$ROOM_VK"
 
 A bincode deserialization error means **STOP: a published release cannot be rolled back, so ship a patch (see "Rollback")**. File an issue, and rebuild River against the new stdlib. In v0.2.11, enabling WebSocket streaming by default broke riverctl, which was pinned to stdlib 0.1.40.
 
-## Step 6: Post-cut telemetry monitoring through the 0-4h stagger
+## Step 6: Post-cut monitoring (telemetry and user reports) through the 0-4h stagger
 
 Peers adopt a release over a **0-4h decentralised-discovery stagger**, so a regression in the shipped binary keeps spreading for hours after the gateways look fine. Keep monitoring until the stagger has fully elapsed. The release is not done when the workflow goes green.
 
@@ -336,7 +336,8 @@ Peers adopt a release over a **0-4h decentralised-discovery stagger**, so a regr
    - connection counts hold
    - no new error classes appear
    - log growth is normal
-3. **Act at once (see "Rollback")** on crashes, log spam, data loss or a clear success-rate regression. Open an issue with the evidence, and post a notice on Matrix.
+3. **User reports in the Freenet Official River room** at the same checkpoints (+30 min, +1 h, +2 h, +4 h) and once more around +8-12 h. Read new messages for anyone reporting a problem (can't connect, room won't load or stuck on "Subscribing...", messages not arriving, crashes, high CPU or memory) and compare with what telemetry shows. Users often notice a regression before an aggregate metric moves. Maintainers: reading the room is in the local `river-official-room` skill. Answer reporters briefly, and treat a report you can corroborate as a regression under item 4.
+4. **Act at once (see "Rollback")** on crashes, log spam, data loss or a clear success-rate regression. Open an issue with the evidence, and post a notice on Matrix.
 
 Watch for log spam (it can fill disks within hours), new error patterns, connection failures (`connection refused`, `timeout`, `handshake failed`) and resource exhaustion (`out of memory`, `no space left`, `too many open files`).
 
