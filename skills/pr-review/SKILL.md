@@ -170,7 +170,7 @@ gh pr review "$PR" --comment --body-file <report-file>
 
 Use `--comment` — not `--approve` or `--request-changes`. This skill produces a
 review; it does not gate merge or speak for a human approver. Also print the report
-in the conversation. End the posted body with `[AI-assisted - Claude]`.
+in the conversation.
 
 ## Output Format
 
@@ -220,8 +220,6 @@ One section per lens that actually ran (code-first, testing, skeptical, big-pict
 **HEAD SHA reviewed:** <sha>
 
 <If not ready, summarize what's needed. If re-review is required, list which findings triggered it so the next pass can confirm they're addressed.>
-
-[AI-assisted - Claude]
 ```
 
 ## Re-Review After Fixes (Mandatory When Findings Were Significant)

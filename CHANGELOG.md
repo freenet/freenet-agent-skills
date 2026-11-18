@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.2 (2026-11-18)
+
+**pr-review: posted reviews no longer end with the AI-assisted tag.**
+
+The tag stays on PR and issue bodies; comments and reviews go without it.
+
 ## 1.40.1 (2026-11-08)
 
 **dapp-builder: nodes do not remove contracts for breaking a merge law.**
