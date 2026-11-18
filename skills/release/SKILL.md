@@ -325,7 +325,7 @@ cargo run -p riverctl -- member list "$ROOM_VK"
 
 A bincode deserialization error means **STOP: a published release cannot be rolled back, so ship a patch (see "Rollback")**. File an issue, and rebuild River against the new stdlib. In v0.2.11, enabling WebSocket streaming by default broke riverctl, which was pinned to stdlib 0.1.40.
 
-## Step 6: Post-cut telemetry monitoring through the 0-4h stagger
+## Step 6: Post-cut monitoring (telemetry and user reports) through the 0-4h stagger
 
 Peers adopt a release over a **0-4h decentralised-discovery stagger**, so a regression in the shipped binary keeps spreading for hours after the gateways look fine. Keep monitoring until the stagger has fully elapsed. The release is not done when the workflow goes green.
 
@@ -336,7 +336,8 @@ Peers adopt a release over a **0-4h decentralised-discovery stagger**, so a regr
    - connection counts hold
    - no new error classes appear
    - log growth is normal
-3. **Act at once (see "Rollback")** on crashes, log spam, data loss or a clear success-rate regression. Open an issue with the evidence, and post a notice on Matrix.
+3. **User reports in the Freenet Official River room** at the same checkpoints (+30 min, +1 h, +2 h, +4 h) and once more around +8-12 h. Read new messages for anyone reporting a problem (can't connect, room won't load or stuck on "Subscribing...", messages not arriving, crashes, high CPU or memory) and compare with what telemetry shows. Users often notice a regression before an aggregate metric moves. Maintainers: reading the room is in the local `river-official-room` skill. Answer reporters briefly, and treat a report you can corroborate as a regression under item 4.
+4. **Act at once (see "Rollback")** on crashes, log spam, data loss or a clear success-rate regression. Open an issue with the evidence, and post a notice on Matrix.
 
 Watch for log spam (it can fill disks within hours), new error patterns, connection failures (`connection refused`, `timeout`, `handshake failed`) and resource exhaustion (`out of memory`, `no space left`, `too many open files`).
 
