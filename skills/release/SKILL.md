@@ -101,10 +101,10 @@ cd <river checkout>   # on origin/main
 scripts/legacy-delegate-gate.sh --core-rev <ship SHA>
 ```
 
-It hash-verifies each old chat-delegate WASM from River history against `legacy_delegates.toml`, runs it on that core's real runtime with a real secrets store (empty-store probe, store, read back, read back after reopen), and checks the known-dead generations are still exactly the expected set. The first run on a new core compiles `freenet` (tens of minutes); later runs reuse the cache. Exit codes:
+It hash-verifies each old chat-delegate WASM from River history against `legacy_delegates.toml`, runs it on that core's real runtime with a real secrets store (empty-store probe, store, read back, read back after reopen), and checks the known-dead generations are still exactly the expected set. The first run on a new core compiles `freenet` (tens of minutes); later runs on the same core take seconds. It also fails if a retired generation in River history is missing from its manifest. Exit codes:
 
 - **0**: pass. Record gate `river_legacy_delegates=pass`.
-- **1**: an old delegate no longer works on this core. **Blocks the cut.** Tell Ian: the break is in core, stdlib or wasmtime, and users' rooms are at risk.
+- **1**: an old delegate no longer works on this core. **Blocks the cut.** Read the failure lines: `host error:` or `HASH MISMATCH` means a real break (core, stdlib or wasmtime), so tell Ian users' rooms are at risk; `storage:`, `runtime:` or `store_delegate:` errors mean the harness needs fixing against this core (as for exit 2).
 - **2**: the harness does not build or run against this core (the gate injects a test into core's internal test module, so a core refactor can break it). This is NOT a pass and NOT a reason to skip: fix `scripts/legacy-delegate-gate/` in River against this core, re-run, and only proceed on exit 0.
 
 ### P2: Real-NAT pre-release soak of the exact ship SHA (30 minutes)
