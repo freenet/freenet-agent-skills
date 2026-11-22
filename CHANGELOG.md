@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.6 (2026-11-22)
+
+**release: P1 step 4, the River legacy-delegate gate.**
+
+Before a cut, old River chat-delegate builds must still run on the ship SHA's core (`scripts/legacy-delegate-gate.sh --core-rev <SHA>` in River; river#630, Ian's Decision 9). Exit 1 blocks the cut; exit 2 means fix the harness against this core and re-run, never skip.
+
 ## 1.40.5 (2026-11-22)
 
 **dapp-builder: compact old delegate generations, don't delete them.**
