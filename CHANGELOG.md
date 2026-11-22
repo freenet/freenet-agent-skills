@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.5 (2026-11-22)
+
+**dapp-builder: compact old delegate generations, don't delete them.**
+
+Corrects 1.40.4. Old generations' entries should be rewritten without their re-fetchable bulk while keeping the key and unrecoverable fields. Deleting keys can wedge a migration journal that distrusts a generation exporting fewer items, and can lose an identity key. Found while building River's fix (freenet/river#968).
+
 ## 1.40.4 (2026-11-22)
 
 **dapp-builder: delegate secret storage is budgeted on hosted nodes.**
