@@ -255,6 +255,26 @@ Across invocations, by count:
   connection to one delegate is refused silently: that app gets direct replies
   but no pushes.
 
+Secret storage, per user, on a hosted-mode node:
+
+- **Quota:** a hosted node such as try.freenet.org caps each visitor's total secret
+  footprint at `--per-user-secret-quota` (default 4 MiB; try.freenet.org runs
+  16 MiB). The cap covers every delegate and every delegate generation of that
+  user on the node, not one delegate.
+- **A refused write looks generic.** The delegate sees only a failed store
+  (`Failed to store secret via host function`), so a retry loop will never
+  succeed. Treat a failed store as possibly permanent.
+- **Store secrets and small private state** (keys, preferences, indexes), not
+  copies of contract state the network already holds.
+- **Delete a predecessor's copies once they are verified in the successor.** A
+  re-key leaves the old generation's secrets in place, so without cleanup every
+  release adds another full copy. River hit this: eight generations each held a
+  ~1.2 MB room copy, so a user with ~0.4 MB of real secrets reached the 16 MiB
+  cap. From then on every save failed, and every load re-ran the migration.
+
+A user's own node has no secret quota today, but the same habits bound its disk
+use and migration time.
+
 Unprompted runs of a delegate whose app holds the Background grant are budgeted.
 Loop time is charged to a per-delegate duty balance (1% of wall time, 10 s burst)
 and, for lifecycle and wake-up runs, a node-wide one (10%, 30 s burst). A spent
@@ -590,6 +610,10 @@ not `NotFound`, so handle both.
   backup cannot bring back a deleted record.
 - A backup is a secret like any other, so it stays under the old delegate key
   until migration moves it.
+- A backup counts against a hosted node's per-user secret quota (see "Resource
+  Limits"), once per delegate generation still holding it. Back up only state
+  that is small, or only the part the contract could not recover, and delete
+  old generations' copies after migrating.
 
 ## Delegate WASM upgrades
 

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.4 (2026-11-22)
+
+**dapp-builder: delegate secret storage is budgeted on hosted nodes.**
+
+`delegate-patterns.md` → "Resource Limits" now covers the hosted per-user secret quota (4 MiB default, 16 MiB on try.freenet.org), which spans every delegate generation. It says to store secrets rather than contract-state copies, and to delete a predecessor's copies once migrated. Rule 11 and the contract-state backup pattern point to it. Found when River's duplicated room copies filled a user's quota on try.freenet.org.
+
 ## 1.40.3 (2026-11-18)
 
 **release: watch the Freenet Official River room for user reports after a cut.**
