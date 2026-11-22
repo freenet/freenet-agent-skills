@@ -478,7 +478,10 @@ old state, or the merge does not converge, and migration silently fails.
 3. **Non-destructive.** Never delete the source until the destination is
    confirmed complete. Keep the old blob/keys as a rollback fallback so an old or
    rolled-back client still finds data. River intentionally leaves the legacy
-   `rooms_data` blob in place after exploding it into per-entity keys.
+   `rooms_data` blob in place after exploding it into per-entity keys. One
+   fallback generation is enough: prune older ones, because a hosted node's
+   per-user secret quota counts every generation (`delegate-patterns.md` →
+   "Resource Limits").
 4. **Regression-gated.** Once the destination is populated it is authoritative;
    never let a stale *source* read overwrite newer *destination* data. River #253:
    firing the legacy probe unconditionally let an old delegate's stale snapshot

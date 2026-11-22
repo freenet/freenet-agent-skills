@@ -262,13 +262,18 @@ Secret storage, per user, on a hosted-mode node:
   16 MiB). The cap covers every delegate and every delegate generation of that
   user on the node, not one delegate.
 - **A refused write looks generic.** The delegate sees only a failed store
-  (`Failed to store secret via host function`), so a retry loop will never
-  succeed. Treat a failed store as possibly permanent.
+  (`Failed to store secret via host function`), so retrying the same write
+  will not succeed until something frees space. Treat a failed store as
+  possibly permanent.
 - **Store secrets and small private state** (keys, preferences, indexes), not
   copies of contract state the network already holds.
-- **Delete a predecessor's copies once they are verified in the successor.** A
+- **Prune predecessors' copies once they are verified in the successor.** A
   re-key leaves the old generation's secrets in place, so without cleanup every
-  release adds another full copy. River hit this: eight generations each held a
+  release adds another full copy. Keep the immediately previous generation as
+  the rollback fallback (`upgrade-and-migration.md` → "Non-destructive") and
+  delete older ones. Only the old delegate can delete its own secrets, so the
+  app sends it a delete message, which works only if that generation's deployed
+  WASM handles one. Ship a delete handler from v1. River hit this: eight generations each held a
   ~1.2 MB room copy, so a user with ~0.4 MB of real secrets reached the 16 MiB
   cap. From then on every save failed, and every load re-ran the migration.
 
