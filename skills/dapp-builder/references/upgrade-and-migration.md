@@ -479,7 +479,7 @@ old state, or the merge does not converge, and migration silently fails.
    confirmed complete. Keep the old blob/keys as a rollback fallback so an old or
    rolled-back client still finds data. River intentionally leaves the legacy
    `rooms_data` blob in place after exploding it into per-entity keys. One
-   fallback generation is enough: compact older ones (`delegate-patterns.md`), because a hosted node's
+   fallback generation is enough: compact older ones (`delegate-patterns.md` → "Resource Limits"), because a hosted node's
    per-user secret quota counts every generation (`delegate-patterns.md` →
    "Resource Limits").
 4. **Regression-gated.** Once the destination is populated it is authoritative;

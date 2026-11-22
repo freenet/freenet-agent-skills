@@ -269,9 +269,9 @@ Secret storage, per user, on a hosted-mode node:
   copies of contract state the network already holds.
 - **Compact predecessors' copies once they are verified in the successor.** A
   re-key leaves the old generation's secrets in place, so without cleanup every
-  release adds another full copy. Keep the immediately previous generation
-  whole as the rollback fallback (`upgrade-and-migration.md` →
-  "Non-destructive"). In older generations, rewrite each entry without its bulky
+  release adds another full copy. Keep each entry's newest legacy copy whole as
+  the rollback fallback (`upgrade-and-migration.md` → "Non-destructive"). In
+  every older copy of that entry, rewrite it without its bulky
   re-fetchable part (cached contract state) and keep the key and every field
   the network cannot give back (identity keys, invitation secrets). Prefer this
   to deleting keys: a migration journal that distrusts a generation exporting
