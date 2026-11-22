@@ -49,7 +49,7 @@ gh pr list --repo freenet/freenet-core --state open --search 'build: release in:
 
 Coordinate first. **Re-run these checks immediately before Step 2**: the soak takes 30+ minutes, and the state can change during it.
 
-### P1: Auto-update is not broken (updater diff + BOTH canary suites)
+### P1: Auto-update is not broken (updater diff + BOTH canary suites), plus the River legacy-delegate gate
 
 Auto-update is the highest-consequence subsystem in a release because a peer's update path has only one leg. Every stage of it is the binary being replaced. A broken updater therefore **cannot be recovered in the field**: the affected cohort never self-heals and has to be fixed by hand. v0.2.120/v0.2.121 (#5221) did exactly this and went unnoticed for two releases. Answer "is auto-update safe?" with commands, not from memory, and not from the fact that CI is green.
 
@@ -93,6 +93,22 @@ bash scripts/auto-update-canary_lifecycle_test.sh  # Gate B retries INDETERMINAT
 - **The canary is Linux musl x86_64 only.** macOS has partial cover through the dmg-swap E2E. **Windows has no auto-update gate at all** (#5341).
 
 The P2 soak peer runs with auto-update **enabled**. It is the only real-NAT observer of the released updater, so never disable auto-update on it. If you need to freeze its version, stop the service instead.
+
+**Step 4: old River chat delegates still run on this core.** River users' room data lives under the keys of every past chat-delegate build, and recovery re-runs the OLD WASM on the CURRENT host, so a core, stdlib or wasmtime change that stops an old build executing strands that data (river#630). Run it from a scratch worktree of River at the CURRENT `origin/main` (the manifest and registry are read from that tree, and the long-lived `river/main` checkout is often on a stale branch). Needs full git history and `b3sum`:
+
+```bash
+git -C <river repo> fetch origin
+git -C <river repo> worktree add --detach ~/code/scratch/<id>/river-gate origin/main   # never run it from river/main
+cd ~/code/scratch/<id>/river-gate && git rev-parse HEAD        # record this River SHA
+export CARGO_TARGET_DIR=~/code/scratch/legacy-delegate-gate/target   # shared cache across SHAs
+scripts/legacy-delegate-gate.sh --core-rev <ship SHA> 2>&1 | tee ~/code/scratch/<id>/legacy-gate.log
+```
+
+It hash-verifies each old chat-delegate WASM from River history against `legacy_delegates.toml`, runs it on that core's real runtime with a real secrets store (empty-store probe, store, read back, read back after reopen), and checks the known-dead generations are still exactly the expected set. Each new ship SHA compiles `freenet` once (about 20 minutes with a warm shared `CARGO_TARGET_DIR`, longer cold), so start it early, alongside the soak; a re-run on the same SHA takes seconds. It also fails if a retired generation in River history is missing from its manifest. Exit codes:
+
+- **0**: pass. This is soak-marker gate `river_legacy_delegates` (the soak hook requires it): write `--gate river_legacy_delegates=pass` and put the River SHA and the log path in the marker `--notes`. Report it in P4. This run tests the SHIP SHA; the `cargo make legacy-delegate-gate` step in River's own publish tests the locally installed core and is a separate check.
+- **1**: an old delegate no longer works on this core. **Blocks the cut.** Read the failure lines: `host error:` or `HASH MISMATCH` means a real break (core, stdlib or wasmtime), so tell Ian users' rooms are at risk; `storage:`, `runtime:` or `store_delegate:` errors mean the harness needs fixing against this core (as for exit 2).
+- **2**: setup failed; read the `SETUP ERROR` line (missing `b3sum`, shallow clone, fetch failure, manifest guard); the usual cause after a core refactor is that the harness does not build against this core (the gate injects a test into core's internal test module). This is NOT a pass and NOT a reason to skip: fix `scripts/legacy-delegate-gate/` in River against this core, re-run, and only proceed on exit 0.
 
 ### P2: Real-NAT pre-release soak of the exact ship SHA (30 minutes)
 
@@ -142,7 +158,7 @@ Note the time window you measured. Save it somewhere you can diff against later,
 
 ### P4: Report the gates and confirm
 
-Before Step 2, tell the user which gates ran and what each returned: P0-P3, plus the soak SHA, `--version` output, soak duration and room/message result. "CI is green" is not an answer to "did we break auto-update". The canary suites and the soak answer that, and they are different signals. Then confirm the version and changelog (Step 1).
+Before Step 2, tell the user which gates ran and what each returned: P0-P3 (including the River legacy-delegate gate), plus the soak SHA, `--version` output, soak duration and room/message result. "CI is green" is not an answer to "did we break auto-update". The canary suites and the soak answer that, and they are different signals. Then confirm the version and changelog (Step 1).
 
 ## Arguments
 
