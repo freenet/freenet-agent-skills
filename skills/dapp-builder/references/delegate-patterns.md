@@ -267,15 +267,21 @@ Secret storage, per user, on a hosted-mode node:
   possibly permanent.
 - **Store secrets and small private state** (keys, preferences, indexes), not
   copies of contract state the network already holds.
-- **Prune predecessors' copies once they are verified in the successor.** A
+- **Compact predecessors' copies once they are verified in the successor.** A
   re-key leaves the old generation's secrets in place, so without cleanup every
-  release adds another full copy. Keep the immediately previous generation as
-  the rollback fallback (`upgrade-and-migration.md` → "Non-destructive") and
-  delete older ones. Only the old delegate can delete its own secrets, so the
-  app sends it a delete message, which works only if that generation's deployed
-  WASM handles one. Ship a delete handler from v1. River hit this: eight generations each held a
+  release adds another full copy. Keep the immediately previous generation
+  whole as the rollback fallback (`upgrade-and-migration.md` →
+  "Non-destructive"). In older generations, rewrite each entry without its bulky
+  re-fetchable part (cached contract state) and keep the key and every field
+  the network cannot give back (identity keys, invitation secrets). Prefer this
+  to deleting keys: a migration journal that distrusts a generation exporting
+  fewer items than before can wedge on a deletion, and a deleted entry can take
+  an unrecoverable secret with it. Only the old delegate can rewrite its own
+  secrets, so the app messages it, which works only if that generation's
+  deployed WASM accepts a store. River hit this: eight generations each held a
   ~1.2 MB room copy, so a user with ~0.4 MB of real secrets reached the 16 MiB
   cap. From then on every save failed, and every load re-ran the migration.
+  Compaction (freenet/river#968) freed ~12 MB in one load.
 
 A user's own node has no secret quota today, but the same habits bound its disk
 use and migration time.
@@ -617,7 +623,7 @@ not `NotFound`, so handle both.
   until migration moves it.
 - A backup counts against a hosted node's per-user secret quota (see "Resource
   Limits"), once per delegate generation still holding it. Back up only state
-  that is small, or only the part the contract could not recover, and delete
+  that is small, or only the part the contract could not recover, and compact
   old generations' copies after migrating.
 
 ## Delegate WASM upgrades
