@@ -78,7 +78,9 @@ not present it as an official Freenet client without the Freenet Project's appro
     secrets are recoverable only if its deployed WASM answers an export request, in practice
     `freenet_migrate::handle_export_request`, or a protocol general enough to enumerate its
     secrets. Every release shipped without that answer is a permanently unrecoverable
-    generation. Ship it from v1.
+    generation. Ship it from v1. Once a predecessor's secrets are verified in the successor,
+    prune generations older than the one rollback fallback, and keep delegate storage small: a hosted node caps each user's total
+    secret footprint across all generations (`delegate-patterns.md` → "Resource Limits").
 12. Build WASM through one canonical script that remaps `CARGO_HOME`, `RUSTUP_HOME` and the repo
     root and refuses a build that leaks a machine path, and isolate contract lockfiles so
     `cargo update` cannot re-key anything. The WASM bytes are the address.
