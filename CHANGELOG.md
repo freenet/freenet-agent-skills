@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.41.0 (2026-11-24)
+
+**release: ship an exact soaked commit; no merge freeze (freenet-core#6362).**
+
+- Step 2 dispatches `release.yml` with `--field ship_sha=<soaked SHA>`. The release is that commit plus a version bump, pushed as `release/vX.Y.Z` and tagged there, so `main` stays open during a cut.
+- The P2 merge-freeze requirement and the background ship-vs-soak script in Step 3 are gone: `wait_for_ci` checks that the release commit is `ship_sha` plus version files before anything is tagged.
+- New "Merge-back" subsection: `release-sync.yml` opens `build: sync main to X.Y.Z after release` on publish.
+- The previous release is the latest PUBLISHED release tag (tags no longer sit on `main`), for the P1 updater diff, the version choice and the changelog.
+- Stopping a cut, same-version re-cuts, and the workflow-failure list are rewritten for the new jobs. The first release after #6362 must ship a SHA that contains #6361 and #6362.
+
 ## 1.40.7 (2026-11-23)
 
 **release: two lines made stale by freenet-core#6361.**
