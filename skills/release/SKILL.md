@@ -298,7 +298,7 @@ printf 'yes\n' | ./scripts/release-rollback.sh --version "$VER"   # deletes the 
 git ls-remote --tags origin "v$VER"                               # must now print nothing
 ```
 
-Either way, the version-bump commit stays on `main` and nothing was published, so tell the user what happened. Any re-cut starts again from P0 with a soak of the new `origin/main` HEAD. Agree the version with the user. The default is the next patch: since freenet-core#6361 the live pre-flight refuses `$VER` once `main`'s `Cargo.toml` already says `$VER` ("main is already at $VER"), because the bump would be an empty commit. Re-cutting the same `$VER` is a manual procedure: follow freenet-core `scripts/RELEASE_RECOVERY.md`, "Re-cutting the same version".
+Either way, the version-bump commit stays on `main` and nothing was published, so tell the user what happened. Any re-cut starts again from P0 with a soak of the new `origin/main` HEAD. Agree the version with the user. The default is the next patch. Since freenet-core#6361 the live pre-flight refuses `$VER` while any trace of this cut remains: an open `build: release $VER` PR, a `v$VER` tag, or `main`'s `Cargo.toml` already saying `$VER` ("main is already at $VER": the bump would be an empty commit). Re-cutting the same `$VER` means tagging by hand per freenet-core `scripts/RELEASE_RECOVERY.md`, "Re-cutting the same version". That bypasses the merge queue's release gate, so it is the documented exception to "don't run release steps by hand": only with the user's OK and green CI on the fix.
 
 ### Watch the tag's cross-compile run
 
@@ -323,7 +323,7 @@ gh run list --workflow gateway-update.yml --repo freenet/freenet-core --limit 1
 gh run list --workflow release-announce.yml --repo freenet/freenet-core --limit 1
 ```
 
-**Required assets:** the `freenet-*` and `fdev-*` archives for linux-musl (x86_64, aarch64), apple-darwin (x86_64, aarch64) and windows-msvc (`.zip`), `freenet.exe`, `Freenet-X.Y.Z.dmg` and `Freenet.dmg`, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`. Since freenet-core#6361 a missing `FREENET_RELEASE_SIGNING_KEY` fails the tag's cross-compile run while the release is still a draft, so a published release without `.sig` should be impossible. If one is missing anyway, the pipeline has a bug: stop and tell the user, because auto-updating nodes verify nothing against an unsigned release.
+**Required assets:** the `freenet-*` and `fdev-*` archives for linux-musl (x86_64, aarch64), apple-darwin (x86_64, aarch64) and windows-msvc (`.zip`), `freenet.exe`, `Freenet-X.Y.Z.dmg` and `Freenet.dmg`, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`. Since freenet-core#6361 a missing `FREENET_RELEASE_SIGNING_KEY` fails the tag's cross-compile run while the release is still a draft, so a release cut since then should not be published without `.sig`; a hand un-draft is the remaining way to get one. If it is missing, stop and tell the user: auto-updating nodes accept an unsigned release without verifying it, and `docker-publish.yml` fails on it. A present `.sig` is not proof the key is right: the key-versus-baked-pubkey check runs only in cross-compile's `verify-signing-key` job on a manual dispatch.
 
 Both cascade runs should show recent runs started after the release. If either is missing, `RELEASE_PAT` may have expired (see freenet-core's AGENTS.md).
 
