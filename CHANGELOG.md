@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.40.7 (2026-11-23)
+
+**release: two lines made stale by freenet-core#6361.**
+
+- Step 3's re-cut note said re-using the same version after a cancelled cut was fine. The live pre-flight now refuses a version `main` already carries, so the default is the next patch, and a same-version re-cut follows `scripts/RELEASE_RECOVERY.md`.
+- Step 4 said a missing `SHA256SUMS.txt.sig` means an unsigned release. A missing signing key now fails while the release is still a draft, so a missing `.sig` on a published release is a pipeline bug.
+
 ## 1.40.6 (2026-11-22)
 
 **release: P1 step 4, the River legacy-delegate gate.**
